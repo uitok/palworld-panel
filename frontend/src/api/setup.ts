@@ -23,7 +23,6 @@ const defaultStartup: StartupConfig = {
   workshop_dir: '',
   no_mods: false,
 };
-
 const mapPrerequisites = (raw: unknown): Prerequisite[] => {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => {
@@ -94,7 +93,7 @@ export const setupApi = {
     handleRequest<unknown, { mode: RuntimeMode }>(
       () => apiClient.put('/server/runtime', { mode }),
       { mode },
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 
   getStartup: () =>
@@ -108,27 +107,27 @@ export const setupApi = {
     handleRequest<unknown, StartupResponse>(
       () => apiClient.put('/server/startup', startup),
       { startup, args: [], issues: [] },
-      { map: mapStartup, quiet: true },
+      { map: mapStartup, quiet: true, fallbackOnError: false },
     ),
 
   bootstrap: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/bootstrap'),
       fallbackJob('bootstrap', '已提交开服初始化任务'),
-      { map: mapJob, quiet: true },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   install: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/install'),
       fallbackJob('install', '已提交安装任务'),
-      { map: mapJob, quiet: true },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   initializeConfig: () =>
     handleRequest<unknown, { path?: string }>(
       () => apiClient.post('/server/initialize-config'),
       {},
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 };

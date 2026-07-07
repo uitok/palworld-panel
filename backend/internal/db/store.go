@@ -36,6 +36,26 @@ type Mod struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
+type AuditLog struct {
+	ID        string `json:"id"`
+	Actor     string `json:"actor"`
+	Role      string `json:"role"`
+	Action    string `json:"action"`
+	Target    string `json:"target,omitempty"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+type PlayerAccessEntry struct {
+	SteamID   string `json:"steam_id"`
+	Nickname  string `json:"nickname,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 func Open(path string) (*Store, error) {
 	d, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -82,6 +102,26 @@ func (s *Store) Migrate(ctx context.Context) error {
 			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id TEXT PRIMARY KEY,
+			actor TEXT NOT NULL,
+			role TEXT NOT NULL,
+			action TEXT NOT NULL,
+			target TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			message TEXT NOT NULL DEFAULT '',
+			ip TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS player_access (
+			list_type TEXT NOT NULL,
+			steam_id TEXT NOT NULL,
+			nickname TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (list_type, steam_id)
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -89,6 +129,114 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) CreateAuditLog(ctx context.Context, log AuditLog) error {
+	if log.ID == "" {
+		return errors.New("audit log id is required")
+	}
+	if log.CreatedAt == "" {
+		log.CreatedAt = now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO audit_logs (id,actor,role,action,target,status,message,ip,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		log.ID, log.Actor, log.Role, log.Action, log.Target, log.Status, log.Message, log.IP, log.CreatedAt)
+	return err
+}
+
+func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]AuditLog, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,actor,role,action,target,status,message,ip,created_at FROM audit_logs ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuditLog
+	for rows.Next() {
+		var item AuditLog
+		if err := rows.Scan(&item.ID, &item.Actor, &item.Role, &item.Action, &item.Target, &item.Status, &item.Message, &item.IP, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListPlayerAccess(ctx context.Context, listType string) ([]PlayerAccessEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT steam_id,nickname,reason,created_at,updated_at FROM player_access WHERE list_type=? ORDER BY updated_at DESC`, listType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlayerAccessEntry
+	for rows.Next() {
+		var item PlayerAccessEntry
+		if err := rows.Scan(&item.SteamID, &item.Nickname, &item.Reason, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpsertPlayerAccess(ctx context.Context, listType string, item PlayerAccessEntry) error {
+	if item.SteamID == "" {
+		return errors.New("steam_id is required")
+	}
+	now := now()
+	if item.CreatedAt == "" {
+		item.CreatedAt = now
+	}
+	item.UpdatedAt = now
+	_, err := s.db.ExecContext(ctx, `INSERT INTO player_access (list_type,steam_id,nickname,reason,created_at,updated_at)
+		VALUES (?,?,?,?,?,?)
+		ON CONFLICT(list_type, steam_id) DO UPDATE SET nickname=excluded.nickname, reason=excluded.reason, updated_at=excluded.updated_at`,
+		listType, item.SteamID, item.Nickname, item.Reason, item.CreatedAt, item.UpdatedAt)
+	return err
+}
+
+func (s *Store) DeletePlayerAccess(ctx context.Context, listType, steamID string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM player_access WHERE list_type=? AND steam_id=?`, listType, steamID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ReplacePlayerAccess(ctx context.Context, listType string, items []PlayerAccessEntry) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM player_access WHERE list_type=?`, listType); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	now := now()
+	for _, item := range items {
+		if item.SteamID == "" {
+			_ = tx.Rollback()
+			return errors.New("steam_id is required")
+		}
+		if item.CreatedAt == "" {
+			item.CreatedAt = now
+		}
+		item.UpdatedAt = now
+		if _, err := tx.ExecContext(ctx, `INSERT INTO player_access (list_type,steam_id,nickname,reason,created_at,updated_at) VALUES (?,?,?,?,?,?)`,
+			listType, item.SteamID, item.Nickname, item.Reason, item.CreatedAt, item.UpdatedAt); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreateJob(ctx context.Context, id, typ, message string) (Job, error) {

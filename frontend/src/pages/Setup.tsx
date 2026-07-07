@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, Download, Play, RefreshCw, Save, Server, Settings2, Wand2 } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { setupApi } from '../api/setup';
 import { serverApi } from '../api/server';
 import { tasksApi } from '../api/tasks';
@@ -46,10 +47,23 @@ export const Setup: React.FC = () => {
     await refresh();
   };
 
+  const runJob = async (start: () => Promise<Job>) => {
+    try {
+      const job = await start();
+      await trackJob(job);
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
+  };
+
   const setRuntimeMode = async (mode: RuntimeMode) => {
-    setRuntime(mode);
-    await setupApi.setRuntime(mode);
-    await refresh();
+    try {
+      setRuntime(mode);
+      await setupApi.setRuntime(mode);
+      await refresh();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const updateStartup = (key: keyof StartupConfig, value: string | number | boolean) => {
@@ -59,15 +73,23 @@ export const Setup: React.FC = () => {
 
   const saveStartup = async () => {
     if (!startup) return;
-    const saved = await setupApi.setStartup(startup.startup);
-    setStartup(saved);
-    setMessage('启动参数已保存');
+    try {
+      const saved = await setupApi.setStartup(startup.startup);
+      setStartup(saved);
+      setMessage('启动参数已保存');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const initializeConfig = async () => {
-    const result = await setupApi.initializeConfig();
-    setMessage(result.path ? `配置已初始化：${result.path}` : '配置已初始化');
-    await refresh();
+    try {
+      const result = await setupApi.initializeConfig();
+      setMessage(result.path ? `配置已初始化：${result.path}` : '配置已初始化');
+      await refresh();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const requiredMissing = prerequisites.some((item) => item.required && !item.ok);
@@ -96,7 +118,7 @@ export const Setup: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setupApi.bootstrap().then(trackJob)}
+              onClick={() => runJob(setupApi.bootstrap)}
               disabled={requiredMissing || Boolean(activeJob && activeJob.status === 'running')}
               className="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-600 disabled:opacity-40"
             >
@@ -198,13 +220,13 @@ export const Setup: React.FC = () => {
             </div>
           )}
           <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
-            <button type="button" onClick={() => setupApi.install().then(trackJob)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+            <button type="button" onClick={() => runJob(setupApi.install)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
               安装
             </button>
             <button type="button" onClick={initializeConfig} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
               初始化配置
             </button>
-            <button type="button" onClick={() => serverApi.start().then(refresh)} className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-600">
+            <button type="button" onClick={() => serverApi.start().then(refresh).catch((error) => setMessage(getErrorMessage(error)))} className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-600">
               <Play size={13} />
               启动
             </button>

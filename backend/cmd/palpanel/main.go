@@ -36,8 +36,8 @@ func main() {
 	router := api.NewRouter(cfg, store, serverManager, modsManager, palDefenderManager, restClient)
 	log.Printf("palpanel backend listening on %s", cfg.ListenAddr)
 	log.Printf("data directory: %s", cfg.DataDir)
-	if cfg.PanelToken == "change-me" {
-		log.Printf("warning: PANEL_TOKEN is using the development default")
+	if !cfg.RequireAuth {
+		log.Printf("warning: PALPANEL_REQUIRE_AUTH is disabled")
 	}
 	if err := router.Run(cfg.ListenAddr); err != nil {
 		log.Fatalf("run api: %v", err)

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { DownloadCloud, FolderDown, RefreshCw } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { tasksApi } from '../api/tasks';
 import { useServerStore } from '../store/useServerStore';
 import type { Job } from '../types';
@@ -30,6 +31,10 @@ const jobTypeLabel = (type: string) => {
       return '保存世界';
     case 'shutdown':
       return '关闭服务器';
+    case 'safe_restart':
+      return '安全重启';
+    case 'restore':
+      return '备份恢复';
     default:
       return type;
   }
@@ -39,6 +44,7 @@ export const TaskQueue: React.FC = () => {
   const { refreshKey } = useServerStore();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState<string | null>(null);
 
   const fetchJobs = async () => {
     setLoading(true);
@@ -59,13 +65,21 @@ export const TaskQueue: React.FC = () => {
   }, [jobs]);
 
   const createBackup = async () => {
-    await tasksApi.createBackupJob();
-    await fetchJobs();
+    try {
+      await tasksApi.createBackupJob();
+      await fetchJobs();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const createUpdate = async () => {
-    await tasksApi.createUpdateJob();
-    await fetchJobs();
+    try {
+      await tasksApi.createUpdateJob();
+      await fetchJobs();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const headers = [
@@ -79,6 +93,7 @@ export const TaskQueue: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      {message && <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-3 text-xs font-semibold text-rose-700">{message}</div>}
       <div className="flex flex-col gap-3 sm:flex-row">
         <button
           type="button"

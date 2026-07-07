@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"palpanel/internal/appconfig"
@@ -14,6 +15,8 @@ import (
 	"palpanel/internal/docker"
 	"palpanel/internal/id"
 )
+
+var workshopIDPattern = regexp.MustCompile(`^\d{5,20}$`)
 
 type Manager struct {
 	cfg    appconfig.Config
@@ -59,6 +62,9 @@ func (m Manager) DownloadWorkshop(ctx context.Context, itemID string) (db.Job, e
 	itemID = strings.TrimSpace(itemID)
 	if itemID == "" {
 		return db.Job{}, fmt.Errorf("workshop item id is required")
+	}
+	if !workshopIDPattern.MatchString(itemID) {
+		return db.Job{}, fmt.Errorf("workshop item id must be numeric")
 	}
 	j, err := m.store.CreateJob(ctx, id.New("job"), "workshop_download", "queued workshop download")
 	if err != nil {

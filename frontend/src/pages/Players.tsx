@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, RefreshCw } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { playersApi } from '../api/players';
 import { useServerStore } from '../store/useServerStore';
 import type { Player } from '../types';
@@ -12,6 +13,7 @@ export const Players: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState('all');
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -44,8 +46,28 @@ export const Players: React.FC = () => {
     { key: 'actions', label: '操作', align: 'center' as const },
   ];
 
+  const kick = async (player: Player) => {
+    try {
+      await playersApi.kickPlayer(player.steam_id);
+      setNotice(`已提交踢出 ${player.nickname} 的请求`);
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+    }
+  };
+
+  const ban = async (player: Player) => {
+    if (!window.confirm(`封禁玩家 ${player.nickname} (${player.steam_id})？`)) return;
+    try {
+      await playersApi.banPlayer(player.steam_id, player.nickname, 'Banned from panel');
+      setNotice(`已加入封禁列表：${player.nickname}`);
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      {notice && <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">{notice}</div>}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Summary label="在线玩家" value={players.filter((player) => player.is_online).length} color="emerald" />
         <Summary label="离线玩家" value={players.filter((player) => !player.is_online).length} color="slate" />
@@ -54,7 +76,7 @@ export const Players: React.FC = () => {
 
       <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-3 text-xs font-semibold text-amber-800">
         <AlertCircle className="mr-2 inline" size={14} />
-        当前后端只代理官方玩家列表查询，踢出、封禁、传送、发物品等写操作尚未提供接口。
+        玩家列表来自官方 REST 代理；封禁会写入面板封禁名单，踢出能力取决于当前 Palworld/PalDefender 运行环境。
       </div>
 
       <section className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
@@ -94,7 +116,14 @@ export const Players: React.FC = () => {
                 </td>
                 <td className="px-6 py-4 text-xs font-medium text-slate-400">{player.last_online_time}</td>
                 <td className="px-6 py-4 text-center">
-                  <span className="rounded-lg bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-400">未支持</span>
+                  <div className="flex justify-center gap-2">
+                    <button type="button" onClick={() => kick(player)} className="rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-50">
+                      踢出
+                    </button>
+                    <button type="button" onClick={() => ban(player)} className="rounded-lg border border-rose-200 px-3 py-2 text-[10px] font-bold text-rose-600 hover:bg-rose-50">
+                      封禁
+                    </button>
+                  </div>
                 </td>
               </tr>
             )}

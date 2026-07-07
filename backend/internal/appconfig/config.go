@@ -1,9 +1,11 @@
 package appconfig
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -18,6 +20,12 @@ type Config struct {
 	LogsDir             string
 	DBPath              string
 	PanelToken          string
+	OperatorToken       string
+	ViewerToken         string
+	RequireAuth         bool
+	CORSOrigins         []string
+	FrontendDist        string
+	MaxUploadBytes      int64
 	DockerBinary        string
 	DockerImage         string
 	DockerContainer     string
@@ -64,7 +72,13 @@ func Load() (Config, error) {
 		BackupsDir:          env("PALPANEL_BACKUPS_DIR", filepath.Join(dataDir, "backups")),
 		LogsDir:             env("PALPANEL_LOGS_DIR", filepath.Join(dataDir, "logs")),
 		DBPath:              env("PALPANEL_DB_PATH", filepath.Join(dataDir, "palpanel.db")),
-		PanelToken:          env("PANEL_TOKEN", "change-me"),
+		PanelToken:          env("PANEL_TOKEN", ""),
+		OperatorToken:       env("PANEL_OPERATOR_TOKEN", ""),
+		ViewerToken:         env("PANEL_VIEWER_TOKEN", ""),
+		RequireAuth:         envBool("PALPANEL_REQUIRE_AUTH", true),
+		CORSOrigins:         envList("PALPANEL_CORS_ORIGINS", []string{"http://127.0.0.1:3000", "http://localhost:3000"}),
+		FrontendDist:        env("PALPANEL_FRONTEND_DIST", filepath.Join(root, "frontend", "dist")),
+		MaxUploadBytes:      int64(envInt("PALPANEL_MAX_UPLOAD_MB", 256)) * 1024 * 1024,
 		DockerBinary:        env("PALPANEL_DOCKER_BIN", "docker"),
 		DockerImage:         env("PALPANEL_DOCKER_IMAGE", "palworld-wine-runner:local"),
 		DockerContainer:     env("PALPANEL_DOCKER_CONTAINER", "palworld-wine-server"),
@@ -75,6 +89,15 @@ func Load() (Config, error) {
 		PalworldRESTUser:    env("PALWORLD_REST_USER", "admin"),
 		PalworldRESTPass:    env("PALWORLD_ADMIN_PASSWORD", ""),
 		RunnerDir:           env("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner")),
+	}
+	if cfg.RequireAuth && isWeakToken(cfg.PanelToken) {
+		return Config{}, fmt.Errorf("PANEL_TOKEN must be set to a strong non-default value when PALPANEL_REQUIRE_AUTH is enabled")
+	}
+	if cfg.RequireAuth && cfg.OperatorToken != "" && isWeakToken(cfg.OperatorToken) {
+		return Config{}, fmt.Errorf("PANEL_OPERATOR_TOKEN must be strong when configured")
+	}
+	if cfg.RequireAuth && cfg.ViewerToken != "" && isWeakToken(cfg.ViewerToken) {
+		return Config{}, fmt.Errorf("PANEL_VIEWER_TOKEN must be strong when configured")
 	}
 
 	return cfg, nil
@@ -151,4 +174,43 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return i
+}
+
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
+}
+
+func envList(key string, fallback []string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if raw == "*" {
+		return []string{"*"}
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
+}
+
+func isWeakToken(token string) bool {
+	token = strings.TrimSpace(token)
+	return token == "" || token == "change-me" || token == "changeme" || len(token) < 16
 }

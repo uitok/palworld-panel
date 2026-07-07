@@ -107,13 +107,13 @@ export const tasksApi = {
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/backup'),
       fallbackJob('backup', '已提交备份任务'),
-      { map: mapJob, quiet: true },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   createUpdateJob: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/update'),
       fallbackJob('update', '已提交更新任务'),
-      { map: mapJob, quiet: true },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 };

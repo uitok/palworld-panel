@@ -84,7 +84,7 @@ export const Pals: React.FC = () => {
       </div>
 
       <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-3 text-xs font-semibold text-slate-500">
-        帕鲁列表当前使用后端 `/pals` 作为可选接口；后端未提供时显示演示数据，写操作不会模拟成功。
+        帕鲁列表当前使用后端 `/pals` 作为可选接口；后端未提供时显示未接入空态，写操作不会模拟成功。
       </div>
 
       <section className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle, Info, Megaphone, Save, Send, ServerCrash, X } from 'lucide-react';
+import { getErrorMessage } from '../../api/client';
 import { serverApi } from '../../api/server';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -39,25 +40,36 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   const handleAnnounce = async () => {
     if (!announceMsg.trim()) return;
-    await serverApi.announce(announceMsg);
-    showToast('公告请求已发送');
-    setAnnounceOpen(false);
-    setAnnounceMsg('');
+    try {
+      await serverApi.announce(announceMsg);
+      showToast('公告请求已发送');
+      setAnnounceOpen(false);
+      setAnnounceMsg('');
+    } catch (error) {
+      showToast(getErrorMessage(error), 'error');
+    }
   };
 
   const handleSave = async () => {
-    showToast('正在保存世界...', 'info');
-    await serverApi.save();
-    showToast('世界保存请求已发送');
-    setSaveOpen(false);
+    try {
+      showToast('正在保存世界...', 'info');
+      await serverApi.save();
+      showToast('世界保存请求已发送');
+      setSaveOpen(false);
+    } catch (error) {
+      showToast(getErrorMessage(error), 'error');
+    }
   };
 
   const handleRestart = async () => {
-    showToast('正在提交重启请求...', 'info');
-    await serverApi.shutdown(restartDelay, restartReason);
-    await serverApi.restart();
-    showToast(`服务器重启流程已提交，倒计时 ${restartDelay} 秒`);
-    setRestartOpen(false);
+    try {
+      showToast('正在提交安全重启任务...', 'info');
+      await serverApi.safeRestart(restartDelay, restartReason);
+      showToast(`安全重启任务已提交，倒计时 ${restartDelay} 秒`);
+      setRestartOpen(false);
+    } catch (error) {
+      showToast(getErrorMessage(error), 'error');
+    }
   };
 
   return (

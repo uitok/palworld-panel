@@ -1,24 +1,6 @@
-import React, { createContext, useContext, useState } from 'react';
-import { ServerStatus, ServerMetrics, Job } from '../types';
-
-interface ServerStoreContextType {
-  panelToken: string;
-  setPanelToken: (token: string) => void;
-  autoRefresh: boolean;
-  setAutoRefresh: (auto: boolean) => void;
-  refreshKey: number;
-  triggerRefresh: () => void;
-  status: ServerStatus | null;
-  setStatus: (status: ServerStatus) => void;
-  metrics: ServerMetrics | null;
-  setMetrics: (metrics: ServerMetrics) => void;
-  jobs: Job[];
-  setJobs: (jobs: Job[]) => void;
-  isSidebarCollapsed: boolean;
-  setIsSidebarCollapsed: (collapsed: boolean) => void;
-}
-
-const ServerStoreContext = createContext<ServerStoreContextType | undefined>(undefined);
+import React, { useEffect, useState } from 'react';
+import type { Job, ServerMetrics, ServerStatus } from '../types';
+import { ServerStoreContext } from './serverStoreContext';
 
 const readLocalStorage = (key: string) => {
   if (typeof localStorage === 'undefined') return null;
@@ -27,8 +9,9 @@ const readLocalStorage = (key: string) => {
 
 export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [panelToken, setPanelTokenState] = useState<string>(() => {
-    return readLocalStorage('palsphere_token') || import.meta.env.VITE_PANEL_TOKEN || 'change-me';
+    return readLocalStorage('palsphere_token') || import.meta.env.VITE_PANEL_TOKEN || '';
   });
+  const [authError, setAuthError] = useState(false);
   const [autoRefresh, setAutoRefreshState] = useState<boolean>(true);
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -41,7 +24,16 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const setPanelToken = (token: string) => {
     setPanelTokenState(token);
     localStorage.setItem('palsphere_token', token);
+    setAuthError(false);
   };
+
+  const clearAuthError = () => setAuthError(false);
+
+  useEffect(() => {
+    const onAuthError = () => setAuthError(true);
+    window.addEventListener('palsphere:auth-error', onAuthError);
+    return () => window.removeEventListener('palsphere:auth-error', onAuthError);
+  }, []);
 
   const setAutoRefresh = (auto: boolean) => {
     setAutoRefreshState(auto);
@@ -65,6 +57,8 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       value={{
         panelToken,
         setPanelToken,
+        authError,
+        clearAuthError,
         autoRefresh,
         setAutoRefresh,
         refreshKey,
@@ -82,12 +76,4 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
       {children}
     </ServerStoreContext.Provider>
   );
-};
-
-export const useServerStore = () => {
-  const context = useContext(ServerStoreContext);
-  if (context === undefined) {
-    throw new Error('useServerStore must be used within a ServerStoreProvider');
-  }
-  return context;
 };

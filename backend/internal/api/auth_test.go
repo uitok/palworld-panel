@@ -6,12 +6,14 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"palpanel/internal/appconfig"
 )
 
 func TestAuthMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(Auth("secret"))
+	r.Use(Auth(appconfig.Config{PanelToken: "secret", RequireAuth: true}))
 	r.GET("/protected", func(c *gin.Context) {
 		ok(c, gin.H{"passed": true})
 	})

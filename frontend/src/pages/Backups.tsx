@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Archive, FolderDown, RefreshCw } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { backupsApi } from '../api/backups';
 import { tasksApi } from '../api/tasks';
 import type { BackupInfo, Job } from '../types';
@@ -38,18 +39,39 @@ export const Backups: React.FC = () => {
   const totalSize = useMemo(() => backups.reduce((sum, item) => sum + item.size_bytes, 0), [backups]);
 
   const createBackup = async () => {
-    const job = await backupsApi.create();
-    setActiveJob(job);
-    const done = await tasksApi.waitForJob(job.id, setActiveJob);
-    setMessage(done.status === 'success' ? '备份任务已完成' : done.error || '备份任务失败');
-    await load();
+    try {
+      const job = await backupsApi.create();
+      setActiveJob(job);
+      const done = await tasksApi.waitForJob(job.id, setActiveJob);
+      setMessage(done.status === 'success' ? '备份任务已完成' : done.error || '备份任务失败');
+      await load();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
+  };
+
+  const restoreBackup = async (backup: BackupInfo) => {
+    if (!window.confirm(`恢复备份 "${backup.name}"？当前服务器会先停止，并自动创建 pre-restore 备份。`)) return;
+    if (!window.confirm('这是危险操作。请再次确认已经通知在线玩家并理解恢复会覆盖当前存档。')) return;
+    try {
+      const job = await backupsApi.restore(backup.name);
+      setActiveJob(job);
+      const done = await tasksApi.waitForJob(job.id, setActiveJob);
+      setMessage(done.status === 'success' ? '备份恢复任务已完成，请核验文件后启动服务器' : done.error || '备份恢复失败');
+      await load();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const headers = [
     { key: 'name', label: '备份名称' },
     { key: 'size', label: '大小' },
     { key: 'created', label: '创建时间' },
+    { key: 'reason', label: '原因' },
+    { key: 'status', label: '状态' },
     { key: 'path', label: '路径' },
+    { key: 'actions', label: '操作', align: 'center' as const },
   ];
 
   return (
@@ -121,8 +143,13 @@ export const Backups: React.FC = () => {
                 <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-semibold text-slate-500">
                   <span>大小: {formatBytes(backup.size_bytes)}</span>
                   <span>时间: {backup.created_at}</span>
+                  <span>原因: {backup.reason || 'manual'}</span>
+                  <span>状态: {backup.status || 'available'}</span>
                 </div>
                 <p className="mt-3 break-all rounded-xl bg-slate-50 p-2 font-mono text-[10px] text-slate-400">{backup.path}</p>
+                <button type="button" onClick={() => restoreBackup(backup)} className="mt-3 rounded-xl border border-rose-200 px-4 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50">
+                  恢复此备份
+                </button>
               </div>
             )}
             renderRow={(backup) => (
@@ -130,7 +157,14 @@ export const Backups: React.FC = () => {
                 <td className="px-6 py-4 text-xs font-bold text-slate-700">{backup.name}</td>
                 <td className="px-6 py-4 text-xs font-semibold text-slate-600">{formatBytes(backup.size_bytes)}</td>
                 <td className="px-6 py-4 text-xs font-medium text-slate-400">{backup.created_at}</td>
+                <td className="px-6 py-4 text-xs font-semibold text-slate-500">{backup.reason || 'manual'}</td>
+                <td className="px-6 py-4 text-xs font-semibold text-emerald-600">{backup.status || 'available'}</td>
                 <td className="max-w-[420px] truncate px-6 py-4 font-mono text-[10px] text-slate-400">{backup.path}</td>
+                <td className="px-6 py-4 text-center">
+                  <button type="button" onClick={() => restoreBackup(backup)} className="rounded-lg border border-rose-200 px-3 py-2 text-[10px] font-bold text-rose-600 hover:bg-rose-50">
+                    恢复
+                  </button>
+                </td>
               </tr>
             )}
           />

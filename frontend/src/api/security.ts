@@ -10,7 +10,6 @@ const fallbackStatus: PalDefenderStatus = {
   rest_api_enabled: false,
   warnings: [],
 };
-
 const mapStatus = (raw: unknown): PalDefenderStatus => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   return {
@@ -73,21 +72,21 @@ export const securityApi = {
     handleRequest<unknown, Job>(
       () => apiClient.post('/security/paldefender/install'),
       fallbackJob('paldefender_install', '已提交 PalDefender 安装任务'),
-      { map: mapJob, quiet: true },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   update: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/security/paldefender/update'),
       fallbackJob('paldefender_update', '已提交 PalDefender 更新任务'),
-      { map: mapJob, quiet: true },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   rollback: () =>
     handleRequest<unknown, PalDefenderStatus>(
       () => apiClient.post('/security/paldefender/rollback'),
       fallbackStatus,
-      { map: mapStatus, quiet: true },
+      { map: mapStatus, quiet: true, fallbackOnError: false },
     ),
 
   getConfig: () =>
@@ -101,27 +100,27 @@ export const securityApi = {
     handleRequest<unknown, Record<string, unknown>>(
       () => apiClient.put('/security/paldefender/config', config),
       config,
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 
   applyPreset: (name = 'balanced') =>
     handleRequest<unknown, Record<string, unknown>>(
       () => apiClient.post('/security/paldefender/apply-preset', { name }),
       {},
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 
   createToken: (name = 'AdminPanel', permissions: string[] = ['REST.*']) =>
     handleRequest<unknown, TokenResult>(
       () => apiClient.post('/security/paldefender/rest-token', { name, permissions }),
       { name, token: '', permissions, path: '' },
-      { map: mapToken, quiet: true },
+      { map: mapToken, quiet: true, fallbackOnError: false },
     ),
 
   reloadConfig: () =>
     handleRequest<unknown, { reloaded: boolean }>(
       () => apiClient.post('/security/paldefender/reload-config'),
       { reloaded: false },
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 };

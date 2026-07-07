@@ -1,5 +1,6 @@
 import { apiClient, handleRequest } from './client';
-import type { ServerMetrics, ServerProcessStatus, ServerStatus } from '../types';
+import type { Job, ServerMetrics, ServerProcessStatus, ServerStatus } from '../types';
+import { mapJob } from './tasks';
 
 const stoppedStatus: ServerStatus = {
   status: 'stopped',
@@ -12,13 +13,11 @@ const stoppedStatus: ServerStatus = {
   startup_args: [],
   ports: { game: 8211, query: 27015, rest: 8212 },
   warnings: [],
-  paths: {
-    palworld_settings: 'D:/WL/me/pal/data/server/Pal/Saved/Config/WindowsServer/PalWorldSettings.ini',
-  },
+  paths: {},
   cpu_percent: 0,
   memory_usage_bytes: 0,
   port: 8211,
-  settings_path: 'D:/WL/me/pal/data/server/Pal/Saved/Config/WindowsServer/PalWorldSettings.ini',
+  settings_path: '',
 };
 
 const emptyMetrics: ServerMetrics = {
@@ -146,40 +145,70 @@ export const serverApi = {
       quiet: true,
     }),
 
-  getLogs: (tail = 200) =>
-    handleRequest<unknown, { logs: string }>(
-      () => apiClient.get(`/server/logs?tail=${tail}`),
+  getLogs: (tail = 200, search = '', level = '', since = '') => {
+    const params = new URLSearchParams({ tail: String(tail) });
+    if (search) params.set('search', search);
+    if (level) params.set('level', level);
+    if (since) params.set('since', since);
+    return handleRequest<unknown, { logs: string }>(
+      () => apiClient.get(`/server/logs?${params.toString()}`),
       { logs: emptyLogs },
       { map: mapLogs, quiet: true },
-    ),
+    );
+  },
 
   start: () =>
-    handleRequest<{ status: string }>(() => apiClient.post('/server/start'), { status: 'started' }, { quiet: true }),
+    handleRequest<{ status: string }>(
+      () => apiClient.post('/server/start'),
+      { status: 'started' },
+      { quiet: true, fallbackOnError: false },
+    ),
 
   stop: () =>
-    handleRequest<{ status: string }>(() => apiClient.post('/server/stop'), { status: 'stopped' }, { quiet: true }),
+    handleRequest<{ status: string }>(
+      () => apiClient.post('/server/stop'),
+      { status: 'stopped' },
+      { quiet: true, fallbackOnError: false },
+    ),
 
   restart: () =>
     handleRequest<{ status: string }>(
       () => apiClient.post('/server/restart'),
       { status: 'restarted' },
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
+    ),
+
+  safeRestart: (waittime: number, message: string) =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post('/server/safe-restart', { waittime, message }),
+      {
+        id: '',
+        type: 'safe_restart',
+        status: 'waiting',
+        progress: 0,
+        created_at: new Date().toISOString(),
+      },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   announce: (message: string) =>
     handleRequest<{ status: string }>(
       () => apiClient.post('/server/announce', { message }),
       { status: 'ok' },
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 
   save: () =>
-    handleRequest<{ status: string }>(() => apiClient.post('/server/save'), { status: 'ok' }, { quiet: true }),
+    handleRequest<{ status: string }>(
+      () => apiClient.post('/server/save'),
+      { status: 'ok' },
+      { quiet: true, fallbackOnError: false },
+    ),
 
   shutdown: (waittime: number, message: string) =>
     handleRequest<{ status: string }>(
       () => apiClient.post('/server/shutdown', { waittime, message }),
       { status: 'ok' },
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 };

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { KeyRound, RefreshCw, RotateCcw, Save, ShieldCheck, Sparkles, Wand2 } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { securityApi } from '../api/security';
 import { tasksApi } from '../api/tasks';
 import type { Job, PalDefenderRelease, PalDefenderStatus, TokenResult } from '../types';
@@ -39,17 +40,34 @@ export const Security: React.FC = () => {
     await load();
   };
 
+  const runJob = async (start: () => Promise<Job>) => {
+    try {
+      const job = await start();
+      await trackJob(job);
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
+  };
+
   const rollback = async () => {
     if (!window.confirm('回滚到最近一次 PalDefender 备份？')) return;
-    const result = await securityApi.rollback();
-    setStatus(result);
-    setMessage('已回滚到最近备份');
+    try {
+      const result = await securityApi.rollback();
+      setStatus(result);
+      setMessage('已回滚到最近备份');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const applyPreset = async () => {
-    const cfg = await securityApi.applyPreset('balanced');
-    setConfigText(JSON.stringify(cfg, null, 2));
-    setMessage('已应用 balanced 推荐配置');
+    try {
+      const cfg = await securityApi.applyPreset('balanced');
+      setConfigText(JSON.stringify(cfg, null, 2));
+      setMessage('已应用 balanced 推荐配置');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const saveConfig = async () => {
@@ -58,21 +76,29 @@ export const Security: React.FC = () => {
       const saved = await securityApi.putConfig(parsed);
       setConfigText(JSON.stringify(saved, null, 2));
       setMessage('PalDefender 配置已保存');
-    } catch {
-      setMessage('Config.json 不是合法 JSON');
+    } catch (error) {
+      setMessage(error instanceof SyntaxError ? 'Config.json 不是合法 JSON' : getErrorMessage(error));
     }
   };
 
   const createToken = async () => {
-    const token = await securityApi.createToken(tokenName, ['REST.*']);
-    setTokenResult(token);
-    setMessage('已生成面板专用 REST Token，请妥善保存');
-    await load();
+    try {
+      const token = await securityApi.createToken(tokenName, ['REST.*']);
+      setTokenResult(token);
+      setMessage('已生成面板专用 REST Token，请妥善保存');
+      await load();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const reloadConfig = async () => {
-    const result = await securityApi.reloadConfig();
-    setMessage(result.reloaded ? 'PalDefender 已重新加载配置' : 'ReloadConfig 请求未确认，可能服务未启动');
+    try {
+      const result = await securityApi.reloadConfig();
+      setMessage(result.reloaded ? 'PalDefender 已重新加载配置' : 'ReloadConfig 请求未确认，可能服务未启动');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const latest = releases[0];
@@ -131,10 +157,10 @@ export const Security: React.FC = () => {
             </div>
           )}
           <div className="mt-4 grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => securityApi.install().then(trackJob)} className="rounded-xl bg-sky-500 px-4 py-2 text-xs font-bold text-white hover:bg-sky-600">
+            <button type="button" onClick={() => runJob(securityApi.install)} className="rounded-xl bg-sky-500 px-4 py-2 text-xs font-bold text-white hover:bg-sky-600">
               安装
             </button>
-            <button type="button" onClick={() => securityApi.update().then(trackJob)} className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+            <button type="button" onClick={() => runJob(securityApi.update)} className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
               更新
             </button>
             <button type="button" onClick={rollback} className="col-span-2 flex items-center justify-center gap-2 rounded-xl border border-rose-200 px-4 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50">

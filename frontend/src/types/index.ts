@@ -1,4 +1,14 @@
 export type RuntimeMode = 'wine_docker' | 'windows_steamcmd';
+export type Role = 'admin' | 'operator' | 'viewer';
+export type Permission =
+  | 'read'
+  | 'server:control'
+  | 'config:write'
+  | 'backup:write'
+  | 'mods:write'
+  | 'players:write'
+  | 'security:write'
+  | 'audit:read';
 
 export type ServerProcessStatus = 'running' | 'stopped' | 'starting' | 'stopping' | 'updating' | 'error';
 
@@ -120,6 +130,8 @@ export interface Job {
     | 'workshop_download'
     | 'paldefender_install'
     | 'paldefender_update'
+    | 'safe_restart'
+    | 'restore'
     | string;
   status: 'waiting' | 'running' | 'success' | 'failed';
   progress: number;
@@ -147,6 +159,49 @@ export interface BackupInfo {
   path: string;
   size_bytes: number;
   created_at: string;
+  reason?: string;
+  status?: string;
+}
+
+export interface BackupRestoreRequest {
+  name: string;
+}
+
+export interface SafeRestartRequest {
+  waittime: number;
+  message: string;
+}
+
+export interface AuditLog {
+  id: string;
+  actor: string;
+  role: Role | string;
+  action: string;
+  target?: string;
+  status: 'success' | 'failed' | string;
+  message?: string;
+  ip?: string;
+  created_at: string;
+}
+
+export interface ApiErrorShape {
+  code?: string;
+  message: string;
+  status?: number;
+}
+
+export interface UnsupportedCapability {
+  ok: false;
+  unsupported: true;
+  message: string;
+}
+
+export interface PlayerAccessEntry {
+  steam_id: string;
+  nickname?: string;
+  reason?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface PalDefenderAsset {

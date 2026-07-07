@@ -16,7 +16,6 @@ const mapMod = (raw: unknown): ModItem => {
     updated_at: data.updated_at ? String(data.updated_at) : undefined,
   };
 };
-
 const mapMods = (raw: unknown): ModItem[] => {
   if (!Array.isArray(raw)) return [];
   return raw.map(mapMod);
@@ -56,7 +55,7 @@ export const modsApi = {
         path: '',
         enabled: enable,
       },
-      { map: mapMod, quiet: true },
+      { map: mapMod, quiet: true, fallbackOnError: false },
     );
   },
 
@@ -64,7 +63,7 @@ export const modsApi = {
     handleRequest<unknown, Job>(
       () => apiClient.post('/mods/workshop', { item_id: itemId }),
       fallbackJob('workshop_download', '已提交 Workshop 下载任务'),
-      { map: mapJob, quiet: true },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   setEnabled: (id: string, enabled: boolean) =>
@@ -78,13 +77,13 @@ export const modsApi = {
         path: '',
         enabled,
       },
-      { map: mapMod, quiet: true },
+      { map: mapMod, quiet: true, fallbackOnError: false },
     ),
 
   delete: (id: string) =>
     handleRequest<unknown, { deleted: boolean }>(
       () => apiClient.delete(`/mods/${id}`),
       { deleted: true },
-      { quiet: true },
+      { quiet: true, fallbackOnError: false },
     ),
 };

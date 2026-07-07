@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { DownloadCloud, FileArchive, Power, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { modsApi } from '../api/mods';
 import { serverApi } from '../api/server';
 import { tasksApi } from '../api/tasks';
@@ -53,10 +54,14 @@ export const Mods: React.FC = () => {
       setMessage('请选择一个 Mod zip 文件');
       return;
     }
-    await modsApi.upload(file, enableOnUpload);
-    setFile(null);
-    setMessage('Mod 已上传并解析，变更需要重启生效');
-    await load();
+    try {
+      await modsApi.upload(file, enableOnUpload);
+      setFile(null);
+      setMessage('Mod 已上传并解析，变更需要重启生效');
+      await load();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const downloadWorkshop = async () => {
@@ -64,22 +69,34 @@ export const Mods: React.FC = () => {
       setMessage('请输入 Steam Workshop Item ID');
       return;
     }
-    const job = await modsApi.downloadWorkshop(workshopId.trim());
-    setWorkshopId('');
-    await trackJob(job);
+    try {
+      const job = await modsApi.downloadWorkshop(workshopId.trim());
+      setWorkshopId('');
+      await trackJob(job);
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const toggleMod = async (mod: ModItem) => {
-    await modsApi.setEnabled(mod.id, !mod.enabled);
-    setMessage(`${mod.name} 已${mod.enabled ? '禁用' : '启用'}，重启后生效`);
-    await load();
+    try {
+      await modsApi.setEnabled(mod.id, !mod.enabled);
+      setMessage(`${mod.name} 已${mod.enabled ? '禁用' : '启用'}，重启后生效`);
+      await load();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const deleteMod = async (mod: ModItem) => {
     if (!window.confirm(`删除 Mod "${mod.name}"？`)) return;
-    await modsApi.delete(mod.id);
-    setMessage('Mod 已删除，重启后生效');
-    await load();
+    try {
+      await modsApi.delete(mod.id);
+      setMessage('Mod 已删除，重启后生效');
+      await load();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   const headers = [

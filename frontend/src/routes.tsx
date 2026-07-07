@@ -2,6 +2,7 @@ import type React from 'react';
 import {
   Activity,
   Archive,
+  ClipboardList,
   Home,
   LayoutDashboard,
   ListTodo,
@@ -14,6 +15,7 @@ import {
   Users,
 } from 'lucide-react';
 import { Backups } from './pages/Backups';
+import { AuditLogs } from './pages/AuditLogs';
 import { BanList } from './pages/BanList';
 import { Bases } from './pages/Bases';
 import { Dashboard } from './pages/Dashboard';
@@ -135,6 +137,15 @@ export const appRoutes: AppRoute[] = [
     navGroup: 'system',
     icon: <ListTodo size={18} />,
     element: <TaskQueue />,
+  },
+  {
+    id: 'audit',
+    path: '/audit',
+    title: '操作审计',
+    navLabel: '操作审计',
+    navGroup: 'system',
+    icon: <ClipboardList size={18} />,
+    element: <AuditLogs />,
   },
   {
     id: 'settings',

@@ -11,31 +11,19 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { getErrorMessage } from '../api/client';
 import { emptyLogs, serverApi } from '../api/server';
 import { useServerStore } from '../store/useServerStore';
 import { StatCard } from '../components/ui/StatCard';
 import { StatusBadge } from '../components/ui/StatusBadge';
 
-const playerHistoryData = [
-  { time: '04:00', players: 1 },
-  { time: '05:00', players: 2 },
-  { time: '06:00', players: 2 },
-  { time: '07:00', players: 4 },
-  { time: '08:00', players: 5 },
-  { time: '09:00', players: 6 },
-  { time: '10:00', players: 5 },
-];
+type ChartPoint = {
+  time: string;
+  players: number;
+  cpu: number;
+};
 
-const performanceData = [
-  { time: '10:10', cpu: 12 },
-  { time: '10:15', cpu: 18 },
-  { time: '10:20', cpu: 25 },
-  { time: '10:25', cpu: 15 },
-  { time: '10:30', cpu: 22 },
-  { time: '10:35', cpu: 45 },
-  { time: '10:40', cpu: 28 },
-  { time: '10:45', cpu: 24 },
-];
+const maxChartPoints = 12;
 
 const stoppedMetrics = {
   server_fps: 0,
@@ -50,8 +38,21 @@ const stoppedMetrics = {
 export const Dashboard: React.FC = () => {
   const { status, setStatus, metrics, setMetrics, autoRefresh, refreshKey, triggerRefresh } = useServerStore();
   const [logs, setLogs] = useState('');
+  const [logSearch, setLogSearch] = useState('');
+  const [logLevel, setLogLevel] = useState('');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+
+  const pushChartPoint = useCallback((players: number, cpu: number) => {
+    const time = new Date().toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    setChartData((prev) => [...prev, { time, players, cpu }].slice(-maxChartPoints));
+  }, []);
 
   const fetchData = useCallback(async () => {
     const statusRes = await serverApi.getStatus();
@@ -60,15 +61,17 @@ export const Dashboard: React.FC = () => {
     if (statusRes.status !== 'running') {
       setMetrics(stoppedMetrics);
       setLogs(emptyLogs);
+      pushChartPoint(0, statusRes.cpu_percent || 0);
       setLoading(false);
       return;
     }
 
-    const [metricsRes, logsRes] = await Promise.all([serverApi.getMetrics(), serverApi.getLogs(80)]);
+    const [metricsRes, logsRes] = await Promise.all([serverApi.getMetrics(), serverApi.getLogs(80, logSearch, logLevel)]);
     setMetrics(metricsRes);
     setLogs(logsRes.logs);
+    pushChartPoint(metricsRes.current_players || 0, statusRes.cpu_percent || 0);
     setLoading(false);
-  }, [setMetrics, setStatus]);
+  }, [logLevel, logSearch, pushChartPoint, setMetrics, setStatus]);
 
   useEffect(() => {
     fetchData();
@@ -81,11 +84,18 @@ export const Dashboard: React.FC = () => {
   }, [autoRefresh, fetchData]);
 
   const control = async (action: 'start' | 'stop') => {
-    setLoading(true);
-    if (action === 'start') await serverApi.start();
-    if (action === 'stop') await serverApi.stop();
-    setNotice(action === 'start' ? '启动请求已发送' : '停止请求已发送');
-    triggerRefresh();
+    const text = action === 'start' ? '启动服务器？' : '停止服务器？请确认在线玩家已收到通知。';
+    if (!window.confirm(text)) return;
+    try {
+      setLoading(true);
+      if (action === 'start') await serverApi.start();
+      if (action === 'stop') await serverApi.stop();
+      setNotice(action === 'start' ? '启动请求已发送' : '停止请求已发送');
+      triggerRefresh();
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+      setLoading(false);
+    }
   };
 
   const formatRAM = (bytes?: number) => {
@@ -142,7 +152,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex min-h-0 flex-col gap-2">
               <span className="text-[11px] font-bold text-slate-400">在线趋势</span>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={playerHistoryData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                <LineChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
                   <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} />
@@ -154,7 +164,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex min-h-0 flex-col gap-2">
               <span className="text-[11px] font-bold text-slate-400">CPU 波动</span>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={performanceData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
                   <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} />
@@ -221,6 +231,25 @@ export const Dashboard: React.FC = () => {
             <RefreshCw size={10} />
             刷新
           </button>
+        </div>
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_160px]">
+          <input
+            type="search"
+            value={logSearch}
+            onChange={(event) => setLogSearch(event.target.value)}
+            placeholder="搜索日志关键词"
+            className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
+          />
+          <select
+            value={logLevel}
+            onChange={(event) => setLogLevel(event.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
+          >
+            <option value="">全部级别</option>
+            <option value="error">Error</option>
+            <option value="warn">Warn</option>
+            <option value="info">Info</option>
+          </select>
         </div>
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] leading-relaxed text-emerald-300">
           {logs || '暂无日志'}

@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ServerStoreProvider } from '../store/useServerStore';
+import { ServerStoreProvider } from '../store/ServerStoreProvider';
 import { TaskQueue } from './TaskQueue';
 
 vi.mock('../api/tasks', () => ({

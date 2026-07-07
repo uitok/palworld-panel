@@ -1,33 +1,6 @@
 import { apiClient, handleRequest } from './client';
 import type { Base, UnsupportedActionResult } from '../types';
 
-const demoBases: Base[] = [
-  {
-    id: 'demo_base_01',
-    name: 'Red Ridge Base',
-    guild_name: 'Demo Guild',
-    x: 120,
-    y: -50,
-    z: 10,
-    structures_count: 142,
-    pals_count: 15,
-    status: 'Safe',
-    online_members: ['DemoPlayer'],
-  },
-  {
-    id: 'demo_base_02',
-    name: 'Dragon Peak',
-    guild_name: 'Speed Guild',
-    x: 820,
-    y: -840,
-    z: 42,
-    structures_count: 12,
-    pals_count: 1,
-    status: 'Raid',
-    online_members: [],
-  },
-];
-
 const mapBase = (raw: unknown): Base => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   return {
@@ -54,11 +27,8 @@ const unsupported = (message: string): Promise<UnsupportedActionResult> =>
 
 export const basesApi = {
   getBases: () =>
-    handleRequest<unknown, Base[]>(() => apiClient.get('/bases'), demoBases, {
-      map: (raw) => {
-        const list = mapBases(raw);
-        return list.length > 0 ? list : demoBases;
-      },
+    handleRequest<unknown, Base[]>(() => apiClient.get('/bases'), [], {
+      map: mapBases,
       quiet: true,
     }),
 

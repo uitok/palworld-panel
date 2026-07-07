@@ -10,11 +10,10 @@ import type {
 
 const fallbackConfig: PalworldConfigResponse = {
   settings: {},
-  path: 'D:/WL/me/pal/data/server/Pal/Saved/Config/WindowsServer/PalWorldSettings.ini',
+  path: '',
   pending_restart: false,
   issues: [],
 };
-
 const mapIssues = (raw: unknown): ValidationIssue[] => {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => {
@@ -85,6 +84,7 @@ export const settingsApi = {
           };
         },
         quiet: true,
+        fallbackOnError: false,
       },
     ),
 
@@ -92,6 +92,6 @@ export const settingsApi = {
     handleRequest<unknown, PalworldConfigResponse>(
       () => apiClient.put('/config/palworld', { settings }),
       { ...fallbackConfig, settings: compactSettings(settings), pending_restart: true },
-      { map: mapPalworldConfig, quiet: true },
+      { map: mapPalworldConfig, quiet: true, fallbackOnError: false },
     ),
 };

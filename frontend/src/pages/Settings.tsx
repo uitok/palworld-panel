@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Info, RefreshCw, Save, Shield } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { serverApi } from '../api/server';
 import { settingsApi } from '../api/settings';
 import { useServerStore } from '../store/useServerStore';
@@ -89,12 +90,16 @@ export const Settings: React.FC = () => {
   const save = async () => {
     const valid = await validate();
     if (!valid) return;
-    setPanelToken(tokenInput);
-    const saved = await settingsApi.updateSettings(draft);
-    setPendingRestart(saved.pending_restart);
-    setIssues(saved.issues || []);
-    setMessage('配置已保存，重启服务器后生效');
-    triggerRefresh();
+    try {
+      setPanelToken(tokenInput);
+      const saved = await settingsApi.updateSettings(draft);
+      setPendingRestart(saved.pending_restart);
+      setIssues(saved.issues || []);
+      setMessage('配置已保存，重启服务器后生效');
+      triggerRefresh();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
   };
 
   if (loading) {

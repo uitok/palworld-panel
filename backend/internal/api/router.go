@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
+	"palpanel/internal/id"
 	"palpanel/internal/mods"
 	"palpanel/internal/palconfig"
 	"palpanel/internal/paldefender"
@@ -33,68 +36,89 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient}
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(CORSMiddleware())
+	r.Use(CORSMiddleware(cfg.CORSOrigins))
 	r.GET("/api/health", s.health)
 
 	api := r.Group("/api")
-	api.Use(Auth(cfg.PanelToken))
+	api.Use(Auth(cfg))
+	api.Use(AuditMiddleware(store))
 	{
 		api.GET("/jobs", s.listJobs)
 		api.GET("/jobs/:id", s.getJob)
+		api.GET("/audit-logs", Require(PermAuditRead), s.listAuditLogs)
 
 		api.GET("/server/status", s.serverStatus)
 		api.GET("/server/prerequisites", s.serverPrerequisites)
 		api.GET("/server/runtime", s.getRuntime)
-		api.PUT("/server/runtime", s.putRuntime)
-		api.POST("/server/bootstrap", s.serverBootstrap)
+		api.PUT("/server/runtime", Require(PermConfigWrite), s.putRuntime)
+		api.POST("/server/bootstrap", Require(PermServerControl), s.serverBootstrap)
 		api.GET("/server/logs", s.serverLogs)
-		api.POST("/server/install", s.serverInstall)
-		api.POST("/server/update", s.serverUpdate)
-		api.POST("/server/start", s.serverStart)
-		api.POST("/server/stop", s.serverStop)
-		api.POST("/server/restart", s.serverRestart)
+		api.POST("/server/install", Require(PermServerControl), s.serverInstall)
+		api.POST("/server/update", Require(PermServerControl), s.serverUpdate)
+		api.POST("/server/start", Require(PermServerControl), s.serverStart)
+		api.POST("/server/stop", Require(PermServerControl), s.serverStop)
+		api.POST("/server/restart", Require(PermServerControl), s.serverRestart)
+		api.POST("/server/safe-restart", Require(PermServerControl), s.serverSafeRestart)
 		api.GET("/server/startup", s.getStartup)
-		api.PUT("/server/startup", s.putStartup)
-		api.POST("/server/initialize-config", s.initializeConfig)
-		api.POST("/server/backup", s.serverBackup)
+		api.PUT("/server/startup", Require(PermConfigWrite), s.putStartup)
+		api.POST("/server/initialize-config", Require(PermConfigWrite), s.initializeConfig)
+		api.POST("/server/backup", Require(PermBackupWrite), s.serverBackup)
 		api.GET("/backups", s.listBackups)
+		api.POST("/backups/:name/restore", Require(PermBackupWrite), s.restoreBackup)
 
 		api.GET("/config/palworld", s.getPalworldConfig)
-		api.PUT("/config/palworld", s.updatePalworldConfig)
+		api.PUT("/config/palworld", Require(PermConfigWrite), s.updatePalworldConfig)
 		api.GET("/config/palworld/schema", s.getPalworldConfigSchema)
 		api.POST("/config/palworld/validate", s.validatePalworldConfig)
 
 		api.GET("/mods", s.listMods)
-		api.POST("/mods/upload", s.uploadMod)
-		api.POST("/mods/workshop", s.downloadWorkshop)
-		api.POST("/mods/:id/enable", s.enableMod)
-		api.POST("/mods/:id/disable", s.disableMod)
-		api.DELETE("/mods/:id", s.deleteMod)
+		api.POST("/mods/upload", Require(PermModsWrite), s.uploadMod)
+		api.POST("/mods/workshop", Require(PermModsWrite), s.downloadWorkshop)
+		api.POST("/mods/:id/enable", Require(PermModsWrite), s.enableMod)
+		api.POST("/mods/:id/disable", Require(PermModsWrite), s.disableMod)
+		api.DELETE("/mods/:id", Require(PermModsWrite), s.deleteMod)
 
 		api.GET("/security/paldefender/releases", s.palDefenderReleases)
 		api.GET("/security/paldefender/status", s.palDefenderStatus)
-		api.POST("/security/paldefender/install", s.palDefenderInstall)
-		api.POST("/security/paldefender/update", s.palDefenderUpdate)
-		api.POST("/security/paldefender/rollback", s.palDefenderRollback)
+		api.POST("/security/paldefender/install", Require(PermSecurityWrite), s.palDefenderInstall)
+		api.POST("/security/paldefender/update", Require(PermSecurityWrite), s.palDefenderUpdate)
+		api.POST("/security/paldefender/rollback", Require(PermSecurityWrite), s.palDefenderRollback)
 		api.GET("/security/paldefender/config", s.palDefenderGetConfig)
-		api.PUT("/security/paldefender/config", s.palDefenderPutConfig)
-		api.POST("/security/paldefender/apply-preset", s.palDefenderApplyPreset)
-		api.POST("/security/paldefender/rest-token", s.palDefenderRESTToken)
-		api.POST("/security/paldefender/reload-config", s.palDefenderReloadConfig)
+		api.PUT("/security/paldefender/config", Require(PermSecurityWrite), s.palDefenderPutConfig)
+		api.POST("/security/paldefender/apply-preset", Require(PermSecurityWrite), s.palDefenderApplyPreset)
+		api.POST("/security/paldefender/rest-token", Require(PermSecurityWrite), s.palDefenderRESTToken)
+		api.POST("/security/paldefender/reload-config", Require(PermSecurityWrite), s.palDefenderReloadConfig)
 
 		api.GET("/server/info", s.palGet("info"))
 		api.GET("/server/players", s.palGet("players"))
 		api.GET("/server/settings", s.palGet("settings"))
 		api.GET("/server/metrics", s.palGet("metrics"))
-		api.POST("/server/announce", s.palPost("announce"))
-		api.POST("/server/save", s.palPost("save"))
-		api.POST("/server/shutdown", s.palPost("shutdown"))
+		api.POST("/server/announce", Require(PermServerControl), s.palPost("announce"))
+		api.POST("/server/save", Require(PermServerControl), s.palPost("save"))
+		api.POST("/server/shutdown", Require(PermServerControl), s.palPost("shutdown"))
+
+		api.GET("/players/bans", s.listPlayerBans)
+		api.POST("/players/bans", Require(PermPlayersWrite), s.addPlayerBan)
+		api.DELETE("/players/bans/:steam_id", Require(PermPlayersWrite), s.deletePlayerBan)
+		api.GET("/players/whitelist", s.listPlayerWhitelist)
+		api.PUT("/players/whitelist", Require(PermPlayersWrite), s.putPlayerWhitelist)
+		api.POST("/players/:id/kick", Require(PermPlayersWrite), s.kickPlayer)
 	}
 
-	if _, err := os.Stat("D:/WL/me/pal/frontend/dist"); err == nil {
-		r.Static("/assets", "D:/WL/me/pal/frontend/dist/assets")
-		r.StaticFile("/", "D:/WL/me/pal/frontend/dist/index.html")
-		r.StaticFile("/favicon.ico", "D:/WL/me/pal/frontend/dist/favicon.ico")
+	if frontendDistReady(cfg.FrontendDist) {
+		r.Static("/assets", filepath.Join(cfg.FrontendDist, "assets"))
+		r.StaticFile("/", filepath.Join(cfg.FrontendDist, "index.html"))
+		favicon := filepath.Join(cfg.FrontendDist, "favicon.ico")
+		if fileExists(favicon) {
+			r.StaticFile("/favicon.ico", favicon)
+		}
+		r.NoRoute(func(c *gin.Context) {
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+				fail(c, http.StatusNotFound, "not_found", "api route not found")
+				return
+			}
+			c.File(filepath.Join(cfg.FrontendDist, "index.html"))
+		})
 	}
 
 	return r
@@ -125,6 +149,16 @@ func (s Server) getJob(c *gin.Context) {
 		return
 	}
 	ok(c, j)
+}
+
+func (s Server) listAuditLogs(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	logs, err := s.store.ListAuditLogs(c.Request.Context(), limit)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "audit_list_failed", err.Error())
+		return
+	}
+	ok(c, logs)
 }
 
 func (s Server) serverStatus(c *gin.Context) {
@@ -180,7 +214,12 @@ func (s Server) serverBootstrap(c *gin.Context) {
 
 func (s Server) serverLogs(c *gin.Context) {
 	tail, _ := strconv.Atoi(c.DefaultQuery("tail", "200"))
-	logs, err := s.server.Logs(c.Request.Context(), tail)
+	logs, err := s.server.Logs(c.Request.Context(), server.LogQuery{
+		Tail:   tail,
+		Search: c.Query("search"),
+		Level:  c.Query("level"),
+		Since:  c.Query("since"),
+	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "server_logs_failed", err.Error())
 		return
@@ -228,6 +267,29 @@ func (s Server) serverRestart(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"status": "restarted"})
+}
+
+func (s Server) serverSafeRestart(c *gin.Context) {
+	var req struct {
+		WaitTime int    `json:"waittime"`
+		Message  string `json:"message"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	j, err := s.server.SafeRestart(c.Request.Context(), req.WaitTime, req.Message, func(ctx context.Context, wait int, message string) error {
+		if _, err := s.palrest.Do(ctx, http.MethodPost, "save", nil); err != nil {
+			return err
+		}
+		_, err := s.palrest.Do(ctx, http.MethodPost, "shutdown", gin.H{"waittime": wait, "message": message})
+		return err
+	})
+	if err != nil {
+		fail(c, http.StatusBadRequest, "safe_restart_failed", err.Error())
+		return
+	}
+	accepted(c, j)
 }
 
 func (s Server) getStartup(c *gin.Context) {
@@ -284,6 +346,15 @@ func (s Server) listBackups(c *gin.Context) {
 	ok(c, backups)
 }
 
+func (s Server) restoreBackup(c *gin.Context) {
+	j, err := s.server.RestoreBackup(c.Request.Context(), c.Param("name"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "backup_restore_failed", err.Error())
+		return
+	}
+	accepted(c, j)
+}
+
 func (s Server) getPalworldConfig(c *gin.Context) {
 	settings, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
 	if err != nil {
@@ -309,12 +380,17 @@ func (s Server) updatePalworldConfig(c *gin.Context) {
 		return
 	}
 	next := palconfig.Merge(current, updates)
+	issues := palconfig.Validate(next)
+	if hasPalconfigErrors(issues) {
+		fail(c, http.StatusBadRequest, "config_invalid", "palworld config has validation errors")
+		return
+	}
 	if err := palconfig.Write(s.cfg.PalWorldSettingsPath(), next); err != nil {
 		fail(c, http.StatusInternalServerError, "config_write_failed", err.Error())
 		return
 	}
 	_ = s.server.MarkPendingRestart(c.Request.Context())
-	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath(), "settings": next, "pending_restart": true, "issues": palconfig.Validate(next)})
+	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath(), "settings": next, "pending_restart": true, "issues": issues})
 }
 
 func (s Server) getPalworldConfigSchema(c *gin.Context) {
@@ -351,9 +427,16 @@ func (s Server) listMods(c *gin.Context) {
 }
 
 func (s Server) uploadMod(c *gin.Context) {
+	if s.cfg.MaxUploadBytes > 0 {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.cfg.MaxUploadBytes)
+	}
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		fail(c, http.StatusBadRequest, "upload_missing_file", err.Error())
+		return
+	}
+	if s.cfg.MaxUploadBytes > 0 && header.Size > s.cfg.MaxUploadBytes {
+		fail(c, http.StatusRequestEntityTooLarge, "upload_too_large", "uploaded mod exceeds PALPANEL_MAX_UPLOAD_MB")
 		return
 	}
 	defer file.Close()
@@ -380,6 +463,76 @@ func (s Server) downloadWorkshop(c *gin.Context) {
 		return
 	}
 	accepted(c, j)
+}
+
+func (s Server) listPlayerBans(c *gin.Context) {
+	items, err := s.store.ListPlayerAccess(c.Request.Context(), "ban")
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "bans_list_failed", err.Error())
+		return
+	}
+	ok(c, items)
+}
+
+func (s Server) addPlayerBan(c *gin.Context) {
+	var req db.PlayerAccessEntry
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	req.SteamID = strings.TrimSpace(req.SteamID)
+	if req.SteamID == "" {
+		fail(c, http.StatusBadRequest, "steam_id_required", "steam_id is required")
+		return
+	}
+	if err := s.store.UpsertPlayerAccess(c.Request.Context(), "ban", req); err != nil {
+		fail(c, http.StatusInternalServerError, "ban_write_failed", err.Error())
+		return
+	}
+	ok(c, req)
+}
+
+func (s Server) deletePlayerBan(c *gin.Context) {
+	if err := s.store.DeletePlayerAccess(c.Request.Context(), "ban", c.Param("steam_id")); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			fail(c, http.StatusNotFound, "ban_not_found", "ban entry not found")
+			return
+		}
+		fail(c, http.StatusInternalServerError, "ban_delete_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"deleted": true})
+}
+
+func (s Server) listPlayerWhitelist(c *gin.Context) {
+	items, err := s.store.ListPlayerAccess(c.Request.Context(), "whitelist")
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "whitelist_list_failed", err.Error())
+		return
+	}
+	ok(c, items)
+}
+
+func (s Server) putPlayerWhitelist(c *gin.Context) {
+	var req struct {
+		Players []db.PlayerAccessEntry `json:"players"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	for i := range req.Players {
+		req.Players[i].SteamID = strings.TrimSpace(req.Players[i].SteamID)
+	}
+	if err := s.store.ReplacePlayerAccess(c.Request.Context(), "whitelist", req.Players); err != nil {
+		fail(c, http.StatusBadRequest, "whitelist_write_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"players": req.Players})
+}
+
+func (s Server) kickPlayer(c *gin.Context) {
+	fail(c, http.StatusNotImplemented, "unsupported", "player kick requires a Palworld/PalDefender command backend that is not available in this runtime")
 }
 
 func (s Server) enableMod(c *gin.Context) {
@@ -571,10 +724,58 @@ func hasPalconfigErrors(issues []palconfig.ValidationIssue) bool {
 	return false
 }
 
-func CORSMiddleware() gin.HandlerFunc {
+func AuditMiddleware(store *db.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Next()
+		if c.Request.Method != http.MethodPost && c.Request.Method != http.MethodPut && c.Request.Method != http.MethodDelete {
+			return
+		}
+		principal := CurrentPrincipal(c)
+		status := "success"
+		if c.Writer.Status() >= 400 {
+			status = "failed"
+		}
+		action := c.Request.Method + " " + c.FullPath()
+		if action == c.Request.Method+" " {
+			action = c.Request.Method + " " + c.Request.URL.Path
+		}
+		target := c.Param("id")
+		if target == "" {
+			target = c.Param("name")
+		}
+		if target == "" {
+			target = c.Param("steam_id")
+		}
+		_ = store.CreateAuditLog(context.Background(), db.AuditLog{
+			ID:      id.New("audit"),
+			Actor:   principal.Name,
+			Role:    string(principal.Role),
+			Action:  action,
+			Target:  target,
+			Status:  status,
+			Message: http.StatusText(c.Writer.Status()),
+			IP:      c.ClientIP(),
+		})
+	}
+}
+
+func CORSMiddleware(origins []string) gin.HandlerFunc {
+	allowAny := len(origins) == 1 && origins[0] == "*"
+	allowed := map[string]bool{}
+	for _, origin := range origins {
+		allowed[origin] = true
+	}
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if allowAny {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" && allowed[origin] {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Vary", "Origin")
+		}
+		if !allowAny {
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 
@@ -585,4 +786,21 @@ func CORSMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func frontendDistReady(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	return fileExists(filepath.Join(path, "index.html")) && dirExists(filepath.Join(path, "assets"))
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

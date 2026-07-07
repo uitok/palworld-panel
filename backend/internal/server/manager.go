@@ -62,7 +62,18 @@ type BackupInfo struct {
 	Path      string `json:"path"`
 	SizeBytes int64  `json:"size_bytes"`
 	CreatedAt string `json:"created_at"`
+	Reason    string `json:"reason,omitempty"`
+	Status    string `json:"status"`
 }
+
+type LogQuery struct {
+	Tail   int
+	Search string
+	Level  string
+	Since  string
+}
+
+type RestartNotifier func(ctx context.Context, wait int, message string) error
 
 func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner) Manager {
 	return Manager{cfg: cfg, store: store, runner: runner}
@@ -302,15 +313,54 @@ func (m Manager) Restart(ctx context.Context) error {
 	return err
 }
 
-func (m Manager) Logs(ctx context.Context, tail int) (string, error) {
+func (m Manager) SafeRestart(ctx context.Context, waitSeconds int, message string, notify RestartNotifier) (db.Job, error) {
+	if waitSeconds < 5 || waitSeconds > 300 {
+		return db.Job{}, fmt.Errorf("waittime must be between 5 and 300 seconds")
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "Server maintenance restart"
+	}
+	return m.startJob(ctx, "safe_restart", "queued safe restart", func(jobID string) {
+		m.update(jobID, "running", 10, "saving world and notifying players", "")
+		if notify != nil {
+			if err := notify(context.Background(), waitSeconds, message); err != nil {
+				m.update(jobID, "running", 20, "notification failed; continuing with managed restart", err.Error())
+			}
+		}
+		m.update(jobID, "running", 35, "waiting for player countdown", "")
+		time.Sleep(time.Duration(waitSeconds) * time.Second)
+		m.update(jobID, "running", 55, "stopping server", "")
+		if err := m.Stop(context.Background()); err != nil {
+			m.update(jobID, "failed", 55, "stop failed", err.Error())
+			return
+		}
+		m.update(jobID, "running", 75, "starting server", "")
+		if err := m.Start(context.Background()); err != nil {
+			m.update(jobID, "failed", 75, "start failed", err.Error())
+			return
+		}
+		m.update(jobID, "completed", 100, "safe restart completed", "")
+	})
+}
+
+func (m Manager) Logs(ctx context.Context, query LogQuery) (string, error) {
 	mode, err := m.RuntimeMode(ctx)
 	if err != nil {
 		return "", err
 	}
+	tail := query.Tail
 	if mode == RuntimeWindowsSteamCMD {
-		return tailFile(m.cfg.ServerLogPath(), tail)
+		logs, err := tailFile(m.cfg.ServerLogPath(), tail)
+		if err != nil {
+			return "", err
+		}
+		return filterLogs(logs, query), nil
 	}
-	return m.runner.Logs(ctx, tail)
+	logs, err := m.runner.Logs(ctx, tail)
+	if err != nil {
+		return "", err
+	}
+	return filterLogs(logs, query), nil
 }
 
 func (m Manager) Status(ctx context.Context) (Status, error) {
@@ -407,10 +457,53 @@ func (m Manager) ListBackups() ([]BackupInfo, error) {
 			Path:      filepath.Join(m.cfg.BackupsDir, entry.Name()),
 			SizeBytes: info.Size(),
 			CreatedAt: info.ModTime().UTC().Format(time.RFC3339Nano),
+			Reason:    backupReason(entry.Name()),
+			Status:    "available",
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	return out, nil
+}
+
+func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error) {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "." || name == "" || !strings.HasSuffix(strings.ToLower(name), ".zip") {
+		return db.Job{}, fmt.Errorf("invalid backup name")
+	}
+	path := filepath.Join(m.cfg.BackupsDir, name)
+	baseAbs, err := filepath.Abs(m.cfg.BackupsDir)
+	if err != nil {
+		return db.Job{}, err
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return db.Job{}, err
+	}
+	if pathAbs != baseAbs && !strings.HasPrefix(pathAbs, baseAbs+string(os.PathSeparator)) {
+		return db.Job{}, fmt.Errorf("invalid backup path")
+	}
+	if !fileExists(pathAbs) {
+		return db.Job{}, fmt.Errorf("backup not found")
+	}
+	return m.startJob(ctx, "restore", "queued backup restore", func(jobID string) {
+		m.update(jobID, "running", 10, "stopping server before restore", "")
+		if err := m.Stop(context.Background()); err != nil {
+			m.update(jobID, "failed", 10, "stop failed", err.Error())
+			return
+		}
+		m.update(jobID, "running", 30, "creating pre-restore backup", "")
+		if _, err := m.createBackupArchive("pre-restore"); err != nil {
+			m.update(jobID, "failed", 30, "pre-restore backup failed", err.Error())
+			return
+		}
+		m.update(jobID, "running", 65, "restoring backup archive", "")
+		if err := extractZipSafe(pathAbs, m.cfg.ServerDir); err != nil {
+			m.update(jobID, "failed", 65, "restore failed", err.Error())
+			return
+		}
+		_ = m.store.SetKV(context.Background(), "pending_restart", "true")
+		m.update(jobID, "completed", 100, "backup restored; start the server after verifying files", "")
+	})
 }
 
 func (m Manager) startJob(ctx context.Context, typ, message string, fn func(jobID string)) (db.Job, error) {
@@ -590,7 +683,7 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 	if err != nil {
 		return BackupInfo{}, err
 	}
-	return BackupInfo{Name: name, Path: path, SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC().Format(time.RFC3339Nano)}, nil
+	return BackupInfo{Name: name, Path: path, SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC().Format(time.RFC3339Nano), Reason: reason, Status: "available"}, nil
 }
 
 func addPathToZip(zw *zip.Writer, base, path string) error {
@@ -706,6 +799,39 @@ func tailFile(path string, tail int) (string, error) {
 		lines = lines[len(lines)-tail:]
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func filterLogs(logs string, query LogQuery) string {
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	level := strings.ToLower(strings.TrimSpace(query.Level))
+	since := strings.TrimSpace(query.Since)
+	if search == "" && level == "" && since == "" {
+		return logs
+	}
+	lines := strings.Split(logs, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if search != "" && !strings.Contains(lower, search) {
+			continue
+		}
+		if level != "" && level != "all" && !strings.Contains(lower, level) {
+			continue
+		}
+		if since != "" && !strings.Contains(line, since) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func backupReason(name string) string {
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	if i := strings.Index(name, "-"); i >= 0 && i+1 < len(name) {
+		return name[i+1:]
+	}
+	return "manual"
 }
 
 func copyFile(src, dst string) error {

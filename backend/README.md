@@ -5,8 +5,10 @@ Go/Gin backend for a Palworld dedicated-server panel. It manages a Windows editi
 ## Development
 
 ```powershell
-cd D:\WL\me\pal\backend
-$env:PANEL_TOKEN="change-me"
+cd backend
+$env:PANEL_TOKEN="replace-with-a-random-32-byte-token"
+$env:PALPANEL_REQUIRE_AUTH="true"
+$env:PALPANEL_CORS_ORIGINS="http://127.0.0.1:3000,http://localhost:3000"
 $env:HTTP_PROXY="socks5://127.0.0.1:10808"
 $env:HTTPS_PROXY="socks5://127.0.0.1:10808"
 $env:ALL_PROXY="socks5://127.0.0.1:10808"
@@ -14,7 +16,7 @@ go test ./...
 go run ./cmd/palpanel
 ```
 
-The API listens on `:8080` by default. Runtime data is stored in `D:\WL\me\pal\data` unless `PALPANEL_DATA_DIR` is set.
+The API listens on `:8080` by default. Runtime data is stored in the repository `data` directory unless `PALPANEL_DATA_DIR` is set. `PANEL_TOKEN` is required by default and must not be empty or `change-me`.
 
 ## Auth
 
@@ -26,6 +28,18 @@ Authorization: Bearer <PANEL_TOKEN>
 
 `GET /api/health` is public.
 
+Optional role tokens:
+
+- `PANEL_TOKEN`: admin, full access.
+- `PANEL_OPERATOR_TOKEN`: operator, server/config/mod/player operations.
+- `PANEL_VIEWER_TOKEN`: viewer, read-only.
+
+Set `PALPANEL_REQUIRE_AUTH=false` only for isolated local development.
+
+## Production Web Serving
+
+Build the frontend with `npm run build`, then set `PALPANEL_FRONTEND_DIST` to the frontend `dist` directory. The backend serves the SPA from this directory and falls back to `index.html` for routes such as `/dashboard`. For reverse proxies, forward `/api/*` to the backend and serve the frontend dist with HTTPS.
+
 ## Runtime Modes
 
 - `windows_steamcmd`: recommended for production Windows hosts. The backend downloads SteamCMD into `data/tools/steamcmd` when needed and installs the Windows dedicated server with `steamcmd +login anonymous +app_update 2394010 validate +quit`.
@@ -36,9 +50,12 @@ Startup arguments are managed separately from `PalWorldSettings.ini` through `GE
 ## Main Endpoints
 
 - Lifecycle: `POST /api/server/install`, `POST /api/server/update`, `POST /api/server/start`, `POST /api/server/stop`, `POST /api/server/restart`, `POST /api/server/bootstrap`
+- Safe restart: `POST /api/server/safe-restart`
 - Setup: `GET /api/server/prerequisites`, `GET/PUT /api/server/runtime`, `GET/PUT /api/server/startup`, `POST /api/server/initialize-config`
 - Status/logs/jobs: `GET /api/server/status`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
-- Backups: `POST /api/server/backup`, `GET /api/backups`
+- Backups: `POST /api/server/backup`, `GET /api/backups`, `POST /api/backups/{name}/restore`
+- Audit: `GET /api/audit-logs`
+- Player access: `GET/POST/DELETE /api/players/bans`, `GET/PUT /api/players/whitelist`, `POST /api/players/{id}/kick`
 - Palworld config: `GET /api/config/palworld`, `PUT /api/config/palworld`, `GET /api/config/palworld/schema`, `POST /api/config/palworld/validate`
 - Mods: `GET /api/mods`, `POST /api/mods/upload`, `POST /api/mods/workshop`, `POST /api/mods/{id}/enable`, `POST /api/mods/{id}/disable`, `DELETE /api/mods/{id}`
 - PalDefender: `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
