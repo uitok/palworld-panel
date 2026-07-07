@@ -1,0 +1,23 @@
+# Runtime data
+/data/
+
+# Backend build and local logs
+/backend/bin/
+/backend/*.log
+
+# Frontend dependencies and build output
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.playwright-cli/
+/frontend/output/
+
+# Local environment overrides
+*.local
+.env
+.env.*.local
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
