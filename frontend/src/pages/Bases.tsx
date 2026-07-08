@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Copy, MapPin, ShieldAlert, Sparkles, Users } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { basesApi } from '../api/bases';
 import { useServerStore } from '../store/useServerStore';
 import type { Base } from '../types';
@@ -12,12 +13,20 @@ export const Bases: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchBases = async () => {
     setLoading(true);
-    const data = await basesApi.getBases();
-    setBases(Array.isArray(data) ? data : []);
-    setLoading(false);
+    try {
+      const data = await basesApi.getBases();
+      setBases(Array.isArray(data) ? data : []);
+      setError(null);
+    } catch (loadError) {
+      setBases([]);
+      setError(getErrorMessage(loadError));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -58,6 +67,12 @@ export const Bases: React.FC = () => {
           {notice}
         </div>
       )}
+      {error && (
+        <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-3.5 text-xs font-semibold text-rose-700">
+          <AlertCircle size={16} className="mr-2 inline" />
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <Summary icon={<MapPin size={18} />} label="活跃基地总数" value={`${bases.length} 个`} />
@@ -82,7 +97,7 @@ export const Bases: React.FC = () => {
             searchText={searchText}
             onSearchChange={setSearchText}
             searchPlaceholder="搜索基地名称或所属公会"
-            emptyText="暂无基地"
+            emptyText={error ? '后端不可用或接口未实现' : '暂无基地'}
             renderCard={(base) => (
               <BaseCard
                 key={base.id}

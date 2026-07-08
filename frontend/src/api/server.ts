@@ -1,5 +1,5 @@
 import { apiClient, handleRequest } from './client';
-import type { Job, ServerMetrics, ServerProcessStatus, ServerStatus } from '../types';
+import type { Job, ServerMetrics, ServerProcessStatus, ServerStatus, ServerVersionInfo } from '../types';
 import { mapJob } from './tasks';
 
 const stoppedStatus: ServerStatus = {
@@ -28,6 +28,16 @@ const emptyMetrics: ServerMetrics = {
   total_pals: 0,
   active_bases: 0,
   frame_time: 0,
+};
+
+const emptyVersionInfo: ServerVersionInfo = {
+  installed: false,
+  current_build_id: '',
+  latest_build_id: '',
+  update_available: false,
+  last_checked_at: '',
+  source: '',
+  manifest_path: '',
 };
 
 export const emptyLogs = '服务未启动，暂无日志。';
@@ -132,6 +142,20 @@ export const mapLogs = (raw: unknown): { logs: string } => {
   return { logs: typeof data.logs === 'string' && data.logs.trim() ? data.logs : emptyLogs };
 };
 
+export const mapServerVersion = (raw: unknown): ServerVersionInfo => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    installed: Boolean(data.installed),
+    current_build_id: String(data.current_build_id || ''),
+    latest_build_id: String(data.latest_build_id || ''),
+    update_available: Boolean(data.update_available),
+    last_checked_at: String(data.last_checked_at || ''),
+    source: String(data.source || ''),
+    manifest_path: String(data.manifest_path || ''),
+    error: data.error ? String(data.error) : undefined,
+  };
+};
+
 export const serverApi = {
   getStatus: () =>
     handleRequest<unknown, ServerStatus>(() => apiClient.get('/server/status'), stoppedStatus, {
@@ -142,6 +166,12 @@ export const serverApi = {
   getMetrics: () =>
     handleRequest<unknown, ServerMetrics>(() => apiClient.get('/server/metrics'), emptyMetrics, {
       map: mapServerMetrics,
+      quiet: true,
+    }),
+
+  getVersion: () =>
+    handleRequest<unknown, ServerVersionInfo>(() => apiClient.get('/server/version'), emptyVersionInfo, {
+      map: mapServerVersion,
       quiet: true,
     }),
 
@@ -171,11 +201,44 @@ export const serverApi = {
       { quiet: true, fallbackOnError: false },
     ),
 
+  forceStop: () =>
+    handleRequest<unknown, { status: string }>(
+      () => apiClient.post('/server/force-stop'),
+      { status: 'stopped' },
+      { quiet: true, fallbackOnError: false },
+    ),
+
   restart: () =>
     handleRequest<{ status: string }>(
       () => apiClient.post('/server/restart'),
       { status: 'restarted' },
       { quiet: true, fallbackOnError: false },
+    ),
+
+  checkVersion: () =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post('/server/version/check'),
+      {
+        id: '',
+        type: 'version_check',
+        status: 'waiting',
+        progress: 0,
+        created_at: new Date().toISOString(),
+      },
+      { map: mapJob, quiet: true, fallbackOnError: false },
+    ),
+
+  updateIfNeeded: () =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post('/server/update-if-needed'),
+      {
+        id: '',
+        type: 'smart_update',
+        status: 'waiting',
+        progress: 0,
+        created_at: new Date().toISOString(),
+      },
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   safeRestart: (waittime: number, message: string) =>

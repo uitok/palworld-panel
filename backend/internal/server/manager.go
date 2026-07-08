@@ -3,6 +3,9 @@ package server
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,9 +34,11 @@ const (
 )
 
 type Manager struct {
-	cfg    appconfig.Config
-	store  *db.Store
-	runner docker.Runner
+	cfg                 appconfig.Config
+	store               *db.Store
+	runner              docker.Runner
+	remoteBuildIDFunc   func(context.Context) (string, string, error)
+	installOrUpdateFunc func(context.Context, string) error
 }
 
 type Status struct {
@@ -64,6 +69,27 @@ type BackupInfo struct {
 	CreatedAt string `json:"created_at"`
 	Reason    string `json:"reason,omitempty"`
 	Status    string `json:"status"`
+}
+
+type BackupManifest struct {
+	Version   int                  `json:"version"`
+	Reason    string               `json:"reason"`
+	CreatedAt string               `json:"created_at"`
+	Files     []BackupManifestFile `json:"files"`
+}
+
+type BackupManifestFile struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+type BackupVerifyResult struct {
+	Name         string   `json:"name"`
+	Valid        bool     `json:"valid"`
+	Format       string   `json:"format"`
+	CheckedFiles int      `json:"checked_files"`
+	Errors       []string `json:"errors"`
 }
 
 type LogQuery struct {
@@ -150,15 +176,19 @@ func (m Manager) Prerequisites(ctx context.Context) ([]Prerequisite, error) {
 
 func (m Manager) Install(ctx context.Context) (db.Job, error) {
 	return m.startJob(ctx, "install", "queued install", func(jobID string) {
-		if m.runInstallOrUpdateJob(jobID, false, false) {
+		if m.runInstallOrUpdateJob(jobID, false, false, nil) {
 			m.update(jobID, "completed", 100, "install completed", "")
 		}
 	})
 }
 
 func (m Manager) Update(ctx context.Context) (db.Job, error) {
+	return m.UpdateWithPreUpdate(ctx, nil)
+}
+
+func (m Manager) UpdateWithPreUpdate(ctx context.Context, preUpdate func(context.Context) error) (db.Job, error) {
 	return m.startJob(ctx, "update", "queued update", func(jobID string) {
-		if m.runInstallOrUpdateJob(jobID, true, true) {
+		if m.runInstallOrUpdateJob(jobID, true, true, preUpdate) {
 			m.update(jobID, "completed", 100, "update completed", "")
 		}
 	})
@@ -166,7 +196,7 @@ func (m Manager) Update(ctx context.Context) (db.Job, error) {
 
 func (m Manager) Bootstrap(ctx context.Context) (db.Job, error) {
 	return m.startJob(ctx, "bootstrap", "queued bootstrap", func(jobID string) {
-		if !m.runInstallOrUpdateJob(jobID, false, false) {
+		if !m.runInstallOrUpdateJob(jobID, false, false, nil) {
 			return
 		}
 		m.update(jobID, "running", 80, "initializing configuration", "")
@@ -178,14 +208,7 @@ func (m Manager) Bootstrap(ctx context.Context) (db.Job, error) {
 	})
 }
 
-func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bool) bool {
-	if backupFirst {
-		m.update(jobID, "running", 5, "creating backup before update", "")
-		if _, err := m.createBackupArchive("pre-update"); err != nil {
-			m.update(jobID, "failed", 5, "backup failed", err.Error())
-			return false
-		}
-	}
+func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bool, preUpdate func(context.Context) error) bool {
 	mode, err := m.RuntimeMode(context.Background())
 	if err != nil {
 		m.update(jobID, "failed", 10, "runtime mode read failed", err.Error())
@@ -195,31 +218,72 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 	if update {
 		action = "update"
 	}
-	if mode == RuntimeWindowsSteamCMD {
-		m.update(jobID, "running", 20, "preparing SteamCMD", "")
-		if err := m.ensureSteamCMD(context.Background()); err != nil {
-			m.update(jobID, "failed", 20, "steamcmd setup failed", err.Error())
+	wasRunning := false
+	if update {
+		status, err := m.Status(context.Background())
+		if err != nil {
+			m.update(jobID, "failed", 5, "server status read failed", err.Error())
 			return false
 		}
+		wasRunning = status.Container.Status == "running"
+		if wasRunning {
+			if preUpdate != nil {
+				m.update(jobID, "running", 5, "announcing update and saving world", "")
+				if err := preUpdate(context.Background()); err != nil {
+					m.update(jobID, "failed", 5, "pre-update notification/save failed", err.Error())
+					return false
+				}
+			}
+			m.update(jobID, "running", 10, "stopping server before update", "")
+			if err := m.Stop(context.Background()); err != nil {
+				m.update(jobID, "failed", 10, "stop before update failed", err.Error())
+				return false
+			}
+		}
+	}
+	if backupFirst {
+		m.update(jobID, "running", 15, "creating backup before update", "")
+		if _, err := m.createBackupArchive("pre-update"); err != nil {
+			m.update(jobID, "failed", 15, "backup failed", err.Error())
+			return false
+		}
+	}
+	if mode == RuntimeWindowsSteamCMD {
+		m.update(jobID, "running", 25, "preparing SteamCMD", "")
+		if m.installOrUpdateFunc == nil {
+			if err := m.ensureSteamCMD(context.Background()); err != nil {
+				m.update(jobID, "failed", 25, "steamcmd setup failed", err.Error())
+				return false
+			}
+		}
 		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.installOrUpdateWindows(context.Background()); err != nil {
+		if err := m.installOrUpdateRuntime(context.Background(), mode); err != nil {
 			m.update(jobID, "failed", 60, action+" failed", err.Error())
 			return false
 		}
 	} else {
 		m.update(jobID, "running", 20, "building wine runner image", "")
-		if err := m.runner.BuildImage(context.Background()); err != nil {
-			m.update(jobID, "failed", 20, "build failed", err.Error())
-			return false
+		if m.installOrUpdateFunc == nil {
+			if err := m.runner.BuildImage(context.Background()); err != nil {
+				m.update(jobID, "failed", 20, "build failed", err.Error())
+				return false
+			}
 		}
 		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.runner.InstallOrUpdate(context.Background()); err != nil {
+		if err := m.installOrUpdateRuntime(context.Background(), mode); err != nil {
 			m.update(jobID, "failed", 60, action+" failed", err.Error())
 			return false
 		}
 	}
 	_ = m.store.SetKV(context.Background(), kvInstalled, "true")
-	m.update(jobID, "running", 75, action+" completed", "")
+	if update && wasRunning {
+		m.update(jobID, "running", 85, "starting server after update", "")
+		if err := m.Start(context.Background()); err != nil {
+			m.update(jobID, "failed", 85, "restart after update failed", err.Error())
+			return false
+		}
+	}
+	m.update(jobID, "running", 95, action+" completed", "")
 	return true
 }
 
@@ -466,26 +530,24 @@ func (m Manager) ListBackups() ([]BackupInfo, error) {
 }
 
 func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error) {
-	name = filepath.Base(strings.TrimSpace(name))
-	if name == "." || name == "" || !strings.HasSuffix(strings.ToLower(name), ".zip") {
-		return db.Job{}, fmt.Errorf("invalid backup name")
-	}
-	path := filepath.Join(m.cfg.BackupsDir, name)
-	baseAbs, err := filepath.Abs(m.cfg.BackupsDir)
+	pathAbs, name, err := m.backupPath(name)
 	if err != nil {
 		return db.Job{}, err
-	}
-	pathAbs, err := filepath.Abs(path)
-	if err != nil {
-		return db.Job{}, err
-	}
-	if pathAbs != baseAbs && !strings.HasPrefix(pathAbs, baseAbs+string(os.PathSeparator)) {
-		return db.Job{}, fmt.Errorf("invalid backup path")
 	}
 	if !fileExists(pathAbs) {
 		return db.Job{}, fmt.Errorf("backup not found")
 	}
 	return m.startJob(ctx, "restore", "queued backup restore", func(jobID string) {
+		m.update(jobID, "running", 5, "verifying backup archive", "")
+		result, err := verifyBackupArchive(pathAbs, name)
+		if err != nil {
+			m.update(jobID, "failed", 5, "backup verify failed", err.Error())
+			return
+		}
+		if !result.Valid {
+			m.update(jobID, "failed", 5, "backup verify failed", strings.Join(result.Errors, "; "))
+			return
+		}
 		m.update(jobID, "running", 10, "stopping server before restore", "")
 		if err := m.Stop(context.Background()); err != nil {
 			m.update(jobID, "failed", 10, "stop failed", err.Error())
@@ -504,6 +566,39 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 		_ = m.store.SetKV(context.Background(), "pending_restart", "true")
 		m.update(jobID, "completed", 100, "backup restored; start the server after verifying files", "")
 	})
+}
+
+func (m Manager) BackupDownloadPath(name string) (string, error) {
+	path, _, err := m.backupPath(name)
+	if err != nil {
+		return "", err
+	}
+	if !fileExists(path) {
+		return "", fmt.Errorf("backup not found")
+	}
+	return path, nil
+}
+
+func (m Manager) DeleteBackup(name string) error {
+	path, _, err := m.backupPath(name)
+	if err != nil {
+		return err
+	}
+	if !fileExists(path) {
+		return fmt.Errorf("backup not found")
+	}
+	return os.Remove(path)
+}
+
+func (m Manager) VerifyBackup(name string) (BackupVerifyResult, error) {
+	path, cleanName, err := m.backupPath(name)
+	if err != nil {
+		return BackupVerifyResult{}, err
+	}
+	if !fileExists(path) {
+		return BackupVerifyResult{}, fmt.Errorf("backup not found")
+	}
+	return verifyBackupArchive(path, cleanName)
 }
 
 func (m Manager) startJob(ctx context.Context, typ, message string, fn func(jobID string)) (db.Job, error) {
@@ -570,6 +665,16 @@ func (m Manager) installOrUpdateWindows(ctx context.Context) error {
 		return fmt.Errorf("steamcmd failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func (m Manager) installOrUpdateRuntime(ctx context.Context, mode string) error {
+	if m.installOrUpdateFunc != nil {
+		return m.installOrUpdateFunc(ctx, mode)
+	}
+	if mode == RuntimeWindowsSteamCMD {
+		return m.installOrUpdateWindows(ctx)
+	}
+	return m.runner.InstallOrUpdate(ctx)
 }
 
 func (m Manager) startWindows(ctx context.Context, args []string) error {
@@ -653,24 +758,47 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 	if err := os.MkdirAll(m.cfg.BackupsDir, 0o755); err != nil {
 		return BackupInfo{}, err
 	}
-	name := fmt.Sprintf("%s-%s.zip", time.Now().UTC().Format("20060102T150405Z"), reason)
+	now := time.Now().UTC()
+	createdAt := now.Format(time.RFC3339Nano)
+	name := fmt.Sprintf("%s-%s.zip", now.Format("20060102T150405.000000000Z"), reason)
 	path := filepath.Join(m.cfg.BackupsDir, name)
 	out, err := os.Create(path)
 	if err != nil {
 		return BackupInfo{}, err
 	}
 	zw := zip.NewWriter(out)
+	var files []BackupManifestFile
 	for _, root := range []string{
 		filepath.Join(m.cfg.ServerDir, "Pal", "Saved"),
 		m.cfg.ModsDir(),
 		m.cfg.PalWorldSettingsPath(),
 		m.cfg.PalModSettingsPath(),
 	} {
-		if err := addPathToZip(zw, m.cfg.ServerDir, root); err != nil {
+		added, err := addPathToZip(zw, m.cfg.ServerDir, root)
+		if err != nil {
 			_ = zw.Close()
 			_ = out.Close()
 			return BackupInfo{}, err
 		}
+		files = append(files, added...)
+	}
+	manifest := BackupManifest{Version: 1, Reason: reason, CreatedAt: createdAt, Files: files}
+	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		_ = zw.Close()
+		_ = out.Close()
+		return BackupInfo{}, err
+	}
+	w, err := zw.Create(".palpanel-backup.json")
+	if err != nil {
+		_ = zw.Close()
+		_ = out.Close()
+		return BackupInfo{}, err
+	}
+	if _, err := w.Write(append(manifestBytes, '\n')); err != nil {
+		_ = zw.Close()
+		_ = out.Close()
+		return BackupInfo{}, err
 	}
 	if err := zw.Close(); err != nil {
 		_ = out.Close()
@@ -686,15 +814,16 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 	return BackupInfo{Name: name, Path: path, SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC().Format(time.RFC3339Nano), Reason: reason, Status: "available"}, nil
 }
 
-func addPathToZip(zw *zip.Writer, base, path string) error {
+func addPathToZip(zw *zip.Writer, base, path string) ([]BackupManifestFile, error) {
 	if !fileExists(path) && !dirExists(path) {
-		return nil
+		return nil, nil
 	}
 	baseAbs, err := filepath.Abs(base)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+	var files []BackupManifestFile
+	err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -706,6 +835,10 @@ func addPathToZip(zw *zip.Writer, base, path string) error {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
 		w, err := zw.Create(rel)
 		if err != nil {
 			return err
@@ -714,10 +847,19 @@ func addPathToZip(zw *zip.Writer, base, path string) error {
 		if err != nil {
 			return err
 		}
-		defer in.Close()
-		_, err = io.Copy(w, in)
-		return err
+		hasher := sha256.New()
+		_, copyErr := io.Copy(io.MultiWriter(w, hasher), in)
+		closeErr := in.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		files = append(files, BackupManifestFile{Path: rel, Size: info.Size(), SHA256: hex.EncodeToString(hasher.Sum(nil))})
+		return nil
 	})
+	return files, err
 }
 
 func extractZipSafe(zipPath, dst string) error {
@@ -731,6 +873,9 @@ func extractZipSafe(zipPath, dst string) error {
 		return err
 	}
 	for _, file := range reader.File {
+		if file.Name == ".palpanel-backup.json" {
+			continue
+		}
 		target := filepath.Join(dst, file.Name)
 		targetAbs, err := filepath.Abs(target)
 		if err != nil {
@@ -832,6 +977,139 @@ func backupReason(name string) string {
 		return name[i+1:]
 	}
 	return "manual"
+}
+
+func (m Manager) backupPath(name string) (string, string, error) {
+	trimmed := strings.TrimSpace(name)
+	cleanName := filepath.Base(trimmed)
+	if cleanName == "." || cleanName == "" || cleanName != trimmed || !strings.HasSuffix(strings.ToLower(cleanName), ".zip") {
+		return "", "", fmt.Errorf("invalid backup name")
+	}
+	baseAbs, err := filepath.Abs(m.cfg.BackupsDir)
+	if err != nil {
+		return "", "", err
+	}
+	pathAbs, err := filepath.Abs(filepath.Join(m.cfg.BackupsDir, cleanName))
+	if err != nil {
+		return "", "", err
+	}
+	if pathAbs != baseAbs && !strings.HasPrefix(pathAbs, baseAbs+string(os.PathSeparator)) {
+		return "", "", fmt.Errorf("invalid backup path")
+	}
+	return pathAbs, cleanName, nil
+}
+
+func verifyBackupArchive(path, name string) (BackupVerifyResult, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return BackupVerifyResult{}, err
+	}
+	defer reader.Close()
+
+	result := BackupVerifyResult{Name: name, Valid: true, Format: "legacy"}
+	byPath := map[string]*zip.File{}
+	var manifestFile *zip.File
+	for _, file := range reader.File {
+		if file.Name == ".palpanel-backup.json" {
+			manifestFile = file
+			continue
+		}
+		if unsafeZipName(file.Name) {
+			result.Errors = append(result.Errors, "unsafe path: "+file.Name)
+		}
+		if !file.FileInfo().IsDir() {
+			byPath[file.Name] = file
+		}
+	}
+	if manifestFile == nil {
+		for name, file := range byPath {
+			if err := readZipFile(file); err != nil {
+				result.Errors = append(result.Errors, "read failed: "+name+": "+err.Error())
+				continue
+			}
+			result.CheckedFiles++
+		}
+		result.Valid = len(result.Errors) == 0
+		return result, nil
+	}
+
+	result.Format = "manifest_v1"
+	manifestReader, err := manifestFile.Open()
+	if err != nil {
+		return BackupVerifyResult{}, err
+	}
+	var manifest BackupManifest
+	if err := json.NewDecoder(manifestReader).Decode(&manifest); err != nil {
+		_ = manifestReader.Close()
+		result.Valid = false
+		result.Errors = append(result.Errors, "manifest parse failed: "+err.Error())
+		return result, nil
+	}
+	_ = manifestReader.Close()
+	if manifest.Version != 1 {
+		result.Errors = append(result.Errors, fmt.Sprintf("unsupported manifest version: %d", manifest.Version))
+	}
+
+	expectedPaths := map[string]bool{}
+	for _, expected := range manifest.Files {
+		expectedPaths[expected.Path] = true
+		file := byPath[expected.Path]
+		if file == nil {
+			result.Errors = append(result.Errors, "missing file: "+expected.Path)
+			continue
+		}
+		if file.UncompressedSize64 != uint64(expected.Size) {
+			result.Errors = append(result.Errors, "size mismatch: "+expected.Path)
+		}
+		r, err := file.Open()
+		if err != nil {
+			result.Errors = append(result.Errors, "read failed: "+expected.Path)
+			continue
+		}
+		hasher := sha256.New()
+		_, copyErr := io.Copy(hasher, r)
+		closeErr := r.Close()
+		if copyErr != nil {
+			result.Errors = append(result.Errors, "hash failed: "+expected.Path)
+			continue
+		}
+		if closeErr != nil {
+			result.Errors = append(result.Errors, "close failed: "+expected.Path)
+			continue
+		}
+		if !strings.EqualFold(hex.EncodeToString(hasher.Sum(nil)), expected.SHA256) {
+			result.Errors = append(result.Errors, "sha256 mismatch: "+expected.Path)
+		}
+		result.CheckedFiles++
+	}
+	for path := range byPath {
+		if !expectedPaths[path] {
+			result.Errors = append(result.Errors, "unexpected file: "+path)
+		}
+	}
+	result.Valid = len(result.Errors) == 0
+	return result, nil
+}
+
+func readZipFile(file *zip.File) error {
+	r, err := file.Open()
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(io.Discard, r)
+	closeErr := r.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func unsafeZipName(name string) bool {
+	if strings.TrimSpace(name) == "" || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+		return true
+	}
+	clean := filepath.Clean(name)
+	return clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || filepath.IsAbs(clean)
 }
 
 func copyFile(src, dst string) error {

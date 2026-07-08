@@ -52,6 +52,39 @@ func (r Runner) InstallOrUpdate(ctx context.Context) error {
 	return err
 }
 
+func (r Runner) ImageExists(ctx context.Context) (bool, error) {
+	_, err := r.run(ctx, "image", "inspect", r.cfg.DockerImage)
+	if err == nil {
+		return true, nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "no such image") || strings.Contains(msg, "not found") {
+		return false, nil
+	}
+	return false, err
+}
+
+func (r Runner) AppInfo(ctx context.Context) (string, error) {
+	exists, err := r.ImageExists(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("wine runner image is not built; run install or bootstrap before checking remote version")
+	}
+	args := []string{
+		"run", "--rm",
+		"--add-host", "host.docker.internal:host-gateway",
+	}
+	args = append(args, containerProxyEnvArgs()...)
+	args = append(args, r.cfg.DockerImage, "appinfo")
+	out, err := r.run(ctx, args...)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 func (r Runner) DownloadWorkshop(ctx context.Context, itemID string) error {
 	args := []string{
 		"run", "--rm",

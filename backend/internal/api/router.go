@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,24 +17,28 @@ import (
 	"palpanel/internal/db"
 	"palpanel/internal/id"
 	"palpanel/internal/mods"
+	"palpanel/internal/monitor"
 	"palpanel/internal/palconfig"
 	"palpanel/internal/paldefender"
 	"palpanel/internal/palrest"
+	"palpanel/internal/scheduler"
 	"palpanel/internal/server"
 )
 
 type Server struct {
-	cfg      appconfig.Config
-	store    *db.Store
-	server   server.Manager
-	mods     mods.Manager
-	defender paldefender.Manager
-	palrest  palrest.Client
+	cfg       appconfig.Config
+	store     *db.Store
+	server    server.Manager
+	mods      mods.Manager
+	defender  paldefender.Manager
+	palrest   palrest.Client
+	monitor   monitor.Manager
+	scheduler scheduler.Manager
 }
 
-func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client) *gin.Engine {
+func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(CORSMiddleware(cfg.CORSOrigins))
@@ -46,6 +51,13 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.GET("/jobs", s.listJobs)
 		api.GET("/jobs/:id", s.getJob)
 		api.GET("/audit-logs", Require(PermAuditRead), s.listAuditLogs)
+		api.GET("/alerts", s.listAlerts)
+		api.POST("/alerts/:id/ack", Require(PermServerControl), s.ackAlert)
+		api.GET("/schedules", s.listSchedules)
+		api.POST("/schedules", Require(PermServerControl), s.createSchedule)
+		api.PUT("/schedules/:id", Require(PermServerControl), s.updateSchedule)
+		api.DELETE("/schedules/:id", Require(PermServerControl), s.deleteSchedule)
+		api.POST("/schedules/:id/run", Require(PermServerControl), s.runSchedule)
 
 		api.GET("/server/status", s.serverStatus)
 		api.GET("/server/prerequisites", s.serverPrerequisites)
@@ -55,16 +67,25 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.GET("/server/logs", s.serverLogs)
 		api.POST("/server/install", Require(PermServerControl), s.serverInstall)
 		api.POST("/server/update", Require(PermServerControl), s.serverUpdate)
+		api.POST("/server/update-if-needed", Require(PermServerControl), s.serverUpdateIfNeeded)
+		api.GET("/server/version", s.serverVersion)
+		api.POST("/server/version/check", Require(PermServerControl), s.serverVersionCheck)
 		api.POST("/server/start", Require(PermServerControl), s.serverStart)
 		api.POST("/server/stop", Require(PermServerControl), s.serverStop)
 		api.POST("/server/restart", Require(PermServerControl), s.serverRestart)
 		api.POST("/server/safe-restart", Require(PermServerControl), s.serverSafeRestart)
+		api.POST("/server/force-stop", Require(PermServerControl), s.serverForceStop)
 		api.GET("/server/startup", s.getStartup)
+		api.GET("/monitor/snapshot", s.monitorSnapshot)
+		api.GET("/monitor/history", s.monitorHistory)
 		api.PUT("/server/startup", Require(PermConfigWrite), s.putStartup)
 		api.POST("/server/initialize-config", Require(PermConfigWrite), s.initializeConfig)
 		api.POST("/server/backup", Require(PermBackupWrite), s.serverBackup)
 		api.GET("/backups", s.listBackups)
 		api.POST("/backups/:name/restore", Require(PermBackupWrite), s.restoreBackup)
+		api.GET("/backups/:name/download", Require(PermBackupWrite), s.downloadBackup)
+		api.DELETE("/backups/:name", Require(PermBackupWrite), s.deleteBackup)
+		api.POST("/backups/:name/verify", Require(PermBackupWrite), s.verifyBackup)
 
 		api.GET("/config/palworld", s.getPalworldConfig)
 		api.PUT("/config/palworld", Require(PermConfigWrite), s.updatePalworldConfig)
@@ -103,6 +124,8 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.GET("/players/whitelist", s.listPlayerWhitelist)
 		api.PUT("/players/whitelist", Require(PermPlayersWrite), s.putPlayerWhitelist)
 		api.POST("/players/:id/kick", Require(PermPlayersWrite), s.kickPlayer)
+		api.POST("/players/:id/ban", Require(PermPlayersWrite), s.banPlayer)
+		api.POST("/players/:id/unban", Require(PermPlayersWrite), s.unbanPlayer)
 	}
 
 	if frontendDistReady(cfg.FrontendDist) {
@@ -159,6 +182,94 @@ func (s Server) listAuditLogs(c *gin.Context) {
 		return
 	}
 	ok(c, logs)
+}
+
+func (s Server) listAlerts(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	alerts, err := s.store.ListAlerts(c.Request.Context(), limit)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "alerts_list_failed", err.Error())
+		return
+	}
+	ok(c, alerts)
+}
+
+func (s Server) ackAlert(c *gin.Context) {
+	if err := s.store.AckAlert(c.Request.Context(), c.Param("id")); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			fail(c, http.StatusNotFound, "alert_not_found", "alert not found")
+			return
+		}
+		fail(c, http.StatusInternalServerError, "alert_ack_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"acked": true})
+}
+
+func (s Server) listSchedules(c *gin.Context) {
+	items, err := s.scheduler.List(c.Request.Context())
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "schedules_list_failed", err.Error())
+		return
+	}
+	ok(c, items)
+}
+
+func (s Server) createSchedule(c *gin.Context) {
+	var req db.Schedule
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	item, err := s.scheduler.Create(c.Request.Context(), req)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "schedule_create_failed", err.Error())
+		return
+	}
+	created(c, item)
+}
+
+func (s Server) updateSchedule(c *gin.Context) {
+	var req db.Schedule
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	item, err := s.scheduler.Update(c.Request.Context(), c.Param("id"), req)
+	if errors.Is(err, sql.ErrNoRows) {
+		fail(c, http.StatusNotFound, "schedule_not_found", "schedule not found")
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusBadRequest, "schedule_update_failed", err.Error())
+		return
+	}
+	ok(c, item)
+}
+
+func (s Server) deleteSchedule(c *gin.Context) {
+	if err := s.scheduler.Delete(c.Request.Context(), c.Param("id")); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			fail(c, http.StatusNotFound, "schedule_not_found", "schedule not found")
+			return
+		}
+		fail(c, http.StatusInternalServerError, "schedule_delete_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"deleted": true})
+}
+
+func (s Server) runSchedule(c *gin.Context) {
+	job, err := s.scheduler.RunNow(c.Request.Context(), c.Param("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		fail(c, http.StatusNotFound, "schedule_not_found", "schedule not found")
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusBadRequest, "schedule_run_failed", err.Error())
+		return
+	}
+	accepted(c, job)
 }
 
 func (s Server) serverStatus(c *gin.Context) {
@@ -227,6 +338,25 @@ func (s Server) serverLogs(c *gin.Context) {
 	ok(c, gin.H{"logs": logs})
 }
 
+func (s Server) monitorSnapshot(c *gin.Context) {
+	snapshot, err := s.monitor.Snapshot(c.Request.Context())
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "monitor_snapshot_failed", err.Error())
+		return
+	}
+	ok(c, snapshot)
+}
+
+func (s Server) monitorHistory(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "120"))
+	history, err := s.monitor.History(c.Request.Context(), limit)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "monitor_history_failed", err.Error())
+		return
+	}
+	ok(c, history)
+}
+
 func (s Server) serverInstall(c *gin.Context) {
 	j, err := s.server.Install(c.Request.Context())
 	if err != nil {
@@ -237,9 +367,36 @@ func (s Server) serverInstall(c *gin.Context) {
 }
 
 func (s Server) serverUpdate(c *gin.Context) {
-	j, err := s.server.Update(c.Request.Context())
+	j, err := s.server.UpdateWithPreUpdate(c.Request.Context(), s.preUpdateHook())
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "update_failed", err.Error())
+		return
+	}
+	accepted(c, j)
+}
+
+func (s Server) serverUpdateIfNeeded(c *gin.Context) {
+	j, err := s.server.UpdateIfNeeded(c.Request.Context(), s.preUpdateHook())
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "smart_update_failed", err.Error())
+		return
+	}
+	accepted(c, j)
+}
+
+func (s Server) serverVersion(c *gin.Context) {
+	info, err := s.server.VersionInfo(c.Request.Context())
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "version_read_failed", err.Error())
+		return
+	}
+	ok(c, info)
+}
+
+func (s Server) serverVersionCheck(c *gin.Context) {
+	j, err := s.server.CheckVersion(c.Request.Context())
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "version_check_failed", err.Error())
 		return
 	}
 	accepted(c, j)
@@ -290,6 +447,20 @@ func (s Server) serverSafeRestart(c *gin.Context) {
 		return
 	}
 	accepted(c, j)
+}
+
+func (s Server) serverForceStop(c *gin.Context) {
+	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "stop", nil)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "palworld_force_stop_failed", err.Error())
+		return
+	}
+	status, statusErr := s.server.Status(c.Request.Context())
+	if statusErr != nil {
+		ok(c, gin.H{"status": "stopped", "palworld": resp, "status_error": statusErr.Error()})
+		return
+	}
+	ok(c, gin.H{"status": "stopped", "palworld": resp, "server": status})
 }
 
 func (s Server) getStartup(c *gin.Context) {
@@ -353,6 +524,32 @@ func (s Server) restoreBackup(c *gin.Context) {
 		return
 	}
 	accepted(c, j)
+}
+
+func (s Server) downloadBackup(c *gin.Context) {
+	path, err := s.server.BackupDownloadPath(c.Param("name"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "backup_download_failed", err.Error())
+		return
+	}
+	c.FileAttachment(path, filepath.Base(path))
+}
+
+func (s Server) deleteBackup(c *gin.Context) {
+	if err := s.server.DeleteBackup(c.Param("name")); err != nil {
+		fail(c, http.StatusBadRequest, "backup_delete_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"deleted": true})
+}
+
+func (s Server) verifyBackup(c *gin.Context) {
+	result, err := s.server.VerifyBackup(c.Param("name"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "backup_verify_failed", err.Error())
+		return
+	}
+	ok(c, result)
 }
 
 func (s Server) getPalworldConfig(c *gin.Context) {
@@ -532,7 +729,73 @@ func (s Server) putPlayerWhitelist(c *gin.Context) {
 }
 
 func (s Server) kickPlayer(c *gin.Context) {
-	fail(c, http.StatusNotImplemented, "unsupported", "player kick requires a Palworld/PalDefender command backend that is not available in this runtime")
+	userID := strings.TrimSpace(c.Param("id"))
+	if userID == "" {
+		fail(c, http.StatusBadRequest, "player_id_required", "player id is required")
+		return
+	}
+	payload, err := playerActionPayload(c, userID)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "kick", payload)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "palworld_kick_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"player_id": userID, "palworld": resp})
+}
+
+func (s Server) banPlayer(c *gin.Context) {
+	userID := strings.TrimSpace(c.Param("id"))
+	if userID == "" {
+		fail(c, http.StatusBadRequest, "player_id_required", "player id is required")
+		return
+	}
+	payload, err := playerActionPayload(c, userID)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "ban", payload)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "palworld_ban_failed", err.Error())
+		return
+	}
+	entry := db.PlayerAccessEntry{
+		SteamID:  userID,
+		Nickname: stringFromMap(payload, "nickname"),
+		Reason:   stringFromMap(payload, "reason"),
+	}
+	if err := s.store.UpsertPlayerAccess(c.Request.Context(), "ban", entry); err != nil {
+		fail(c, http.StatusInternalServerError, "ban_record_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"player_id": userID, "palworld": resp, "ban": entry})
+}
+
+func (s Server) unbanPlayer(c *gin.Context) {
+	userID := strings.TrimSpace(c.Param("id"))
+	if userID == "" {
+		fail(c, http.StatusBadRequest, "player_id_required", "player id is required")
+		return
+	}
+	payload, err := playerActionPayload(c, userID)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "unban", payload)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "palworld_unban_failed", err.Error())
+		return
+	}
+	if err := s.store.DeletePlayerAccess(c.Request.Context(), "ban", userID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		fail(c, http.StatusInternalServerError, "ban_record_delete_failed", err.Error())
+		return
+	}
+	ok(c, gin.H{"player_id": userID, "palworld": resp, "deleted": true})
 }
 
 func (s Server) enableMod(c *gin.Context) {
@@ -704,6 +967,50 @@ func (s Server) palPost(path string) gin.HandlerFunc {
 		}
 		ok(c, resp)
 	}
+}
+
+func (s Server) preUpdateHook() func(context.Context) error {
+	return func(ctx context.Context) error {
+		if _, err := s.palrest.Do(ctx, http.MethodPost, "announce", gin.H{"message": "Server update starting soon. Saving world and stopping server."}); err != nil {
+			return fmt.Errorf("announce before update failed: %w", err)
+		}
+		if _, err := s.palrest.Do(ctx, http.MethodPost, "save", nil); err != nil {
+			return fmt.Errorf("save before update failed: %w", err)
+		}
+		return nil
+	}
+}
+
+func playerActionPayload(c *gin.Context, userID string) (map[string]any, error) {
+	payload := map[string]any{"userid": userID}
+	if c.Request.ContentLength > 0 {
+		var raw map[string]any
+		if err := c.ShouldBindJSON(&raw); err != nil {
+			return nil, err
+		}
+		for _, key := range []string{"nickname", "reason", "message"} {
+			if value, ok := raw[key]; ok {
+				payload[key] = value
+			}
+		}
+	}
+	if _, hasMessage := payload["message"]; !hasMessage {
+		if reason := stringFromMap(payload, "reason"); reason != "" {
+			payload["message"] = reason
+		}
+	}
+	return payload, nil
+}
+
+func stringFromMap(payload map[string]any, key string) string {
+	value, ok := payload[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func hasServerValidationErrors(issues []server.ValidationIssue) bool {

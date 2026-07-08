@@ -28,13 +28,13 @@ export const mapJob = (raw: unknown): Job => {
   const progress = Number(data.progress);
 
   return {
-    id: String(data.id || data.job_id || `job_${Date.now()}`),
+    id: String(data.id || data.job_id || ''),
     type: String(data.type || data.kind || 'job'),
     status,
     progress: Number.isFinite(progress) ? progress : status === 'success' ? 100 : 0,
     message: data.message ? String(data.message) : undefined,
     error: data.error ? String(data.error) : undefined,
-    created_at: String(data.created_at || data.createdAt || new Date().toISOString()),
+    created_at: String(data.created_at || data.createdAt || ''),
     updated_at: data.updated_at ? String(data.updated_at) : data.updatedAt ? String(data.updatedAt) : undefined,
     finished_at:
       data.finished_at || data.finishedAt

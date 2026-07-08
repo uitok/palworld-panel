@@ -4,7 +4,7 @@ import { getErrorMessage } from '../api/client';
 import { setupApi } from '../api/setup';
 import { serverApi } from '../api/server';
 import { tasksApi } from '../api/tasks';
-import type { Job, Prerequisite, RuntimeMode, ServerStatus, StartupConfig, StartupResponse } from '../types';
+import type { Job, Prerequisite, RuntimeMode, ServerStatus, ServerVersionInfo, StartupConfig, StartupResponse } from '../types';
 import { StatusBadge } from '../components/ui/StatusBadge';
 
 const runtimeLabels: Record<RuntimeMode, string> = {
@@ -18,21 +18,24 @@ export const Setup: React.FC = () => {
   const [prerequisites, setPrerequisites] = useState<Prerequisite[]>([]);
   const [runtime, setRuntime] = useState<RuntimeMode>('wine_docker');
   const [startup, setStartup] = useState<StartupResponse | null>(null);
+  const [versionInfo, setVersionInfo] = useState<ServerVersionInfo | null>(null);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    const [nextStatus, checks, runtimeRes, startupRes] = await Promise.all([
+    const [nextStatus, checks, runtimeRes, startupRes, versionRes] = await Promise.all([
       serverApi.getStatus(),
       setupApi.getPrerequisites(),
       setupApi.getRuntime(),
       setupApi.getStartup(),
+      serverApi.getVersion(),
     ]);
     setStatus(nextStatus);
     setPrerequisites(checks);
     setRuntime(runtimeRes.mode);
     setStartup(startupRes);
+    setVersionInfo(versionRes);
     setLoading(false);
   }, []);
 
@@ -213,7 +216,21 @@ export const Setup: React.FC = () => {
             <StatusItem label="配置文件" value={status?.config_exists ? '已初始化' : '未初始化'} ok={Boolean(status?.config_exists)} />
             <StatusItem label="进程" value={status?.status || 'stopped'} ok={status?.status === 'running'} />
             <StatusItem label="配置状态" value={status?.pending_restart ? '待重启' : '已生效'} ok={!status?.pending_restart} />
+            <StatusItem label="当前 Build" value={versionInfo?.current_build_id || '未知'} ok={Boolean(versionInfo?.current_build_id)} />
+            <StatusItem
+              label="更新状态"
+              value={versionInfo?.update_available ? '有新版本' : versionInfo?.latest_build_id ? '已是最新' : '未检查'}
+              ok={Boolean(versionInfo?.latest_build_id && !versionInfo.update_available)}
+            />
           </div>
+          {versionInfo && (
+            <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-3 text-[11px] font-semibold text-slate-500">
+              <p>最新 Build：{versionInfo.latest_build_id || '未检查'}</p>
+              <p className="mt-1">检查来源：{versionInfo.source || '未检查'} / {versionInfo.last_checked_at || '-'}</p>
+              <p className="mt-1 break-all">Manifest：{versionInfo.manifest_path || '-'}</p>
+              {versionInfo.error && <p className="mt-1 text-amber-700">{versionInfo.error}</p>}
+            </div>
+          )}
           {status?.warnings && status.warnings.length > 0 && (
             <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-3 text-[11px] font-medium text-amber-800">
               {status.warnings.join(' / ')}
@@ -222,6 +239,12 @@ export const Setup: React.FC = () => {
           <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
             <button type="button" onClick={() => runJob(setupApi.install)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
               安装
+            </button>
+            <button type="button" onClick={() => runJob(serverApi.checkVersion)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+              检查更新
+            </button>
+            <button type="button" onClick={() => runJob(serverApi.updateIfNeeded)} className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 hover:bg-sky-100">
+              检查后更新
             </button>
             <button type="button" onClick={initializeConfig} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
               初始化配置

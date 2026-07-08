@@ -64,6 +64,10 @@ const fallbackFor = <T>(fallback: T): T => {
   return (Array.isArray(fallback) ? [] : fallback) as T;
 };
 
+export const demoDataEnabled = () => {
+  return Boolean(import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEMO_DATA === 'true');
+};
+
 export const unwrapApiData = <T>(response: unknown, fallback: T): T => {
   const body = isAxiosResponse(response) ? response.data : response;
 
@@ -131,10 +135,11 @@ export const handleRequest = async <T, R = T>(
   fallback: R,
   options: HandleRequestOptions<R> = {},
 ): Promise<R> => {
+  const fallbackOnError = options.fallbackOnError ?? demoDataEnabled();
   try {
     const response = await requestFn();
     const body = isAxiosResponse(response) ? response.data : response;
-    if (options.fallbackOnError === false && isApiEnvelope(body) && !body.ok) {
+    if (!fallbackOnError && isApiEnvelope(body) && !body.ok) {
       const error = body.error;
       if (typeof error === 'string') {
         throw new ApiError(error);
@@ -146,7 +151,7 @@ export const handleRequest = async <T, R = T>(
     return mapped == null ? fallbackFor(fallback) : mapped;
   } catch (error) {
     notifyAuthError(error);
-    if (options.fallbackOnError === false) {
+    if (!fallbackOnError) {
       throw apiErrorFrom(error);
     }
     logFallback(error, options.quiet);

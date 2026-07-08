@@ -37,6 +37,17 @@ export interface ServerStatus {
   version?: string;
 }
 
+export interface ServerVersionInfo {
+  installed: boolean;
+  current_build_id: string;
+  latest_build_id: string;
+  update_available: boolean;
+  last_checked_at: string;
+  source: string;
+  manifest_path: string;
+  error?: string;
+}
+
 export interface ServerMetrics {
   server_fps?: number;
   current_players?: number;
@@ -45,6 +56,30 @@ export interface ServerMetrics {
   total_pals?: number;
   active_bases?: number;
   frame_time?: number;
+}
+
+export interface MonitorSample {
+  id: string;
+  created_at: string;
+  cpu_available: boolean;
+  cpu_percent: number;
+  memory_available: boolean;
+  memory_usage_bytes: number;
+  memory_limit_bytes: number;
+  disk_available: boolean;
+  disk_free_bytes: number;
+  disk_total_bytes: number;
+  current_players: number;
+  max_players: number;
+  rest_healthy: boolean;
+  rcon_healthy: boolean;
+  game_port_healthy: boolean;
+  query_port_healthy: boolean;
+  unavailable_reason?: string;
+}
+
+export interface MonitorSnapshot {
+  sample: MonitorSample;
 }
 
 export interface Prerequisite {
@@ -132,6 +167,8 @@ export interface Job {
     | 'paldefender_update'
     | 'safe_restart'
     | 'restore'
+    | 'version_check'
+    | 'smart_update'
     | string;
   status: 'waiting' | 'running' | 'success' | 'failed';
   progress: number;
@@ -163,6 +200,14 @@ export interface BackupInfo {
   status?: string;
 }
 
+export interface BackupVerifyResult {
+  name: string;
+  valid: boolean;
+  format: string;
+  checked_files: number;
+  errors: string[];
+}
+
 export interface BackupRestoreRequest {
   name: string;
 }
@@ -182,6 +227,33 @@ export interface AuditLog {
   message?: string;
   ip?: string;
   created_at: string;
+}
+
+export interface Alert {
+  id: string;
+  severity: 'info' | 'warning' | 'error' | string;
+  title: string;
+  message: string;
+  source: string;
+  status: 'open' | 'acked' | string;
+  created_at: string;
+  ack_at?: string;
+}
+
+export type ScheduleType = 'save' | 'backup' | 'safe_restart' | 'update' | 'version_check';
+
+export interface Schedule {
+  id: string;
+  type: ScheduleType | string;
+  enabled: boolean;
+  interval_minutes?: number;
+  time_of_day?: string;
+  waittime?: number;
+  message?: string;
+  last_run_at?: string;
+  next_run_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ApiErrorShape {

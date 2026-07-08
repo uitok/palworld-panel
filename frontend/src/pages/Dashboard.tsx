@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Activity, Bell, Clock, Cpu, Home, Play, RefreshCw, Square, Sword, Terminal, Users } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Bell, Clock, Cpu, Home, Play, RefreshCw, Square, Sword, Terminal, Users, Zap } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -12,6 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 import { getErrorMessage } from '../api/client';
+import { monitorApi } from '../api/monitor';
 import { emptyLogs, serverApi } from '../api/server';
 import { useServerStore } from '../store/useServerStore';
 import { StatCard } from '../components/ui/StatCard';
@@ -20,10 +21,8 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 type ChartPoint = {
   time: string;
   players: number;
-  cpu: number;
+  cpu: number | null;
 };
-
-const maxChartPoints = 12;
 
 const stoppedMetrics = {
   server_fps: 0,
@@ -35,6 +34,13 @@ const stoppedMetrics = {
   frame_time: 0,
 };
 
+const formatTime = (value: string) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+};
+
 export const Dashboard: React.FC = () => {
   const { status, setStatus, metrics, setMetrics, autoRefresh, refreshKey, triggerRefresh } = useServerStore();
   const [logs, setLogs] = useState('');
@@ -44,34 +50,36 @@ export const Dashboard: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
 
-  const pushChartPoint = useCallback((players: number, cpu: number) => {
-    const time = new Date().toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-    setChartData((prev) => [...prev, { time, players, cpu }].slice(-maxChartPoints));
-  }, []);
-
   const fetchData = useCallback(async () => {
-    const statusRes = await serverApi.getStatus();
-    setStatus(statusRes);
+    try {
+      const [statusRes, monitorHistory] = await Promise.all([serverApi.getStatus(), monitorApi.history(48)]);
+      setStatus(statusRes);
+      setChartData(
+        monitorHistory.map((sample) => ({
+          time: formatTime(sample.created_at),
+          players: sample.current_players,
+          cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
+        })),
+      );
 
-    if (statusRes.status !== 'running') {
-      setMetrics(stoppedMetrics);
-      setLogs(emptyLogs);
-      pushChartPoint(0, statusRes.cpu_percent || 0);
+      if (statusRes.status !== 'running') {
+        setMetrics(stoppedMetrics);
+        setLogs(emptyLogs);
+        setNotice(null);
+        return;
+      }
+
+      const [metricsRes, logsRes] = await Promise.all([serverApi.getMetrics(), serverApi.getLogs(80, logSearch, logLevel)]);
+      setMetrics(metricsRes);
+      setLogs(logsRes.logs);
+      setNotice(null);
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+      setLogs('');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const [metricsRes, logsRes] = await Promise.all([serverApi.getMetrics(), serverApi.getLogs(80, logSearch, logLevel)]);
-    setMetrics(metricsRes);
-    setLogs(logsRes.logs);
-    pushChartPoint(metricsRes.current_players || 0, statusRes.cpu_percent || 0);
-    setLoading(false);
-  }, [logLevel, logSearch, pushChartPoint, setMetrics, setStatus]);
+  }, [logLevel, logSearch, setMetrics, setStatus]);
 
   useEffect(() => {
     fetchData();
@@ -79,18 +87,24 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    const interval = window.setInterval(fetchData, 5000);
+    return () => window.clearInterval(interval);
   }, [autoRefresh, fetchData]);
 
-  const control = async (action: 'start' | 'stop') => {
-    const text = action === 'start' ? '启动服务器？' : '停止服务器？请确认在线玩家已收到通知。';
+  const control = async (action: 'start' | 'stop' | 'forceStop') => {
+    const text =
+      action === 'start'
+        ? '启动服务器？'
+        : action === 'forceStop'
+          ? '通过官方 REST 强制停止服务器？REST 不可达时会返回失败。'
+          : '停止服务器？请确认在线玩家已经收到通知。';
     if (!window.confirm(text)) return;
     try {
       setLoading(true);
       if (action === 'start') await serverApi.start();
       if (action === 'stop') await serverApi.stop();
-      setNotice(action === 'start' ? '启动请求已发送' : '停止请求已发送');
+      if (action === 'forceStop') await serverApi.forceStop();
+      setNotice(action === 'start' ? '启动请求已发送' : action === 'forceStop' ? '强制停止请求已发送' : '停止请求已发送');
       triggerRefresh();
     } catch (error) {
       setNotice(getErrorMessage(error));
@@ -111,6 +125,8 @@ export const Dashboard: React.FC = () => {
     return `${days}天 ${hours}时 ${minutes}分`;
   };
 
+  const latestChart = useMemo(() => chartData[chartData.length - 1], [chartData]);
+
   if (loading && !status) {
     return (
       <div className="flex h-full items-center justify-center p-12 text-xs font-semibold text-slate-400">
@@ -129,15 +145,15 @@ export const Dashboard: React.FC = () => {
       )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="在线玩家" value={`${metrics?.current_players || 0} / ${metrics?.max_players || 32}`} icon={<Users size={16} />} trend="来自官方 REST API" trendType="info" color="sky" />
+        <StatCard title="在线玩家" value={`${metrics?.current_players || 0} / ${metrics?.max_players || 32}`} icon={<Users size={16} />} trend="来自官方 REST / 监控采样" trendType="info" color="sky" />
         <StatCard title="服务器状态" value={status?.status === 'running' ? '运行中' : '已停止'} icon={<Activity size={16} />} trend={status?.setup_step || 'prerequisites'} trendType={status?.status === 'running' ? 'up' : 'down'} color={status?.status === 'running' ? 'emerald' : 'rose'} />
-        <StatCard title="系统占用" value={`${status?.cpu_percent?.toFixed(1) || 0}% CPU`} icon={<Cpu size={16} />} trend={`内存 ${formatRAM(status?.memory_usage_bytes)}`} trendType="neutral" color="blue" />
+        <StatCard title="系统占用" value={`${latestChart?.cpu ?? status?.cpu_percent?.toFixed(1) ?? 0}% CPU`} icon={<Cpu size={16} />} trend={`内存 ${formatRAM(status?.memory_usage_bytes)}`} trendType="neutral" color="blue" />
         <StatCard title="世界运行时间" value={formatUptime(metrics?.uptime)} icon={<Clock size={16} />} trend={status?.pending_restart ? '配置等待重启' : '配置已生效'} trendType={status?.pending_restart ? 'down' : 'up'} color="emerald" />
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="服务端端口" value={status?.ports?.game || 8211} icon={<Bell size={16} />} trend={`REST ${status?.ports?.rest || 8212}`} trendType="neutral" color="sky" />
-        <StatCard title="帕鲁总数" value={metrics?.total_pals || 0} icon={<Sword size={16} />} trend="未启动时显示 0" trendType="neutral" color="blue" />
+        <StatCard title="服务端口" value={status?.ports?.game || 8211} icon={<Bell size={16} />} trend={`REST ${status?.ports?.rest || 8212}`} trendType="neutral" color="sky" />
+        <StatCard title="帕鲁总数" value={metrics?.total_pals || 0} icon={<Sword size={16} />} trend="后端未提供时显示 0" trendType="neutral" color="blue" />
         <StatCard title="活跃基地" value={metrics?.active_bases || 0} icon={<Home size={16} />} trend="来自 metrics" trendType="neutral" color="amber" />
         <StatCard title="Server FPS" value={metrics?.server_fps || 0} icon={<Activity size={16} />} trend={`${metrics?.frame_time || 0} ms/frame`} trendType="info" color="emerald" />
       </div>
@@ -146,32 +162,40 @@ export const Dashboard: React.FC = () => {
         <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] xl:col-span-2">
           <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-[14px] font-bold text-slate-800">在线人数与系统负载</h3>
-            <span className="text-[11px] font-semibold text-slate-400">5 秒自动刷新</span>
+            <span className="text-[11px] font-semibold text-slate-400">来自监控历史入库</span>
           </div>
           <div className="grid h-[420px] grid-cols-1 gap-6 lg:h-64 lg:grid-cols-2">
             <div className="flex min-h-0 flex-col gap-2">
               <span className="text-[11px] font-bold text-slate-400">在线趋势</span>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-                  <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} />
-                  <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-                  <Line type="monotone" dataKey="players" name="玩家数" stroke="#0ea5e9" strokeWidth={2.5} dot={{ r: 3, fill: '#0ea5e9' }} />
-                </LineChart>
-              </ResponsiveContainer>
+              {chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
+                    <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} allowDecimals={false} />
+                    <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
+                    <Line type="monotone" dataKey="players" name="玩家数" stroke="#0ea5e9" strokeWidth={2.5} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <EmptyChart />
+              )}
             </div>
             <div className="flex min-h-0 flex-col gap-2">
               <span className="text-[11px] font-bold text-slate-400">CPU 波动</span>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-                  <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} />
-                  <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-                  <Area type="monotone" dataKey="cpu" name="CPU (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} />
-                </AreaChart>
-              </ResponsiveContainer>
+              {chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
+                    <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} />
+                    <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
+                    <Area type="monotone" dataKey="cpu" name="CPU (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <EmptyChart />
+              )}
             </div>
           </div>
         </section>
@@ -180,7 +204,7 @@ export const Dashboard: React.FC = () => {
           <div>
             <h3 className="text-[14px] font-bold text-slate-800">进程控制</h3>
             <p className="mt-3 text-xs font-medium leading-relaxed text-slate-400">
-              控制后端托管的 Palworld 服务端进程。配置和 Mod 变更后，请重启服务器使其生效。
+              普通停止由面板托管进程，强制停止会调用 Palworld 官方 REST `/stop`。
             </p>
             <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 p-4">
               <div className="flex items-center justify-between gap-3">
@@ -192,7 +216,7 @@ export const Dashboard: React.FC = () => {
               </p>
             </div>
           </div>
-          <div className="mt-5 grid grid-cols-2 gap-3">
+          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <button
               type="button"
               onClick={() => control('start')}
@@ -210,6 +234,15 @@ export const Dashboard: React.FC = () => {
             >
               <Square size={14} />
               停止
+            </button>
+            <button
+              type="button"
+              onClick={() => control('forceStop')}
+              disabled={status?.status === 'stopped' || status?.status === 'stopping'}
+              className="flex items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 py-3 text-xs font-semibold text-amber-700 transition-all hover:bg-amber-100 disabled:opacity-40"
+            >
+              <Zap size={14} />
+              强停
             </button>
           </div>
         </section>
@@ -237,7 +270,7 @@ export const Dashboard: React.FC = () => {
             type="search"
             value={logSearch}
             onChange={(event) => setLogSearch(event.target.value)}
-            placeholder="搜索日志关键词"
+            placeholder="搜索日志关键字"
             className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
           />
           <select
@@ -252,9 +285,15 @@ export const Dashboard: React.FC = () => {
           </select>
         </div>
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] leading-relaxed text-emerald-300">
-          {logs || '暂无日志'}
+          {logs || (notice ? '后端不可用或接口未实现' : '暂无日志')}
         </pre>
       </section>
     </div>
   );
 };
+
+const EmptyChart = () => (
+  <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-xs font-semibold text-slate-400">
+    暂无历史采样
+  </div>
+);

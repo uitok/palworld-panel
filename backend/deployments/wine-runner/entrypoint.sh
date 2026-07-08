@@ -40,6 +40,15 @@ download_workshop() {
   cp -a "$src"/. "$dst"/
 }
 
+app_info() {
+  /opt/steamcmd/steamcmd.sh \
+    +@sSteamCmdForcePlatformType windows \
+    "${steam_login_args[@]}" \
+    +app_info_update 1 \
+    +app_info_print 2394010 \
+    +quit
+}
+
 start_server() {
   mkdir -p /data/server /data/wineprefix
   cd /data/server
@@ -56,6 +65,9 @@ case "$cmd" in
     ;;
   workshop)
     download_workshop "$@"
+    ;;
+  appinfo)
+    app_info
     ;;
   start)
     start_server "$@"

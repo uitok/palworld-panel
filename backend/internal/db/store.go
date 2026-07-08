@@ -56,6 +56,51 @@ type PlayerAccessEntry struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+type MonitorSample struct {
+	ID                    string  `json:"id"`
+	CreatedAt             string  `json:"created_at"`
+	CPUAvailable          bool    `json:"cpu_available"`
+	CPUPercent            float64 `json:"cpu_percent"`
+	MemoryAvailable       bool    `json:"memory_available"`
+	MemoryUsageBytes      int64   `json:"memory_usage_bytes"`
+	MemoryLimitBytes      int64   `json:"memory_limit_bytes"`
+	DiskAvailable         bool    `json:"disk_available"`
+	DiskFreeBytes         int64   `json:"disk_free_bytes"`
+	DiskTotalBytes        int64   `json:"disk_total_bytes"`
+	CurrentPlayers        int     `json:"current_players"`
+	MaxPlayers            int     `json:"max_players"`
+	RESTHealthy           bool    `json:"rest_healthy"`
+	RCONHealthy           bool    `json:"rcon_healthy"`
+	GamePortHealthy       bool    `json:"game_port_healthy"`
+	QueryPortHealthy      bool    `json:"query_port_healthy"`
+	UnavailableReason     string  `json:"unavailable_reason,omitempty"`
+}
+
+type Schedule struct {
+	ID              string `json:"id"`
+	Type            string `json:"type"`
+	Enabled         bool   `json:"enabled"`
+	IntervalMinutes int    `json:"interval_minutes,omitempty"`
+	TimeOfDay       string `json:"time_of_day,omitempty"`
+	WaitTime        int    `json:"waittime,omitempty"`
+	Message         string `json:"message,omitempty"`
+	LastRunAt       string `json:"last_run_at,omitempty"`
+	NextRunAt       string `json:"next_run_at,omitempty"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+type Alert struct {
+	ID        string `json:"id"`
+	Severity  string `json:"severity"`
+	Title     string `json:"title"`
+	Message   string `json:"message"`
+	Source    string `json:"source"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+	AckAt     string `json:"ack_at,omitempty"`
+}
+
 func Open(path string) (*Store, error) {
 	d, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -121,6 +166,48 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (list_type, steam_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS monitor_samples (
+			id TEXT PRIMARY KEY,
+			created_at TEXT NOT NULL,
+			cpu_available INTEGER NOT NULL DEFAULT 0,
+			cpu_percent REAL NOT NULL DEFAULT 0,
+			memory_available INTEGER NOT NULL DEFAULT 0,
+			memory_usage_bytes INTEGER NOT NULL DEFAULT 0,
+			memory_limit_bytes INTEGER NOT NULL DEFAULT 0,
+			disk_available INTEGER NOT NULL DEFAULT 0,
+			disk_free_bytes INTEGER NOT NULL DEFAULT 0,
+			disk_total_bytes INTEGER NOT NULL DEFAULT 0,
+			current_players INTEGER NOT NULL DEFAULT 0,
+			max_players INTEGER NOT NULL DEFAULT 0,
+			rest_healthy INTEGER NOT NULL DEFAULT 0,
+			rcon_healthy INTEGER NOT NULL DEFAULT 0,
+			game_port_healthy INTEGER NOT NULL DEFAULT 0,
+			query_port_healthy INTEGER NOT NULL DEFAULT 0,
+			unavailable_reason TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS schedules (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			interval_minutes INTEGER NOT NULL DEFAULT 0,
+			time_of_day TEXT NOT NULL DEFAULT '',
+			waittime INTEGER NOT NULL DEFAULT 30,
+			message TEXT NOT NULL DEFAULT '',
+			last_run_at TEXT NOT NULL DEFAULT '',
+			next_run_at TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS alerts (
+			id TEXT PRIMARY KEY,
+			severity TEXT NOT NULL,
+			title TEXT NOT NULL,
+			message TEXT NOT NULL,
+			source TEXT NOT NULL,
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			ack_at TEXT NOT NULL DEFAULT ''
 		)`,
 	}
 	for _, stmt := range stmts {
@@ -237,6 +324,182 @@ func (s *Store) ReplacePlayerAccess(ctx context.Context, listType string, items 
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Store) InsertMonitorSample(ctx context.Context, sample MonitorSample) error {
+	if sample.ID == "" {
+		return errors.New("monitor sample id is required")
+	}
+	if sample.CreatedAt == "" {
+		sample.CreatedAt = now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO monitor_samples (
+		id,created_at,cpu_available,cpu_percent,memory_available,memory_usage_bytes,memory_limit_bytes,
+		disk_available,disk_free_bytes,disk_total_bytes,current_players,max_players,rest_healthy,rcon_healthy,
+		game_port_healthy,query_port_healthy,unavailable_reason
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		sample.ID, sample.CreatedAt, boolInt(sample.CPUAvailable), sample.CPUPercent,
+		boolInt(sample.MemoryAvailable), sample.MemoryUsageBytes, sample.MemoryLimitBytes,
+		boolInt(sample.DiskAvailable), sample.DiskFreeBytes, sample.DiskTotalBytes,
+		sample.CurrentPlayers, sample.MaxPlayers, boolInt(sample.RESTHealthy), boolInt(sample.RCONHealthy),
+		boolInt(sample.GamePortHealthy), boolInt(sample.QueryPortHealthy), sample.UnavailableReason)
+	return err
+}
+
+func (s *Store) ListMonitorSamples(ctx context.Context, limit int) ([]MonitorSample, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 120
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,created_at,cpu_available,cpu_percent,memory_available,memory_usage_bytes,memory_limit_bytes,
+		disk_available,disk_free_bytes,disk_total_bytes,current_players,max_players,rest_healthy,rcon_healthy,
+		game_port_healthy,query_port_healthy,unavailable_reason
+		FROM monitor_samples ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MonitorSample
+	for rows.Next() {
+		var item MonitorSample
+		var cpuAvailable, memoryAvailable, diskAvailable, restHealthy, rconHealthy, gameHealthy, queryHealthy int
+		if err := rows.Scan(&item.ID, &item.CreatedAt, &cpuAvailable, &item.CPUPercent, &memoryAvailable,
+			&item.MemoryUsageBytes, &item.MemoryLimitBytes, &diskAvailable, &item.DiskFreeBytes,
+			&item.DiskTotalBytes, &item.CurrentPlayers, &item.MaxPlayers, &restHealthy, &rconHealthy,
+			&gameHealthy, &queryHealthy, &item.UnavailableReason); err != nil {
+			return nil, err
+		}
+		item.CPUAvailable = cpuAvailable == 1
+		item.MemoryAvailable = memoryAvailable == 1
+		item.DiskAvailable = diskAvailable == 1
+		item.RESTHealthy = restHealthy == 1
+		item.RCONHealthy = rconHealthy == 1
+		item.GamePortHealthy = gameHealthy == 1
+		item.QueryPortHealthy = queryHealthy == 1
+		out = append(out, item)
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpsertSchedule(ctx context.Context, item Schedule) error {
+	if item.ID == "" {
+		return errors.New("schedule id is required")
+	}
+	if item.Type == "" {
+		return errors.New("schedule type is required")
+	}
+	now := now()
+	if item.CreatedAt == "" {
+		item.CreatedAt = now
+	}
+	item.UpdatedAt = now
+	_, err := s.db.ExecContext(ctx, `INSERT INTO schedules (id,type,enabled,interval_minutes,time_of_day,waittime,message,last_run_at,next_run_at,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET type=excluded.type, enabled=excluded.enabled, interval_minutes=excluded.interval_minutes,
+		time_of_day=excluded.time_of_day, waittime=excluded.waittime, message=excluded.message, last_run_at=excluded.last_run_at,
+		next_run_at=excluded.next_run_at, updated_at=excluded.updated_at`,
+		item.ID, item.Type, boolInt(item.Enabled), item.IntervalMinutes, item.TimeOfDay, item.WaitTime,
+		item.Message, item.LastRunAt, item.NextRunAt, item.CreatedAt, item.UpdatedAt)
+	return err
+}
+
+func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,type,enabled,interval_minutes,time_of_day,waittime,message,last_run_at,next_run_at,created_at,updated_at
+		FROM schedules ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Schedule
+	for rows.Next() {
+		var item Schedule
+		var enabled int
+		if err := rows.Scan(&item.ID, &item.Type, &enabled, &item.IntervalMinutes, &item.TimeOfDay, &item.WaitTime,
+			&item.Message, &item.LastRunAt, &item.NextRunAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Enabled = enabled == 1
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetSchedule(ctx context.Context, id string) (Schedule, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,type,enabled,interval_minutes,time_of_day,waittime,message,last_run_at,next_run_at,created_at,updated_at
+		FROM schedules WHERE id=?`, id)
+	var item Schedule
+	var enabled int
+	err := row.Scan(&item.ID, &item.Type, &enabled, &item.IntervalMinutes, &item.TimeOfDay, &item.WaitTime,
+		&item.Message, &item.LastRunAt, &item.NextRunAt, &item.CreatedAt, &item.UpdatedAt)
+	item.Enabled = enabled == 1
+	return item, err
+}
+
+func (s *Store) DeleteSchedule(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM schedules WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) CreateAlert(ctx context.Context, item Alert) error {
+	if item.ID == "" {
+		return errors.New("alert id is required")
+	}
+	if item.CreatedAt == "" {
+		item.CreatedAt = now()
+	}
+	if item.Status == "" {
+		item.Status = "open"
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO alerts (id,severity,title,message,source,status,created_at,ack_at) VALUES (?,?,?,?,?,?,?,?)`,
+		item.ID, item.Severity, item.Title, item.Message, item.Source, item.Status, item.CreatedAt, item.AckAt)
+	return err
+}
+
+func (s *Store) ListAlerts(ctx context.Context, limit int) ([]Alert, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,severity,title,message,source,status,created_at,ack_at FROM alerts ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Alert
+	for rows.Next() {
+		var item Alert
+		if err := rows.Scan(&item.ID, &item.Severity, &item.Title, &item.Message, &item.Source, &item.Status, &item.CreatedAt, &item.AckAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AckAlert(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE alerts SET status='acked', ack_at=? WHERE id=?`, now(), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) CreateJob(ctx context.Context, id, typ, message string) (Job, error) {

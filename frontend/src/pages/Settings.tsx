@@ -42,25 +42,33 @@ export const Settings: React.FC = () => {
 
   const load = async () => {
     setLoading(true);
-    const [schema, status] = await Promise.all([settingsApi.getSchema(), serverApi.getStatus()]);
-    const config = status.config_exists
-      ? await settingsApi.getSettings()
-      : { settings: {}, path: status.settings_path || '', pending_restart: status.pending_restart, issues: [] };
-    const nextDraft: PalworldSettings = {};
-    schema.fields.forEach((field) => {
-      nextDraft[field.key] = coerceInitialValue(field, config.settings[field.key]);
-    });
-    Object.entries(config.settings).forEach(([key, value]) => {
-      if (!(key in nextDraft)) nextDraft[key] = value;
-    });
-    setFields(schema.fields);
-    setVersion(schema.version);
-    setDraft(nextDraft);
-    setPath(config.path);
-    setIssues(config.issues || []);
-    setPendingRestart(config.pending_restart);
-    setActiveGroup(schema.fields[0]?.group || 'server_management');
-    setLoading(false);
+    try {
+      const [schema, status] = await Promise.all([settingsApi.getSchema(), serverApi.getStatus()]);
+      const config = status.config_exists
+        ? await settingsApi.getSettings()
+        : { settings: {}, path: status.settings_path || '', pending_restart: status.pending_restart, issues: [] };
+      const nextDraft: PalworldSettings = {};
+      schema.fields.forEach((field) => {
+        nextDraft[field.key] = coerceInitialValue(field, config.settings[field.key]);
+      });
+      Object.entries(config.settings).forEach(([key, value]) => {
+        if (!(key in nextDraft)) nextDraft[key] = value;
+      });
+      setFields(schema.fields);
+      setVersion(schema.version);
+      setDraft(nextDraft);
+      setPath(config.path);
+      setIssues(config.issues || []);
+      setPendingRestart(config.pending_restart);
+      setActiveGroup(schema.fields[0]?.group || 'server_management');
+    } catch (error) {
+      setFields([]);
+      setDraft({});
+      setIssues([]);
+      setMessage(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {

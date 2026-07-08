@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Hammer, HeartPulse, RefreshCw, Trash2 } from 'lucide-react';
+import { getErrorMessage } from '../api/client';
 import { palsApi } from '../api/pals';
 import { useServerStore } from '../store/useServerStore';
 import type { Pal } from '../types';
@@ -27,12 +28,20 @@ export const Pals: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [activeFilterTab, setActiveFilterTab] = useState('all');
   const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchPals = async () => {
     setLoading(true);
-    const data = await palsApi.getPals();
-    setPals(Array.isArray(data) ? data : []);
-    setLoading(false);
+    try {
+      const data = await palsApi.getPals();
+      setPals(Array.isArray(data) ? data : []);
+      setError(null);
+    } catch (loadError) {
+      setPals([]);
+      setError(getErrorMessage(loadError));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -75,6 +84,12 @@ export const Pals: React.FC = () => {
           {notice}
         </div>
       )}
+      {error && (
+        <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-3 text-xs font-semibold text-rose-700">
+          <AlertCircle className="mr-2 inline" size={14} />
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Summary label="全部帕鲁" value={pals.length} tone="emerald" />
@@ -109,7 +124,7 @@ export const Pals: React.FC = () => {
             ]}
             activeTab={activeFilterTab}
             onTabChange={setActiveFilterTab}
-            emptyText="暂无帕鲁"
+            emptyText={error ? '后端不可用或接口未实现' : '暂无帕鲁'}
             renderCard={(pal) => (
               <PalCard
                 key={pal.id}

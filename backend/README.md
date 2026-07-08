@@ -43,16 +43,20 @@ Build the frontend with `npm run build`, then set `PALPANEL_FRONTEND_DIST` to th
 ## Runtime Modes
 
 - `windows_steamcmd`: recommended for production Windows hosts. The backend downloads SteamCMD into `data/tools/steamcmd` when needed and installs the Windows dedicated server with `steamcmd +login anonymous +app_update 2394010 validate +quit`.
-- `wine_docker`: keeps the existing Docker + Wine flow for Windows edition server mods and containerized operation. Official Palworld docs warn against Docker Desktop for production save-data IO, so update operations create backups first.
+- `wine_docker`: keeps the existing Docker + Wine flow for Windows edition server mods and containerized operation. Official Palworld docs warn against Docker Desktop for production save-data IO, so update operations create backups first. Version checks use the existing Wine runner image; build or install once before checking remote version in this mode.
 
 Startup arguments are managed separately from `PalWorldSettings.ini` through `GET/PUT /api/server/startup`.
 
+## Version Checks
+
+Palworld server version is represented as the Steam Build ID for AppID `2394010`, not a semantic game version. Local Build ID comes from `data/server/steamapps/appmanifest_2394010.acf`; latest Build ID comes from SteamCMD `app_info_print 2394010`.
+
 ## Main Endpoints
 
-- Lifecycle: `POST /api/server/install`, `POST /api/server/update`, `POST /api/server/start`, `POST /api/server/stop`, `POST /api/server/restart`, `POST /api/server/bootstrap`
+- Lifecycle: `POST /api/server/install`, `POST /api/server/update`, `POST /api/server/update-if-needed`, `POST /api/server/start`, `POST /api/server/stop`, `POST /api/server/restart`, `POST /api/server/bootstrap`
 - Safe restart: `POST /api/server/safe-restart`
 - Setup: `GET /api/server/prerequisites`, `GET/PUT /api/server/runtime`, `GET/PUT /api/server/startup`, `POST /api/server/initialize-config`
-- Status/logs/jobs: `GET /api/server/status`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
+- Status/logs/jobs: `GET /api/server/status`, `GET /api/server/version`, `POST /api/server/version/check`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
 - Backups: `POST /api/server/backup`, `GET /api/backups`, `POST /api/backups/{name}/restore`
 - Audit: `GET /api/audit-logs`
 - Player access: `GET/POST/DELETE /api/players/bans`, `GET/PUT /api/players/whitelist`, `POST /api/players/{id}/kick`

@@ -38,6 +38,8 @@ go run ./cmd/palpanel
 ## 运维功能
 
 - 安全重启会创建后端任务：保存/通知、等待倒计时、停止、启动。
+- 版本检查使用 Steam Build ID：读取本地 `appmanifest_2394010.acf`，再通过 SteamCMD 查询 public 分支最新 Build；Build ID 不是游戏语义版本号。
+- “检查后更新”会先比对 Build ID，只有发现新版本才执行备份、停服、更新和必要的重启。
 - 恢复备份前会先停止服务器并创建 `pre-restore` 备份。
 - 写操作会记录审计日志，可在 `/audit` 查看。
 - 玩家踢出等依赖运行时命令能力的功能，在未接入 PalDefender/RCON 后端时会返回明确 `unsupported`。

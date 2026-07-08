@@ -11,6 +11,18 @@ vi.mock('../api/tasks', () => ({
   },
 }));
 
+vi.mock('../api/schedules', () => ({
+  schedulesApi: {
+    list: vi.fn().mockResolvedValue([]),
+    alerts: vi.fn().mockResolvedValue([]),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    run: vi.fn(),
+    ackAlert: vi.fn(),
+  },
+}));
+
 describe('TaskQueue', () => {
   it('renders the empty state when the jobs endpoint returns null', async () => {
     render(
