@@ -8,34 +8,49 @@ import (
 	"strings"
 )
 
+const DefaultDockerRunnerBaseImage = "scottyhardy/docker-wine:latest@sha256:477aae36af41923cfb5eefb23923b035f8010caa49eaded952316f937dd8a49b"
+
+var DefaultDockerRunnerBaseImageMirrorPrefixes = []string{
+	"docker.m.daocloud.io",
+	"docker.1ms.run",
+	"registry.cyou",
+	"dockerproxy.net",
+	"dockerproxy.link",
+	"docker.jiaxin.site",
+	"docker.xuanyuan.me",
+	"free.hubfast.cn",
+}
+
 type Config struct {
-	ListenAddr          string
-	DataDir             string
-	ServerDir           string
-	WinePrefixDir       string
-	ToolsDir            string
-	SteamCMDDir         string
-	UploadsDir          string
-	BackupsDir          string
-	LogsDir             string
-	DBPath              string
-	PanelToken          string
-	OperatorToken       string
-	ViewerToken         string
-	RequireAuth         bool
-	CORSOrigins         []string
-	FrontendDist        string
-	MaxUploadBytes      int64
-	DockerBinary        string
-	DockerImage         string
-	DockerContainer     string
-	GamePort            int
-	QueryPort           int
-	RESTPort            int
-	PalworldRESTBaseURL string
-	PalworldRESTUser    string
-	PalworldRESTPass    string
-	RunnerDir           string
+	ListenAddr                   string
+	DataDir                      string
+	ServerDir                    string
+	WinePrefixDir                string
+	ToolsDir                     string
+	SteamCMDDir                  string
+	UploadsDir                   string
+	BackupsDir                   string
+	LogsDir                      string
+	DBPath                       string
+	PanelToken                   string
+	OperatorToken                string
+	ViewerToken                  string
+	RequireAuth                  bool
+	CORSOrigins                  []string
+	FrontendDist                 string
+	MaxUploadBytes               int64
+	DockerBinary                 string
+	DockerImage                  string
+	DockerContainer              string
+	DockerRunnerBaseImage        string
+	DockerRunnerBaseImageMirrors []string
+	GamePort                     int
+	QueryPort                    int
+	RESTPort                     int
+	PalworldRESTBaseURL          string
+	PalworldRESTUser             string
+	PalworldRESTPass             string
+	RunnerDir                    string
 }
 
 func Load() (Config, error) {
@@ -62,33 +77,35 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		ListenAddr:          env("PALPANEL_LISTEN_ADDR", ":8080"),
-		DataDir:             dataDir,
-		ServerDir:           env("PALPANEL_SERVER_DIR", filepath.Join(dataDir, "server")),
-		WinePrefixDir:       env("PALPANEL_WINE_PREFIX_DIR", filepath.Join(dataDir, "wineprefix")),
-		ToolsDir:            env("PALPANEL_TOOLS_DIR", filepath.Join(dataDir, "tools")),
-		SteamCMDDir:         env("PALPANEL_STEAMCMD_DIR", filepath.Join(dataDir, "tools", "steamcmd")),
-		UploadsDir:          env("PALPANEL_UPLOADS_DIR", filepath.Join(dataDir, "uploads")),
-		BackupsDir:          env("PALPANEL_BACKUPS_DIR", filepath.Join(dataDir, "backups")),
-		LogsDir:             env("PALPANEL_LOGS_DIR", filepath.Join(dataDir, "logs")),
-		DBPath:              env("PALPANEL_DB_PATH", filepath.Join(dataDir, "palpanel.db")),
-		PanelToken:          env("PANEL_TOKEN", ""),
-		OperatorToken:       env("PANEL_OPERATOR_TOKEN", ""),
-		ViewerToken:         env("PANEL_VIEWER_TOKEN", ""),
-		RequireAuth:         envBool("PALPANEL_REQUIRE_AUTH", true),
-		CORSOrigins:         envList("PALPANEL_CORS_ORIGINS", []string{"http://127.0.0.1:3000", "http://localhost:3000"}),
-		FrontendDist:        env("PALPANEL_FRONTEND_DIST", filepath.Join(root, "frontend", "dist")),
-		MaxUploadBytes:      int64(envInt("PALPANEL_MAX_UPLOAD_MB", 256)) * 1024 * 1024,
-		DockerBinary:        env("PALPANEL_DOCKER_BIN", "docker"),
-		DockerImage:         env("PALPANEL_DOCKER_IMAGE", "palworld-wine-runner:local"),
-		DockerContainer:     env("PALPANEL_DOCKER_CONTAINER", "palworld-wine-server"),
-		GamePort:            envInt("PALPANEL_GAME_PORT", 8211),
-		QueryPort:           envInt("PALPANEL_QUERY_PORT", 27015),
-		RESTPort:            envInt("PALPANEL_REST_PORT", 8212),
-		PalworldRESTBaseURL: env("PALWORLD_REST_BASE_URL", "http://127.0.0.1:8212/v1/api"),
-		PalworldRESTUser:    env("PALWORLD_REST_USER", "admin"),
-		PalworldRESTPass:    env("PALWORLD_ADMIN_PASSWORD", ""),
-		RunnerDir:           env("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner")),
+		ListenAddr:                   env("PALPANEL_LISTEN_ADDR", ":8080"),
+		DataDir:                      dataDir,
+		ServerDir:                    env("PALPANEL_SERVER_DIR", filepath.Join(dataDir, "server")),
+		WinePrefixDir:                env("PALPANEL_WINE_PREFIX_DIR", filepath.Join(dataDir, "wineprefix")),
+		ToolsDir:                     env("PALPANEL_TOOLS_DIR", filepath.Join(dataDir, "tools")),
+		SteamCMDDir:                  env("PALPANEL_STEAMCMD_DIR", filepath.Join(dataDir, "tools", "steamcmd")),
+		UploadsDir:                   env("PALPANEL_UPLOADS_DIR", filepath.Join(dataDir, "uploads")),
+		BackupsDir:                   env("PALPANEL_BACKUPS_DIR", filepath.Join(dataDir, "backups")),
+		LogsDir:                      env("PALPANEL_LOGS_DIR", filepath.Join(dataDir, "logs")),
+		DBPath:                       env("PALPANEL_DB_PATH", filepath.Join(dataDir, "palpanel.db")),
+		PanelToken:                   env("PANEL_TOKEN", ""),
+		OperatorToken:                env("PANEL_OPERATOR_TOKEN", ""),
+		ViewerToken:                  env("PANEL_VIEWER_TOKEN", ""),
+		RequireAuth:                  envBool("PALPANEL_REQUIRE_AUTH", true),
+		CORSOrigins:                  envList("PALPANEL_CORS_ORIGINS", []string{"http://127.0.0.1:3000", "http://localhost:3000"}),
+		FrontendDist:                 env("PALPANEL_FRONTEND_DIST", filepath.Join(root, "frontend", "dist")),
+		MaxUploadBytes:               int64(envInt("PALPANEL_MAX_UPLOAD_MB", 256)) * 1024 * 1024,
+		DockerBinary:                 env("PALPANEL_DOCKER_BIN", "docker"),
+		DockerImage:                  env("PALPANEL_DOCKER_IMAGE", "palworld-wine-runner:local"),
+		DockerContainer:              env("PALPANEL_DOCKER_CONTAINER", "palworld-wine-server"),
+		DockerRunnerBaseImage:        env("PALPANEL_DOCKER_RUNNER_BASE_IMAGE", DefaultDockerRunnerBaseImage),
+		DockerRunnerBaseImageMirrors: envList("PALPANEL_DOCKER_RUNNER_BASE_IMAGE_MIRRORS", DefaultDockerRunnerBaseImageMirrorPrefixes),
+		GamePort:                     envInt("PALPANEL_GAME_PORT", 8211),
+		QueryPort:                    envInt("PALPANEL_QUERY_PORT", 27015),
+		RESTPort:                     envInt("PALPANEL_REST_PORT", 8212),
+		PalworldRESTBaseURL:          env("PALWORLD_REST_BASE_URL", "http://127.0.0.1:8212/v1/api"),
+		PalworldRESTUser:             env("PALWORLD_REST_USER", "admin"),
+		PalworldRESTPass:             env("PALWORLD_ADMIN_PASSWORD", ""),
+		RunnerDir:                    env("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner")),
 	}
 	if cfg.RequireAuth && isWeakToken(cfg.PanelToken) {
 		return Config{}, fmt.Errorf("PANEL_TOKEN must be set to a strong non-default value when PALPANEL_REQUIRE_AUTH is enabled")

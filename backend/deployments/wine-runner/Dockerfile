@@ -1,4 +1,5 @@
-FROM scottyhardy/docker-wine:latest@sha256:477aae36af41923cfb5eefb23923b035f8010caa49eaded952316f937dd8a49b
+ARG PALPANEL_WINE_BASE_IMAGE=scottyhardy/docker-wine:latest@sha256:477aae36af41923cfb5eefb23923b035f8010caa49eaded952316f937dd8a49b
+FROM ${PALPANEL_WINE_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     WINEDEBUG=-all \

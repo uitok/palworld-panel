@@ -30,6 +30,8 @@ func TestNewContractRoutes(t *testing.T) {
 		LogsDir:         filepath.Join(root, "logs"),
 		DBPath:          filepath.Join(root, "test.db"),
 		PanelToken:      "secret",
+		ViewerToken:     "viewer",
+		RequireAuth:     true,
 		DockerBinary:    "docker",
 		DockerImage:     "test-image",
 		DockerContainer: "test-container",
@@ -86,6 +88,11 @@ func TestNewContractRoutes(t *testing.T) {
 		"GET /api/server/version",
 		"POST /api/server/version/check",
 		"POST /api/server/update-if-needed",
+		"GET /api/server/host",
+		"GET /api/server/docker/plan",
+		"POST /api/server/docker/install",
+		"GET /api/server/docker/mirrors/plan",
+		"POST /api/server/docker/mirrors/configure",
 		"GET /api/monitor/snapshot",
 		"GET /api/monitor/history",
 		"GET /api/schedules",
@@ -103,5 +110,21 @@ func TestNewContractRoutes(t *testing.T) {
 		if !routes[want] {
 			t.Fatalf("missing route %s", want)
 		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/server/docker/install", nil)
+	req.Header.Set("Authorization", "Bearer viewer")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer docker install expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/server/docker/mirrors/configure", nil)
+	req.Header.Set("Authorization", "Bearer viewer")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer docker mirror configure expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

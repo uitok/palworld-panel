@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -61,8 +63,13 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 
 		api.GET("/server/status", s.serverStatus)
 		api.GET("/server/prerequisites", s.serverPrerequisites)
+		api.GET("/server/host", s.serverHost)
 		api.GET("/server/runtime", s.getRuntime)
 		api.PUT("/server/runtime", Require(PermConfigWrite), s.putRuntime)
+		api.GET("/server/docker/plan", s.serverDockerPlan)
+		api.POST("/server/docker/install", Require(PermServerControl), s.serverDockerInstall)
+		api.GET("/server/docker/mirrors/plan", s.serverDockerMirrorsPlan)
+		api.POST("/server/docker/mirrors/configure", Require(PermServerControl), s.serverDockerMirrorsConfigure)
 		api.POST("/server/bootstrap", Require(PermServerControl), s.serverBootstrap)
 		api.GET("/server/logs", s.serverLogs)
 		api.POST("/server/install", Require(PermServerControl), s.serverInstall)
@@ -113,7 +120,7 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.GET("/server/info", s.palGet("info"))
 		api.GET("/server/players", s.palGet("players"))
 		api.GET("/server/settings", s.palGet("settings"))
-		api.GET("/server/metrics", s.palGet("metrics"))
+		api.GET("/server/metrics", s.serverMetrics)
 		api.POST("/server/announce", Require(PermServerControl), s.palPost("announce"))
 		api.POST("/server/save", Require(PermServerControl), s.palPost("save"))
 		api.POST("/server/shutdown", Require(PermServerControl), s.palPost("shutdown"))
@@ -290,6 +297,10 @@ func (s Server) serverPrerequisites(c *gin.Context) {
 	ok(c, checks)
 }
 
+func (s Server) serverHost(c *gin.Context) {
+	ok(c, s.server.HostCapabilities(c.Request.Context()))
+}
+
 func (s Server) getRuntime(c *gin.Context) {
 	mode, err := s.server.RuntimeMode(c.Request.Context())
 	if err != nil {
@@ -312,6 +323,62 @@ func (s Server) putRuntime(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"mode": req.Mode})
+}
+
+func (s Server) serverDockerPlan(c *gin.Context) {
+	plan, err := s.server.DockerInstallPlan(c.Request.Context(), c.DefaultQuery("source", "auto"))
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "docker_plan_failed", err.Error())
+		return
+	}
+	ok(c, plan)
+}
+
+func (s Server) serverDockerInstall(c *gin.Context) {
+	var req server.DockerInstallRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	j, err := s.server.InstallDocker(c.Request.Context(), req)
+	if err != nil {
+		var installErr *server.DockerInstallError
+		if errors.As(err, &installErr) {
+			fail(c, installErr.Status, installErr.Code, installErr.Msg)
+			return
+		}
+		fail(c, http.StatusInternalServerError, "docker_install_failed", err.Error())
+		return
+	}
+	accepted(c, j)
+}
+
+func (s Server) serverDockerMirrorsPlan(c *gin.Context) {
+	plan, err := s.server.DockerMirrorPlan(c.Request.Context(), c.DefaultQuery("mirror", "auto"))
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "docker_mirror_plan_failed", err.Error())
+		return
+	}
+	ok(c, plan)
+}
+
+func (s Server) serverDockerMirrorsConfigure(c *gin.Context) {
+	var req server.DockerMirrorRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	j, err := s.server.ConfigureDockerMirrors(c.Request.Context(), req)
+	if err != nil {
+		var installErr *server.DockerInstallError
+		if errors.As(err, &installErr) {
+			fail(c, installErr.Status, installErr.Code, installErr.Msg)
+			return
+		}
+		fail(c, http.StatusInternalServerError, "docker_mirror_configure_failed", err.Error())
+		return
+	}
+	accepted(c, j)
 }
 
 func (s Server) serverBootstrap(c *gin.Context) {
@@ -355,6 +422,37 @@ func (s Server) monitorHistory(c *gin.Context) {
 		return
 	}
 	ok(c, history)
+}
+
+func (s Server) serverMetrics(c *gin.Context) {
+	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodGet, "metrics", nil)
+	if err == nil {
+		ok(c, normalizeRESTMetrics(resp.Body))
+		return
+	}
+
+	metrics := gin.H{
+		"server_fps":      0,
+		"current_players": 0,
+		"max_players":     32,
+		"uptime":          0,
+		"total_pals":      0,
+		"active_bases":    0,
+		"frame_time":      0,
+		"source":          "monitor_sample",
+		"rest_healthy":    false,
+		"error":           err.Error(),
+	}
+	if samples, sampleErr := s.store.ListMonitorSamples(c.Request.Context(), 1); sampleErr == nil && len(samples) > 0 {
+		sample := samples[0]
+		metrics["current_players"] = sample.CurrentPlayers
+		if sample.MaxPlayers > 0 {
+			metrics["max_players"] = sample.MaxPlayers
+		}
+		metrics["rest_healthy"] = sample.RESTHealthy
+		metrics["unavailable_reason"] = sample.UnavailableReason
+	}
+	ok(c, metrics)
 }
 
 func (s Server) serverInstall(c *gin.Context) {
@@ -436,10 +534,11 @@ func (s Server) serverSafeRestart(c *gin.Context) {
 		return
 	}
 	j, err := s.server.SafeRestart(c.Request.Context(), req.WaitTime, req.Message, func(ctx context.Context, wait int, message string) error {
-		if _, err := s.palrest.Do(ctx, http.MethodPost, "save", nil); err != nil {
+		client := s.palworldREST()
+		if _, err := client.Do(ctx, http.MethodPost, "save", nil); err != nil {
 			return err
 		}
-		_, err := s.palrest.Do(ctx, http.MethodPost, "shutdown", gin.H{"waittime": wait, "message": message})
+		_, err := client.Do(ctx, http.MethodPost, "shutdown", gin.H{"waittime": wait, "message": message})
 		return err
 	})
 	if err != nil {
@@ -450,7 +549,7 @@ func (s Server) serverSafeRestart(c *gin.Context) {
 }
 
 func (s Server) serverForceStop(c *gin.Context) {
-	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "stop", nil)
+	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodPost, "stop", nil)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "palworld_force_stop_failed", err.Error())
 		return
@@ -942,7 +1041,7 @@ func (s Server) palDefenderReloadConfig(c *gin.Context) {
 
 func (s Server) palGet(path string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		resp, err := s.palrest.Do(c.Request.Context(), http.MethodGet, path, nil)
+		resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodGet, path, nil)
 		if err != nil {
 			fail(c, http.StatusBadGateway, "palworld_api_failed", err.Error())
 			return
@@ -960,7 +1059,7 @@ func (s Server) palPost(path string) gin.HandlerFunc {
 				return
 			}
 		}
-		resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, path, payload)
+		resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodPost, path, payload)
 		if err != nil {
 			fail(c, http.StatusBadGateway, "palworld_api_failed", err.Error())
 			return
@@ -969,12 +1068,78 @@ func (s Server) palPost(path string) gin.HandlerFunc {
 	}
 }
 
+func (s Server) palworldREST() palrest.Client {
+	client := s.palrest
+	if strings.TrimSpace(client.Password) != "" {
+		return client
+	}
+	settings, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
+	if err != nil {
+		return client
+	}
+	if password := strings.TrimSpace(settings["AdminPassword"]); password != "" {
+		client.Password = password
+	}
+	return client
+}
+
+func normalizeRESTMetrics(body any) gin.H {
+	data, _ := body.(map[string]any)
+	out := gin.H{
+		"server_fps":      metricNumber(data, "server_fps", "serverFPS", "serverfps", "serverFps"),
+		"current_players": int(metricNumber(data, "current_players", "currentPlayerNum", "currentplayernum", "players")),
+		"max_players":     int(metricNumber(data, "max_players", "maxPlayerNum", "maxplayernum")),
+		"uptime":          int(metricNumber(data, "uptime", "uptime_seconds")),
+		"total_pals":      int(metricNumber(data, "total_pals", "pals")),
+		"active_bases":    int(metricNumber(data, "active_bases", "bases")),
+		"frame_time":      metricNumber(data, "frame_time", "frameTime", "frametime", "server_frame_time", "serverFrameTime", "serverframetime"),
+		"source":          "palworld_rest",
+		"rest_healthy":    true,
+	}
+	if body != nil {
+		out["raw"] = body
+	}
+	return out
+}
+
+func metricNumber(data map[string]any, keys ...string) float64 {
+	if data == nil {
+		return 0
+	}
+	for _, key := range keys {
+		value, ok := data[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case float64:
+			return v
+		case float32:
+			return float64(v)
+		case int:
+			return float64(v)
+		case int64:
+			return float64(v)
+		case json.Number:
+			if parsed, err := v.Float64(); err == nil {
+				return parsed
+			}
+		case string:
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
 func (s Server) preUpdateHook() func(context.Context) error {
 	return func(ctx context.Context) error {
-		if _, err := s.palrest.Do(ctx, http.MethodPost, "announce", gin.H{"message": "Server update starting soon. Saving world and stopping server."}); err != nil {
+		client := s.palworldREST()
+		if _, err := client.Do(ctx, http.MethodPost, "announce", gin.H{"message": "Server update starting soon. Saving world and stopping server."}); err != nil {
 			return fmt.Errorf("announce before update failed: %w", err)
 		}
-		if _, err := s.palrest.Do(ctx, http.MethodPost, "save", nil); err != nil {
+		if _, err := client.Do(ctx, http.MethodPost, "save", nil); err != nil {
 			return fmt.Errorf("save before update failed: %w", err)
 		}
 		return nil

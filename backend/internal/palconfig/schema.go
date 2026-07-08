@@ -2,6 +2,7 @@ package palconfig
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -47,7 +48,7 @@ func Schema() []FieldSchema {
 		intField("ServerPlayerMaxNum", "server_management", "32", 1, 128, "Maximum number of players"),
 		boolField("RCONEnabled", "server_management", "False", "Enable RCON"),
 		intField("RCONPort", "server_management", "25575", 1, 65535, "RCON port"),
-		boolField("RESTAPIEnabled", "server_management", "False", "Enable official REST API"),
+		boolField("RESTAPIEnabled", "server_management", "True", "Enable official REST API"),
 		intField("RESTAPIPort", "server_management", "8212", 1, 65535, "Official REST API port"),
 		enumField("LogFormatType", "server_management", "Text", []string{"Text", "Json"}, "Server log format"),
 		boolField("bIsShowJoinLeftMessage", "server_management", "True", "Show join/leave messages"),
@@ -168,7 +169,11 @@ func validateField(schema FieldSchema, value string) *ValidationIssue {
 	case TypeInt:
 		i, err := strconv.Atoi(value)
 		if err != nil {
-			return &ValidationIssue{Field: schema.Key, Severity: "error", Message: "must be an integer"}
+			f, floatErr := strconv.ParseFloat(value, 64)
+			if floatErr != nil || math.Trunc(f) != f {
+				return &ValidationIssue{Field: schema.Key, Severity: "error", Message: "must be an integer"}
+			}
+			return validateNumber(schema, f)
 		}
 		return validateNumber(schema, float64(i))
 	case TypeFloat:

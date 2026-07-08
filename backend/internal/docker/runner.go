@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"palpanel/internal/appconfig"
@@ -23,20 +25,157 @@ type ContainerStatus struct {
 	Status string `json:"status"`
 }
 
+const wineBaseImageBuildArg = "PALPANEL_WINE_BASE_IMAGE"
+
 func NewRunner(cfg appconfig.Config) Runner {
 	return Runner{cfg: cfg}
 }
 
 func (r Runner) BuildImage(ctx context.Context) error {
+	candidates := runnerBaseImageCandidates(r.cfg.DockerRunnerBaseImage, r.cfg.DockerRunnerBaseImageMirrors)
+	attemptErrors := make([]string, 0, len(candidates))
+	for index, baseImage := range candidates {
+		err := r.buildImageWithBase(ctx, baseImage)
+		if err == nil {
+			return nil
+		}
+		attemptErrors = append(attemptErrors, fmt.Sprintf("%s: %s", baseImage, compactDockerError(err.Error())))
+		if index == 0 && !dockerBaseImagePullFailure(err) {
+			return err
+		}
+	}
+	return fmt.Errorf(
+		"build wine runner image failed: unable to pull Docker base image after trying %d source(s). "+
+			"Try configuring Docker Hub mirror acceleration in Setup > Advanced settings, or set PALPANEL_DOCKER_RUNNER_BASE_IMAGE_MIRRORS. Attempts: %s",
+		len(attemptErrors),
+		strings.Join(attemptErrors, " | "),
+	)
+}
+
+func (r Runner) buildImageWithBase(ctx context.Context, baseImage string) error {
 	args := []string{"build", "-t", r.cfg.DockerImage, "-f", filepath.Join(r.cfg.RunnerDir, "Dockerfile")}
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
 		if v := os.Getenv(key); v != "" {
 			args = append(args, "--build-arg", key+"="+proxyForContainer(v))
 		}
 	}
+	args = append(args, "--build-arg", wineBaseImageBuildArg+"="+baseImage)
 	args = append(args, r.cfg.RunnerDir)
 	_, err := r.run(ctx, args...)
 	return err
+}
+
+func runnerBaseImageCandidates(baseImage string, mirrors []string) []string {
+	baseImage = strings.TrimSpace(baseImage)
+	if baseImage == "" {
+		baseImage = appconfig.DefaultDockerRunnerBaseImage
+	}
+	out := []string{baseImage}
+	dockerHubRef := dockerHubImageRef(baseImage)
+	if dockerHubRef == "" {
+		return dedupeStrings(out)
+	}
+	for _, mirror := range mirrors {
+		mirror = normalizeImageMirrorPrefix(mirror)
+		if mirror == "" {
+			continue
+		}
+		if strings.Contains(mirror, dockerHubRef) {
+			out = append(out, mirror)
+			continue
+		}
+		out = append(out, mirror+"/"+dockerHubRef)
+	}
+	return dedupeStrings(out)
+}
+
+func dockerHubImageRef(image string) string {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return ""
+	}
+	parts := strings.Split(image, "/")
+	if len(parts) == 1 {
+		return "library/" + image
+	}
+	first := parts[0]
+	if first == "docker.io" || first == "index.docker.io" || first == "registry-1.docker.io" {
+		if len(parts) == 2 {
+			return "library/" + parts[1]
+		}
+		return strings.Join(parts[1:], "/")
+	}
+	if strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" {
+		return ""
+	}
+	return image
+}
+
+func normalizeImageMirrorPrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(prefix); err == nil && parsed.Host != "" {
+		prefix = parsed.Host + strings.TrimRight(parsed.Path, "/")
+	}
+	prefix = strings.Trim(prefix, "/")
+	return prefix
+}
+
+func dedupeStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func dockerBaseImagePullFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	needles := []string{
+		"load metadata for",
+		"failed to resolve source metadata",
+		"failed to do request",
+		"registry-1.docker.io",
+		"docker.io",
+		"deadlineexceeded",
+		"context deadline exceeded",
+		"i/o timeout",
+		"tls handshake timeout",
+		"client.timeout",
+		"dial tcp",
+		"no route to host",
+		"connection refused",
+		"connection reset",
+		"temporary failure",
+		"lookup ",
+		"unexpected eof",
+	}
+	for _, needle := range needles {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func compactDockerError(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	const limit = 900
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "...(truncated)"
 }
 
 func (r Runner) InstallOrUpdate(ctx context.Context) error {
@@ -47,6 +186,7 @@ func (r Runner) InstallOrUpdate(ctx context.Context) error {
 		"-v", volume(r.cfg.WinePrefixDir, "/data/wineprefix"),
 	}
 	args = append(args, containerProxyEnvArgs()...)
+	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "install")
 	_, err := r.run(ctx, args...)
 	return err
@@ -94,6 +234,7 @@ func (r Runner) DownloadWorkshop(ctx context.Context, itemID string) error {
 		"-v", volume(r.cfg.WorkshopModsDir(), "/data/workshop"),
 	}
 	args = append(args, containerProxyEnvArgs()...)
+	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "workshop", itemID)
 	_, err := r.run(ctx, args...)
 	return err
@@ -127,9 +268,9 @@ func (r Runner) StartWithArgs(ctx context.Context, serverArgs []string) error {
 		"-p", fmt.Sprintf("%d:%d/udp", gamePort, gamePort),
 		"-p", fmt.Sprintf("%d:27015/udp", r.cfg.QueryPort),
 		"-p", fmt.Sprintf("%d:8212/tcp", r.cfg.RESTPort),
-		r.cfg.DockerImage,
-		"start",
 	}
+	args = append(args, hostUserRunArgs()...)
+	args = append(args, r.cfg.DockerImage, "start")
 	args = append(args, serverArgs...)
 	_, err = r.run(ctx, args...)
 	return err
@@ -191,17 +332,91 @@ func (r Runner) Status(ctx context.Context) (ContainerStatus, error) {
 }
 
 func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
-	binary := dockerBinary(r.cfg.DockerBinary)
-	cmd := exec.CommandContext(ctx, binary, args...)
+	return RunCommand(ctx, r.cfg.DockerBinary, args...)
+}
+
+func RunCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
+	binary = dockerBinary(binary)
+	out, err := runDockerCommand(ctx, binary, args, false)
+	if err == nil {
+		return out, nil
+	}
+	if dockerPermissionDenied(err, out) && canUseDockerGroupShell() {
+		sgOut, sgErr := runDockerCommand(ctx, binary, args, true)
+		if sgErr == nil {
+			return sgOut, nil
+		}
+		return sgOut, fmt.Errorf("docker %s via sg docker failed after direct Docker socket permission was denied: %w: %s", strings.Join(args, " "), sgErr, compactDockerError(strings.TrimSpace(string(sgOut))))
+	}
+	return out, fmt.Errorf("docker %s failed: %w: %s", strings.Join(args, " "), err, compactDockerError(strings.TrimSpace(string(out))))
+}
+
+func runDockerCommand(ctx context.Context, binary string, args []string, useDockerGroup bool) ([]byte, error) {
+	command := binary
+	commandArgs := args
+	if useDockerGroup {
+		command = "sg"
+		commandArgs = []string{"docker", "-c", dockerShellCommand(binary, args)}
+	}
+	cmd := exec.CommandContext(ctx, command, commandArgs...)
 	cmd.Env = dockerEnv(os.Environ())
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
-	if err != nil {
-		return out.Bytes(), fmt.Errorf("docker %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(out.String()))
+	return out.Bytes(), err
+}
+
+func dockerPermissionDenied(err error, out []byte) bool {
+	if err == nil {
+		return false
 	}
-	return out.Bytes(), nil
+	msg := strings.ToLower(err.Error() + " " + string(out))
+	return strings.Contains(msg, "permission denied") &&
+		(strings.Contains(msg, "docker.sock") || strings.Contains(msg, "docker api") || strings.Contains(msg, "var/run/docker"))
+}
+
+func canUseDockerGroupShell() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	if _, err := exec.LookPath("sg"); err != nil {
+		return false
+	}
+	current, err := user.Current()
+	if err != nil {
+		return false
+	}
+	group, err := user.LookupGroup("docker")
+	if err != nil {
+		return false
+	}
+	ids, err := current.GroupIds()
+	if err != nil {
+		return false
+	}
+	for _, id := range ids {
+		if id == group.Gid {
+			return true
+		}
+	}
+	return false
+}
+
+func dockerShellCommand(binary string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, shellQuote(binary))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (r Runner) removeContainer(ctx context.Context) error {
@@ -261,6 +476,36 @@ func containerProxyEnvArgs() []string {
 		}
 	}
 	return args
+}
+
+func hostOwnerEnvArgs() []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	uid := os.Getuid()
+	gid := os.Getgid()
+	if uid < 0 || gid < 0 {
+		return nil
+	}
+	return []string{
+		"-e", fmt.Sprintf("PALPANEL_HOST_UID=%d", uid),
+		"-e", fmt.Sprintf("PALPANEL_HOST_GID=%d", gid),
+	}
+}
+
+func hostUserRunArgs() []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	uid := os.Getuid()
+	gid := os.Getgid()
+	if uid < 0 || gid < 0 {
+		return nil
+	}
+	return []string{
+		"--user", fmt.Sprintf("%d:%d", uid, gid),
+		"-e", "HOME=/data/wineprefix",
+	}
 }
 
 func proxyForContainer(raw string) string {

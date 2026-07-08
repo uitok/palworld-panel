@@ -13,6 +13,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
+	"palpanel/internal/docker"
 	"palpanel/internal/id"
 	"palpanel/internal/palconfig"
 	"palpanel/internal/palrest"
@@ -93,7 +94,7 @@ func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
 }
 
 func (m Manager) fillRESTStats(ctx context.Context, sample *db.MonitorSample) {
-	resp, err := m.palrest.Do(ctx, "GET", "metrics", nil)
+	resp, err := m.palworldREST().Do(ctx, "GET", "metrics", nil)
 	if err != nil {
 		sample.RESTHealthy = false
 		appendReason(sample, "REST: "+err.Error())
@@ -103,6 +104,21 @@ func (m Manager) fillRESTStats(ctx context.Context, sample *db.MonitorSample) {
 	data := mapFromAny(resp.Body)
 	sample.CurrentPlayers = int(numberValue(data, "current_players", "currentPlayerNum", "currentplayernum", "players"))
 	sample.MaxPlayers = int(numberValue(data, "max_players", "maxPlayerNum", "maxplayernum"))
+}
+
+func (m Manager) palworldREST() palrest.Client {
+	client := m.palrest
+	if strings.TrimSpace(client.Password) != "" {
+		return client
+	}
+	settings, err := palconfig.Read(m.cfg.PalWorldSettingsPath())
+	if err != nil {
+		return client
+	}
+	if password := strings.TrimSpace(settings["AdminPassword"]); password != "" {
+		client.Password = password
+	}
+	return client
 }
 
 func (m Manager) fillRCONHealth(ctx context.Context, sample *db.MonitorSample) {
@@ -126,10 +142,9 @@ func (m Manager) fillRCONHealth(ctx context.Context, sample *db.MonitorSample) {
 }
 
 func (m Manager) fillDockerStats(ctx context.Context, sample *db.MonitorSample) {
-	cmd := exec.CommandContext(ctx, m.cfg.DockerBinary, "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", m.cfg.DockerContainer)
-	out, err := cmd.CombinedOutput()
+	out, err := docker.RunCommand(ctx, m.cfg.DockerBinary, "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", m.cfg.DockerContainer)
 	if err != nil {
-		appendReason(sample, "docker stats: "+strings.TrimSpace(string(out)))
+		appendReason(sample, "docker stats: "+err.Error())
 		return
 	}
 	parts := strings.Split(strings.TrimSpace(string(out)), "|")

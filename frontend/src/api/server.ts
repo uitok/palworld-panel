@@ -113,18 +113,25 @@ export const mapServerStatus = (raw: unknown): ServerStatus => {
 
 export const mapServerMetrics = (raw: unknown): ServerMetrics => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const body =
+    data.body && typeof data.body === 'object' && !Array.isArray(data.body)
+      ? (data.body as Record<string, unknown>)
+      : data;
 
   return {
-    server_fps: toNumber(data.server_fps ?? data.serverFPS ?? data.serverfps ?? data.fps, emptyMetrics.server_fps),
+    server_fps: toNumber(body.server_fps ?? body.serverFPS ?? body.serverfps ?? body.serverFps ?? body.fps, emptyMetrics.server_fps),
     current_players: toNumber(
-      data.current_players ?? data.currentPlayerNum ?? data.currentplayernum ?? data.players,
+      body.current_players ?? body.currentPlayerNum ?? body.currentplayernum ?? body.players,
       emptyMetrics.current_players,
     ),
-    max_players: toNumber(data.max_players ?? data.maxPlayerNum ?? data.maxplayernum, emptyMetrics.max_players),
-    uptime: toNumber(data.uptime ?? data.uptime_seconds, emptyMetrics.uptime),
-    total_pals: toNumber(data.total_pals ?? data.pals, emptyMetrics.total_pals),
-    active_bases: toNumber(data.active_bases ?? data.bases, emptyMetrics.active_bases),
-    frame_time: toNumber(data.frame_time ?? data.frameTime ?? data.frametime, emptyMetrics.frame_time),
+    max_players: toNumber(body.max_players ?? body.maxPlayerNum ?? body.maxplayernum, emptyMetrics.max_players),
+    uptime: toNumber(body.uptime ?? body.uptime_seconds, emptyMetrics.uptime),
+    total_pals: toNumber(body.total_pals ?? body.pals, emptyMetrics.total_pals),
+    active_bases: toNumber(body.active_bases ?? body.bases, emptyMetrics.active_bases),
+    frame_time: toNumber(
+      body.frame_time ?? body.frameTime ?? body.frametime ?? body.server_frame_time ?? body.serverFrameTime ?? body.serverframetime,
+      emptyMetrics.frame_time,
+    ),
   };
 };
 

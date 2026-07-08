@@ -30,6 +30,8 @@ const jobTypeLabel = (type: string) => {
       return '服务端安装';
     case 'bootstrap':
       return '开服初始化';
+    case 'docker_install':
+      return 'Docker 安装';
     case 'workshop_download':
       return 'Workshop 下载';
     case 'paldefender_install':

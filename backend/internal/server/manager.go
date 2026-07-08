@@ -111,10 +111,10 @@ func (m Manager) RuntimeMode(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if !ok || strings.TrimSpace(mode) == "" {
-		return RuntimeWineDocker, nil
+		return RecommendedRuntimeForOS(runtime.GOOS), nil
 	}
 	if mode != RuntimeWineDocker && mode != RuntimeWindowsSteamCMD {
-		return RuntimeWineDocker, nil
+		return RecommendedRuntimeForOS(runtime.GOOS), nil
 	}
 	return mode, nil
 }
@@ -157,14 +157,25 @@ func (m Manager) Prerequisites(ctx context.Context) ([]Prerequisite, error) {
 		{ID: "server_dir", Label: "Server directory", OK: dirExists(m.cfg.ServerDir), Required: true, Message: m.cfg.ServerDir},
 	}
 	if mode == RuntimeWineDocker {
-		_, err := exec.LookPath(m.cfg.DockerBinary)
-		ok := err == nil
-		if !ok {
+		dockerCapability := detectDocker(ctx, m.cfg.DockerBinary)
+		cliOK := dockerCapability.CLIInstalled
+		if !cliOK {
 			if _, statErr := os.Stat(`C:\Program Files\Docker\Docker\resources\bin\docker.exe`); statErr == nil {
-				ok = true
+				cliOK = true
 			}
 		}
-		checks = append(checks, Prerequisite{ID: "docker", Label: "Docker CLI", OK: ok, Required: true, Message: m.cfg.DockerBinary})
+		cliMessage := dockerCapability.CLIPath
+		if cliMessage == "" {
+			cliMessage = m.cfg.DockerBinary
+		}
+		daemonMessage := dockerCapability.Version
+		if daemonMessage == "" {
+			daemonMessage = dockerCapability.Error
+		}
+		checks = append(checks,
+			Prerequisite{ID: "docker", Label: "Docker CLI", OK: cliOK, Required: true, Message: cliMessage},
+			Prerequisite{ID: "docker_daemon", Label: "Docker daemon", OK: dockerCapability.DaemonReachable, Required: true, Message: daemonMessage},
+		)
 	} else {
 		checks = append(checks,
 			Prerequisite{ID: "windows", Label: "Windows host", OK: runtime.GOOS == "windows", Required: true, Message: runtime.GOOS},
@@ -294,10 +305,26 @@ func (m Manager) InitializeConfig(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(m.cfg.PalWorldSettingsPath()), 0o755); err != nil {
 		return err
 	}
+	settings := palconfig.Defaults()
 	if fileExists(m.cfg.DefaultPalWorldSettingsPath()) {
-		return copyFile(m.cfg.DefaultPalWorldSettingsPath(), m.cfg.PalWorldSettingsPath())
+		next, err := palconfig.Read(m.cfg.DefaultPalWorldSettingsPath())
+		if err != nil {
+			return err
+		}
+		for key, value := range next {
+			settings[key] = value
+		}
 	}
-	return palconfig.Write(m.cfg.PalWorldSettingsPath(), palconfig.Defaults())
+	applyPanelDefaults(settings, m.cfg)
+	return palconfig.Write(m.cfg.PalWorldSettingsPath(), settings)
+}
+
+func applyPanelDefaults(settings palconfig.Settings, cfg appconfig.Config) {
+	settings["RESTAPIEnabled"] = "True"
+	settings["RESTAPIPort"] = "8212"
+	if cfg.PalworldRESTPass != "" {
+		settings["AdminPassword"] = cfg.PalworldRESTPass
+	}
 }
 
 func (m Manager) ValidateStartup(ctx context.Context) []ValidationIssue {
@@ -324,7 +351,7 @@ func (m Manager) ValidateStartup(ctx context.Context) []ValidationIssue {
 
 func (m Manager) Start(ctx context.Context) error {
 	if issues := m.ValidateStartup(ctx); hasErrors(issues) {
-		return fmt.Errorf("startup validation failed")
+		return fmt.Errorf("startup validation failed: %s", validationIssueSummary(issues))
 	}
 	startup, err := m.StartupConfig(ctx)
 	if err != nil {
@@ -343,6 +370,24 @@ func (m Manager) Start(ctx context.Context) error {
 		_ = m.store.SetKV(ctx, "pending_restart", "false")
 	}
 	return err
+}
+
+func validationIssueSummary(issues []ValidationIssue) string {
+	var parts []string
+	for _, issue := range issues {
+		if issue.Severity != "error" {
+			continue
+		}
+		if issue.Field != "" {
+			parts = append(parts, issue.Field+": "+issue.Message)
+		} else {
+			parts = append(parts, issue.Message)
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown validation error"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (m Manager) Stop(ctx context.Context) error {
@@ -433,10 +478,12 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	container := docker.ContainerStatus{Exists: false, Status: "missing"}
+	var statusErr error
 	if mode == RuntimeWineDocker {
 		container, err = m.runner.Status(ctx)
 		if err != nil {
-			return Status{}, err
+			statusErr = err
+			container = docker.ContainerStatus{Exists: false, Status: "error"}
 		}
 	} else {
 		container = m.windowsStatus(ctx)
@@ -456,6 +503,9 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 	configExists := fileExists(m.cfg.PalWorldSettingsPath())
 	startup, _ := m.StartupConfig(ctx)
 	warnings := m.statusWarnings(mode, installed, configExists)
+	if statusErr != nil {
+		warnings = append(warnings, statusErr.Error())
+	}
 	return Status{
 		Installed:      installed,
 		PendingRestart: parseBool(pendingValue),
@@ -739,7 +789,7 @@ func (m Manager) windowsStatus(ctx context.Context) docker.ContainerStatus {
 
 func (m Manager) statusWarnings(mode string, installed, configExists bool) []string {
 	var warnings []string
-	if mode == RuntimeWineDocker {
+	if mode == RuntimeWineDocker && runtime.GOOS != "linux" {
 		warnings = append(warnings, "Docker Desktop on Windows/macOS is not recommended by official docs for production save-data IO; create backups before updates.")
 	}
 	if !installed {

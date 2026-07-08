@@ -90,6 +90,123 @@ export interface Prerequisite {
   message?: string;
 }
 
+export interface DockerCapability {
+  cli_installed: boolean;
+  cli_path?: string;
+  daemon_reachable: boolean;
+  version?: string;
+  error?: string;
+}
+
+export interface SudoCapability {
+  is_root: boolean;
+  sudo_installed: boolean;
+  passwordless: boolean;
+  can_elevate: boolean;
+  needs_password: boolean;
+  message?: string;
+}
+
+export interface HostCapabilities {
+  os: string;
+  arch: string;
+  distro_id?: string;
+  distro_name?: string;
+  distro_version?: string;
+  distro_codename?: string;
+  package_manager?: string;
+  systemd: boolean;
+  supported: boolean;
+  unsupported_reason?: string;
+  recommended_runtime: RuntimeMode;
+  docker: DockerCapability;
+  sudo: SudoCapability;
+  current_user?: string;
+  current_user_in_docker_group: boolean;
+  warnings?: string[];
+}
+
+export type DockerSourceID = 'auto' | 'official' | 'aliyun' | 'azurecn';
+export type DockerMirrorID =
+  | 'auto'
+  | 'daocloud'
+  | 'one_ms'
+  | 'registry_cyou'
+  | 'dockerproxy_net'
+  | 'dockerproxy_link'
+  | 'docker_jiaxin'
+  | 'docker_xuanyuan'
+  | 'free_hubfast';
+
+export interface DockerInstallSource {
+  id: string;
+  name: string;
+  url: string;
+  probe_url: string;
+  available: boolean;
+  latency_ms?: number;
+  error?: string;
+  selected: boolean;
+}
+
+export interface DockerInstallPlan {
+  host: HostCapabilities;
+  source: string;
+  source_url?: string;
+  sources: DockerInstallSource[];
+  supported: boolean;
+  can_auto_install: boolean;
+  requires_manual: boolean;
+  docker_installed: boolean;
+  docker_ready: boolean;
+  error_code?: string;
+  message?: string;
+  manual_command?: string;
+  script?: string;
+  script_path?: string;
+  warnings?: string[];
+}
+
+export interface DockerInstallRequest {
+  source?: DockerSourceID;
+  add_current_user_to_docker_group?: boolean;
+}
+
+export interface DockerRegistryMirror {
+  id: string;
+  name: string;
+  url: string;
+  probe_url: string;
+  available: boolean;
+  latency_ms?: number;
+  error?: string;
+  selected: boolean;
+}
+
+export interface DockerMirrorPlan {
+  host: HostCapabilities;
+  mirror: string;
+  mirrors: DockerRegistryMirror[];
+  selected_mirrors: string[];
+  existing_mirrors?: string[];
+  config_path: string;
+  supported: boolean;
+  can_auto_configure: boolean;
+  requires_manual: boolean;
+  docker_installed: boolean;
+  docker_ready: boolean;
+  error_code?: string;
+  message?: string;
+  manual_command?: string;
+  script?: string;
+  script_path?: string;
+  warnings?: string[];
+}
+
+export interface DockerMirrorRequest {
+  mirror?: DockerMirrorID;
+}
+
 export interface ValidationIssue {
   field?: string;
   severity: 'error' | 'warning' | 'info' | string;

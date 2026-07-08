@@ -54,6 +54,9 @@ export const mapJobs = (raw: unknown): Job[] => {
 
 export const isJobDone = (job: Job) => job.status === 'success' || job.status === 'failed';
 
+const jobPollIntervalMs = 1000;
+const maxJobPollAttempts = 60 * 30;
+
 const fallbackJob = (type: string, message: string): Job => ({
   id: `local_${Date.now()}`,
   type,
@@ -83,8 +86,11 @@ export const tasksApi = {
       { map: mapJob, quiet: true },
     ),
 
-  waitForJob: async (id: string, onUpdate?: (job: Job) => void) => {
+  waitForJob: async (id: string, onUpdate?: (job: Job) => void, shouldContinue: () => boolean = () => true) => {
     let current = await tasksApi.getJobById(id);
+    if (!shouldContinue()) {
+      return current;
+    }
     if (id.startsWith('local_') && current.status === 'waiting') {
       current = {
         ...current,
@@ -95,9 +101,15 @@ export const tasksApi = {
     }
     onUpdate?.(current);
 
-    for (let attempt = 0; attempt < 120 && !isJobDone(current); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+    for (let attempt = 0; attempt < maxJobPollAttempts && shouldContinue() && !isJobDone(current); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, jobPollIntervalMs));
+      if (!shouldContinue()) {
+        break;
+      }
       current = await tasksApi.getJobById(id);
+      if (!shouldContinue()) {
+        break;
+      }
       onUpdate?.(current);
     }
     return current;
