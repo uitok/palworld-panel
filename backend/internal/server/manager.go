@@ -321,7 +321,7 @@ func (m Manager) InitializeConfig(ctx context.Context) error {
 
 func applyPanelDefaults(settings palconfig.Settings, cfg appconfig.Config) {
 	settings["RESTAPIEnabled"] = "True"
-	settings["RESTAPIPort"] = "8212"
+	settings["RESTAPIPort"] = strconv.Itoa(cfg.RESTPort)
 	if cfg.PalworldRESTPass != "" {
 		settings["AdminPassword"] = cfg.PalworldRESTPass
 	}

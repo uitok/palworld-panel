@@ -1,6 +1,7 @@
 package appconfig
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,6 +45,9 @@ type Config struct {
 	DockerContainer              string
 	DockerRunnerBaseImage        string
 	DockerRunnerBaseImageMirrors []string
+	SteamWebAPIKey               string
+	SteamWebAPIKeySource         string
+	WorkshopAppID                string
 	GamePort                     int
 	QueryPort                    int
 	RESTPort                     int
@@ -76,6 +80,7 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	steamWebAPIKey, steamWebAPIKeySource := resolveSteamWebAPIKey()
 	cfg := Config{
 		ListenAddr:                   env("PALPANEL_LISTEN_ADDR", ":8080"),
 		DataDir:                      dataDir,
@@ -99,6 +104,9 @@ func Load() (Config, error) {
 		DockerContainer:              env("PALPANEL_DOCKER_CONTAINER", "palworld-wine-server"),
 		DockerRunnerBaseImage:        env("PALPANEL_DOCKER_RUNNER_BASE_IMAGE", DefaultDockerRunnerBaseImage),
 		DockerRunnerBaseImageMirrors: envList("PALPANEL_DOCKER_RUNNER_BASE_IMAGE_MIRRORS", DefaultDockerRunnerBaseImageMirrorPrefixes),
+		SteamWebAPIKey:               steamWebAPIKey,
+		SteamWebAPIKeySource:         steamWebAPIKeySource,
+		WorkshopAppID:                env("PALPANEL_WORKSHOP_APP_ID", "1623730"),
 		GamePort:                     envInt("PALPANEL_GAME_PORT", 8211),
 		QueryPort:                    envInt("PALPANEL_QUERY_PORT", 27015),
 		RESTPort:                     envInt("PALPANEL_REST_PORT", 8212),
@@ -172,6 +180,53 @@ func (c Config) SteamCMDBinaryPath() string {
 
 func (c Config) ServerLogPath() string {
 	return filepath.Join(c.LogsDir, "palserver.log")
+}
+
+func (c Config) EffectiveSteamWebAPIKey() string {
+	if key := strings.TrimSpace(c.SteamWebAPIKey); key != "" {
+		return key
+	}
+	return DefaultSteamWebAPIKey()
+}
+
+func (c Config) SteamWebAPIKeyConfigured() bool {
+	return strings.TrimSpace(c.EffectiveSteamWebAPIKey()) != ""
+}
+
+func (c Config) SteamWebAPIKeySourceName() string {
+	if source := strings.TrimSpace(c.SteamWebAPIKeySource); source != "" {
+		return source
+	}
+	key := strings.TrimSpace(c.SteamWebAPIKey)
+	if key == "" {
+		if strings.TrimSpace(DefaultSteamWebAPIKey()) != "" {
+			return "embedded"
+		}
+		return ""
+	}
+	if key == DefaultSteamWebAPIKey() {
+		return "embedded"
+	}
+	return "env"
+}
+
+func DefaultSteamWebAPIKey() string {
+	obfuscated := []byte{
+		0xD5, 0xED, 0xDA, 0x66, 0x64, 0xFF, 0x23, 0xA6,
+		0xB3, 0xD8, 0x50, 0x2C, 0x63, 0xB1, 0xBF, 0x6D,
+	}
+	decoded := make([]byte, len(obfuscated))
+	for i, b := range obfuscated {
+		decoded[i] = b ^ 0x55
+	}
+	return hex.EncodeToString(decoded)
+}
+
+func resolveSteamWebAPIKey() (string, string) {
+	if key := strings.TrimSpace(os.Getenv("STEAM_WEB_API_KEY")); key != "" {
+		return key, "env"
+	}
+	return DefaultSteamWebAPIKey(), "embedded"
 }
 
 func env(key, fallback string) string {

@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -100,6 +102,9 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.POST("/config/palworld/validate", s.validatePalworldConfig)
 
 		api.GET("/mods", s.listMods)
+		api.GET("/mods/workshop/status", s.workshopStatus)
+		api.GET("/mods/workshop/search", s.searchWorkshopMods)
+		api.GET("/mods/workshop/:id", s.getWorkshopMod)
 		api.POST("/mods/upload", Require(PermModsWrite), s.uploadMod)
 		api.POST("/mods/workshop", Require(PermModsWrite), s.downloadWorkshop)
 		api.POST("/mods/:id/enable", Require(PermModsWrite), s.enableMod)
@@ -722,6 +727,40 @@ func (s Server) listMods(c *gin.Context) {
 	ok(c, list)
 }
 
+func (s Server) workshopStatus(c *gin.Context) {
+	ok(c, gin.H{
+		"configured": s.cfg.SteamWebAPIKeyConfigured(),
+		"key_source": s.cfg.SteamWebAPIKeySourceName(),
+		"app_id":     s.cfg.WorkshopAppID,
+	})
+}
+
+func (s Server) searchWorkshopMods(c *gin.Context) {
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "24"))
+	params := mods.WorkshopSearchParams{
+		Query:    c.Query("q"),
+		Sort:     c.DefaultQuery("sort", "popular"),
+		Cursor:   c.Query("cursor"),
+		PageSize: pageSize,
+		Tags:     queryTags(c.Query("tags")),
+	}
+	result, err := s.mods.SearchWorkshop(c.Request.Context(), params)
+	if err != nil {
+		failWorkshop(c, err)
+		return
+	}
+	ok(c, result)
+}
+
+func (s Server) getWorkshopMod(c *gin.Context) {
+	item, err := s.mods.WorkshopDetail(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		failWorkshop(c, err)
+		return
+	}
+	ok(c, item)
+}
+
 func (s Server) uploadMod(c *gin.Context) {
 	if s.cfg.MaxUploadBytes > 0 {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.cfg.MaxUploadBytes)
@@ -748,12 +787,17 @@ func (s Server) uploadMod(c *gin.Context) {
 func (s Server) downloadWorkshop(c *gin.Context) {
 	var req struct {
 		ItemID string `json:"item_id"`
+		Enable *bool  `json:"enable"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	j, err := s.mods.DownloadWorkshop(c.Request.Context(), req.ItemID)
+	enable := false
+	if req.Enable != nil {
+		enable = *req.Enable
+	}
+	j, err := s.mods.DownloadWorkshop(c.Request.Context(), req.ItemID, enable)
 	if err != nil {
 		fail(c, http.StatusBadRequest, "workshop_failed", err.Error())
 		return
@@ -761,11 +805,46 @@ func (s Server) downloadWorkshop(c *gin.Context) {
 	accepted(c, j)
 }
 
+func queryTags(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func failWorkshop(c *gin.Context, err error) {
+	if errors.Is(err, mods.ErrSteamAPIKeyMissing) {
+		fail(c, http.StatusServiceUnavailable, "steam_api_key_missing", "Steam Web API key is not available")
+		return
+	}
+	var steamErr mods.SteamAPIError
+	if errors.As(err, &steamErr) {
+		status := http.StatusBadGateway
+		if steamErr.Code == "steam_timeout" {
+			status = http.StatusGatewayTimeout
+		}
+		fail(c, status, steamErr.Code, steamErr.Error())
+		return
+	}
+	fail(c, http.StatusBadRequest, "workshop_failed", err.Error())
+}
+
 func (s Server) listPlayerBans(c *gin.Context) {
 	items, err := s.store.ListPlayerAccess(c.Request.Context(), "ban")
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "bans_list_failed", err.Error())
 		return
+	}
+	if items == nil {
+		items = []db.PlayerAccessEntry{}
 	}
 	ok(c, items)
 }
@@ -806,6 +885,9 @@ func (s Server) listPlayerWhitelist(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "whitelist_list_failed", err.Error())
 		return
 	}
+	if items == nil {
+		items = []db.PlayerAccessEntry{}
+	}
 	ok(c, items)
 }
 
@@ -838,7 +920,7 @@ func (s Server) kickPlayer(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "kick", payload)
+	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodPost, "kick", payload)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "palworld_kick_failed", err.Error())
 		return
@@ -857,7 +939,7 @@ func (s Server) banPlayer(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "ban", payload)
+	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodPost, "ban", payload)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "palworld_ban_failed", err.Error())
 		return
@@ -885,7 +967,7 @@ func (s Server) unbanPlayer(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	resp, err := s.palrest.Do(c.Request.Context(), http.MethodPost, "unban", payload)
+	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodPost, "unban", payload)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "palworld_unban_failed", err.Error())
 		return
@@ -1070,17 +1152,39 @@ func (s Server) palPost(path string) gin.HandlerFunc {
 
 func (s Server) palworldREST() palrest.Client {
 	client := s.palrest
-	if strings.TrimSpace(client.Password) != "" {
-		return client
-	}
 	settings, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
-	if err != nil {
-		return client
+	if err == nil {
+		if port := strings.TrimSpace(settings["RESTAPIPort"]); port != "" {
+			client.BaseURL = restBaseURLWithPort(client.BaseURL, port)
+		}
+		if password := strings.TrimSpace(settings["AdminPassword"]); password != "" {
+			client.Password = password
+		}
 	}
-	if password := strings.TrimSpace(settings["AdminPassword"]); password != "" {
-		client.Password = password
+	if strings.TrimSpace(client.BaseURL) == "" {
+		client.BaseURL = fmt.Sprintf("http://127.0.0.1:%d/v1/api", s.cfg.RESTPort)
 	}
 	return client
+}
+
+func restBaseURLWithPort(baseURL string, port string) string {
+	if _, err := strconv.Atoi(port); err != nil {
+		return strings.TrimRight(baseURL, "/")
+	}
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return "http://" + net.JoinHostPort("127.0.0.1", port) + "/v1/api"
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Host == "" {
+		return strings.TrimRight(baseURL, "/")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	parsed.Host = net.JoinHostPort(host, port)
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func normalizeRESTMetrics(body any) gin.H {

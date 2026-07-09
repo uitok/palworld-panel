@@ -77,15 +77,16 @@ run_steamcmd_logged() {
 
 download_workshop() {
   local item_id="${1:?workshop item id is required}"
+  local app_id="${PALPANEL_WORKSHOP_APP_ID:-1623730}"
   mkdir -p /data/workshop/.steamcmd
   /opt/steamcmd/steamcmd.sh \
     +@sSteamCmdForcePlatformType windows \
     +force_install_dir /data/workshop/.steamcmd \
     "${steam_login_args[@]}" \
-    +workshop_download_item 1623730 "$item_id" validate \
+    +workshop_download_item "$app_id" "$item_id" validate \
     +quit
 
-  local src="/data/workshop/.steamcmd/steamapps/workshop/content/1623730/$item_id"
+  local src="/data/workshop/.steamcmd/steamapps/workshop/content/$app_id/$item_id"
   local dst="/data/workshop/$item_id"
   if [[ ! -d "$src" ]]; then
     echo "workshop item was not downloaded to $src" >&2

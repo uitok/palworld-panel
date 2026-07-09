@@ -22,6 +22,8 @@ type ChartPoint = {
   time: string;
   players: number;
   cpu: number | null;
+  memoryPercent: number | null;
+  memoryGiB: number | null;
 };
 
 const stoppedMetrics = {
@@ -41,6 +43,27 @@ const formatTime = (value: string) => {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 };
 
+const bytesToGiB = (bytes: number) => bytes / 1024 / 1024 / 1024;
+
+const formatRAM = (bytes?: number) => {
+  if (!bytes) return '0 GB';
+  return `${bytesToGiB(bytes).toFixed(1)} GB`;
+};
+
+const percent = (used: number, total: number) => {
+  if (!total) return null;
+  return Math.min(100, Math.max(0, (used / total) * 100));
+};
+
+const chartTooltipFormatter = (value: unknown, name: unknown) => {
+  const label = String(name);
+  const numeric = Number(Array.isArray(value) ? value[0] : value);
+  if (!Number.isFinite(numeric)) return [String(value), label];
+  if (label.includes('GB')) return [`${numeric.toFixed(2)} GB`, label];
+  if (label.includes('%')) return [`${numeric.toFixed(1)}%`, label];
+  return [numeric, label];
+};
+
 export const Dashboard: React.FC = () => {
   const { status, setStatus, metrics, setMetrics, autoRefresh, refreshKey, triggerRefresh } = useServerStore();
   const [logs, setLogs] = useState('');
@@ -55,11 +78,16 @@ export const Dashboard: React.FC = () => {
       const [statusRes, monitorHistory] = await Promise.all([serverApi.getStatus(), monitorApi.history(48)]);
       setStatus(statusRes);
       setChartData(
-        monitorHistory.map((sample) => ({
-          time: formatTime(sample.created_at),
-          players: sample.current_players,
-          cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
-        })),
+        monitorHistory.map((sample) => {
+          const memoryPct = percent(sample.memory_usage_bytes, sample.memory_limit_bytes);
+          return {
+            time: formatTime(sample.created_at),
+            players: sample.current_players,
+            cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
+            memoryPercent: sample.memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
+            memoryGiB: sample.memory_available ? Number(bytesToGiB(sample.memory_usage_bytes).toFixed(2)) : null,
+          };
+        }),
       );
 
       if (statusRes.status !== 'running') {
@@ -112,11 +140,6 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const formatRAM = (bytes?: number) => {
-    if (!bytes) return '0 GB';
-    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
-  };
-
   const formatUptime = (seconds?: number) => {
     if (!seconds) return '离线';
     const days = Math.floor(seconds / 86400);
@@ -126,6 +149,14 @@ export const Dashboard: React.FC = () => {
   };
 
   const latestChart = useMemo(() => chartData[chartData.length - 1], [chartData]);
+  const hasMemoryPercent = chartData.some((point) => point.memoryPercent != null);
+  const hasMemoryUsage = chartData.some((point) => point.memoryGiB != null);
+  const latestMemoryText =
+    latestChart?.memoryPercent != null
+      ? `${latestChart.memoryPercent.toFixed(1)}% 内存`
+      : latestChart?.memoryGiB != null
+        ? `${latestChart.memoryGiB.toFixed(1)} GB 内存`
+        : `内存 ${formatRAM(status?.memory_usage_bytes)}`;
 
   if (loading && !status) {
     return (
@@ -147,7 +178,7 @@ export const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="在线玩家" value={`${metrics?.current_players || 0} / ${metrics?.max_players || 32}`} icon={<Users size={16} />} trend="来自官方 REST / 监控采样" trendType="info" color="sky" />
         <StatCard title="服务器状态" value={status?.status === 'running' ? '运行中' : '已停止'} icon={<Activity size={16} />} trend={status?.setup_step || 'prerequisites'} trendType={status?.status === 'running' ? 'up' : 'down'} color={status?.status === 'running' ? 'emerald' : 'rose'} />
-        <StatCard title="系统占用" value={`${latestChart?.cpu ?? status?.cpu_percent?.toFixed(1) ?? 0}% CPU`} icon={<Cpu size={16} />} trend={`内存 ${formatRAM(status?.memory_usage_bytes)}`} trendType="neutral" color="blue" />
+        <StatCard title="系统占用" value={`${latestChart?.cpu ?? status?.cpu_percent?.toFixed(1) ?? 0}% CPU`} icon={<Cpu size={16} />} trend={latestMemoryText} trendType="neutral" color="blue" />
         <StatCard title="世界运行时间" value={formatUptime(metrics?.uptime)} icon={<Clock size={16} />} trend={status?.pending_restart ? '配置等待重启' : '配置已生效'} trendType={status?.pending_restart ? 'down' : 'up'} color="emerald" />
       </div>
 
@@ -182,15 +213,23 @@ export const Dashboard: React.FC = () => {
               )}
             </div>
             <div className="flex min-h-0 flex-col gap-2">
-              <span className="text-[11px] font-bold text-slate-400">CPU 波动</span>
+              <span className="text-[11px] font-bold text-slate-400">CPU / 内存波动</span>
               {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-                    <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} />
-                    <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-                    <Area type="monotone" dataKey="cpu" name="CPU (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                    <YAxis yAxisId="percent" stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                    {!hasMemoryPercent && hasMemoryUsage && (
+                      <YAxis yAxisId="memory" orientation="right" stroke="#94a3b8" fontSize={10} tickLine={false} width={34} tickFormatter={(value) => `${value}G`} />
+                    )}
+                    <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
+                    <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
+                    {hasMemoryPercent ? (
+                      <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                    ) : hasMemoryUsage ? (
+                      <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                    ) : null}
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (

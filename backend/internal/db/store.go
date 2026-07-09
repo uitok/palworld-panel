@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -25,15 +26,24 @@ type Job struct {
 }
 
 type Mod struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Source      string `json:"source"`
-	PackageName string `json:"package_name"`
-	Path        string `json:"path"`
-	Version     string `json:"version,omitempty"`
-	Enabled     bool   `json:"enabled"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Source        string   `json:"source"`
+	PackageName   string   `json:"package_name"`
+	Path          string   `json:"path"`
+	Version       string   `json:"version,omitempty"`
+	Enabled       bool     `json:"enabled"`
+	WorkshopID    string   `json:"workshop_id,omitempty"`
+	PreviewURL    string   `json:"preview_url,omitempty"`
+	SteamURL      string   `json:"steam_url,omitempty"`
+	Summary       string   `json:"summary,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	FileSize      int64    `json:"file_size,omitempty"`
+	Subscriptions int64    `json:"subscriptions,omitempty"`
+	TimeUpdated   int64    `json:"time_updated,omitempty"`
+	LastCheckedAt string   `json:"last_checked_at,omitempty"`
+	CreatedAt     string   `json:"created_at"`
+	UpdatedAt     string   `json:"updated_at"`
 }
 
 type AuditLog struct {
@@ -57,23 +67,23 @@ type PlayerAccessEntry struct {
 }
 
 type MonitorSample struct {
-	ID                    string  `json:"id"`
-	CreatedAt             string  `json:"created_at"`
-	CPUAvailable          bool    `json:"cpu_available"`
-	CPUPercent            float64 `json:"cpu_percent"`
-	MemoryAvailable       bool    `json:"memory_available"`
-	MemoryUsageBytes      int64   `json:"memory_usage_bytes"`
-	MemoryLimitBytes      int64   `json:"memory_limit_bytes"`
-	DiskAvailable         bool    `json:"disk_available"`
-	DiskFreeBytes         int64   `json:"disk_free_bytes"`
-	DiskTotalBytes        int64   `json:"disk_total_bytes"`
-	CurrentPlayers        int     `json:"current_players"`
-	MaxPlayers            int     `json:"max_players"`
-	RESTHealthy           bool    `json:"rest_healthy"`
-	RCONHealthy           bool    `json:"rcon_healthy"`
-	GamePortHealthy       bool    `json:"game_port_healthy"`
-	QueryPortHealthy      bool    `json:"query_port_healthy"`
-	UnavailableReason     string  `json:"unavailable_reason,omitempty"`
+	ID                string  `json:"id"`
+	CreatedAt         string  `json:"created_at"`
+	CPUAvailable      bool    `json:"cpu_available"`
+	CPUPercent        float64 `json:"cpu_percent"`
+	MemoryAvailable   bool    `json:"memory_available"`
+	MemoryUsageBytes  int64   `json:"memory_usage_bytes"`
+	MemoryLimitBytes  int64   `json:"memory_limit_bytes"`
+	DiskAvailable     bool    `json:"disk_available"`
+	DiskFreeBytes     int64   `json:"disk_free_bytes"`
+	DiskTotalBytes    int64   `json:"disk_total_bytes"`
+	CurrentPlayers    int     `json:"current_players"`
+	MaxPlayers        int     `json:"max_players"`
+	RESTHealthy       bool    `json:"rest_healthy"`
+	RCONHealthy       bool    `json:"rcon_healthy"`
+	GamePortHealthy   bool    `json:"game_port_healthy"`
+	QueryPortHealthy  bool    `json:"query_port_healthy"`
+	UnavailableReason string  `json:"unavailable_reason,omitempty"`
 }
 
 type Schedule struct {
@@ -139,6 +149,15 @@ func (s *Store) Migrate(ctx context.Context) error {
 			path TEXT NOT NULL,
 			version TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 0,
+			workshop_id TEXT NOT NULL DEFAULT '',
+			preview_url TEXT NOT NULL DEFAULT '',
+			steam_url TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			tags_json TEXT NOT NULL DEFAULT '[]',
+			file_size INTEGER NOT NULL DEFAULT 0,
+			subscriptions INTEGER NOT NULL DEFAULT 0,
+			time_updated INTEGER NOT NULL DEFAULT 0,
+			last_checked_at TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
@@ -215,7 +234,63 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.ensureColumn(ctx, "mods", "workshop_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "preview_url", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "steam_url", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "summary", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "tags_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "file_size", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "subscriptions", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "time_updated", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "mods", "last_checked_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_mods_workshop_id ON mods(workshop_id)`); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+definition)
+	return err
 }
 
 func (s *Store) CreateAuditLog(ctx context.Context, log AuditLog) error {
@@ -550,16 +625,24 @@ func (s *Store) UpsertMod(ctx context.Context, m Mod) error {
 		m.CreatedAt = now
 	}
 	m.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO mods (id,name,source,package_name,path,version,enabled,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?)
+	tagsJSON := encodeTags(m.Tags)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO mods (
+			id,name,source,package_name,path,version,enabled,workshop_id,preview_url,steam_url,summary,tags_json,
+			file_size,subscriptions,time_updated,last_checked_at,created_at,updated_at
+		)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name, source=excluded.source, package_name=excluded.package_name,
-		path=excluded.path, version=excluded.version, enabled=excluded.enabled, updated_at=excluded.updated_at`,
-		m.ID, m.Name, m.Source, m.PackageName, m.Path, m.Version, boolInt(m.Enabled), m.CreatedAt, m.UpdatedAt)
+		path=excluded.path, version=excluded.version, enabled=excluded.enabled, workshop_id=excluded.workshop_id,
+		preview_url=excluded.preview_url, steam_url=excluded.steam_url, summary=excluded.summary, tags_json=excluded.tags_json,
+		file_size=excluded.file_size, subscriptions=excluded.subscriptions, time_updated=excluded.time_updated,
+		last_checked_at=excluded.last_checked_at, updated_at=excluded.updated_at`,
+		m.ID, m.Name, m.Source, m.PackageName, m.Path, m.Version, boolInt(m.Enabled), m.WorkshopID, m.PreviewURL, m.SteamURL,
+		m.Summary, tagsJSON, m.FileSize, m.Subscriptions, m.TimeUpdated, m.LastCheckedAt, m.CreatedAt, m.UpdatedAt)
 	return err
 }
 
 func (s *Store) ListMods(ctx context.Context) ([]Mod, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,source,package_name,path,version,enabled,created_at,updated_at FROM mods ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,source,package_name,path,version,enabled,workshop_id,preview_url,steam_url,summary,tags_json,file_size,subscriptions,time_updated,last_checked_at,created_at,updated_at FROM mods ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -569,21 +652,33 @@ func (s *Store) ListMods(ctx context.Context) ([]Mod, error) {
 	for rows.Next() {
 		var m Mod
 		var enabled int
-		if err := rows.Scan(&m.ID, &m.Name, &m.Source, &m.PackageName, &m.Path, &m.Version, &enabled, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		var tagsJSON string
+		if err := rows.Scan(
+			&m.ID, &m.Name, &m.Source, &m.PackageName, &m.Path, &m.Version, &enabled, &m.WorkshopID, &m.PreviewURL,
+			&m.SteamURL, &m.Summary, &tagsJSON, &m.FileSize, &m.Subscriptions, &m.TimeUpdated, &m.LastCheckedAt,
+			&m.CreatedAt, &m.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		m.Enabled = enabled == 1
+		m.Tags = decodeTags(tagsJSON)
 		mods = append(mods, m)
 	}
 	return mods, rows.Err()
 }
 
 func (s *Store) GetMod(ctx context.Context, id string) (Mod, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,name,source,package_name,path,version,enabled,created_at,updated_at FROM mods WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,name,source,package_name,path,version,enabled,workshop_id,preview_url,steam_url,summary,tags_json,file_size,subscriptions,time_updated,last_checked_at,created_at,updated_at FROM mods WHERE id=?`, id)
 	var m Mod
 	var enabled int
-	err := row.Scan(&m.ID, &m.Name, &m.Source, &m.PackageName, &m.Path, &m.Version, &enabled, &m.CreatedAt, &m.UpdatedAt)
+	var tagsJSON string
+	err := row.Scan(
+		&m.ID, &m.Name, &m.Source, &m.PackageName, &m.Path, &m.Version, &enabled, &m.WorkshopID, &m.PreviewURL,
+		&m.SteamURL, &m.Summary, &tagsJSON, &m.FileSize, &m.Subscriptions, &m.TimeUpdated, &m.LastCheckedAt,
+		&m.CreatedAt, &m.UpdatedAt,
+	)
 	m.Enabled = enabled == 1
+	m.Tags = decodeTags(tagsJSON)
 	return m, err
 }
 
@@ -641,6 +736,28 @@ func boolInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func encodeTags(tags []string) string {
+	if len(tags) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(tags)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func decodeTags(value string) []string {
+	if value == "" {
+		return nil
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(value), &tags); err != nil {
+		return nil
+	}
+	return tags
 }
 
 func now() string {

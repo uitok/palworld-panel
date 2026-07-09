@@ -41,9 +41,33 @@ export const mapPalworldConfig = (raw: unknown): PalworldConfigResponse => {
   };
 };
 
+const mapEnumLabels = (raw: unknown): Record<string, string> | undefined => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  return Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([key, value]) => [key, String(value)]));
+};
+
+const mapFieldSchema = (raw: unknown): FieldSchema => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const field: FieldSchema = {
+    key: String(data.key || ''),
+    label: data.label ? String(data.label) : undefined,
+    group: String(data.group || ''),
+    type: String(data.type || 'string') as FieldSchema['type'],
+    default: String(data.default ?? ''),
+    enum: Array.isArray(data.enum) ? data.enum.map(String) : undefined,
+    enum_labels: mapEnumLabels(data.enum_labels),
+    min: typeof data.min === 'number' ? data.min : undefined,
+    max: typeof data.max === 'number' ? data.max : undefined,
+    requires_restart: Boolean(data.requires_restart),
+    risk: data.risk ? String(data.risk) : undefined,
+    description: String(data.description || ''),
+  };
+  return field;
+};
+
 export const mapSchema = (raw: unknown): PalworldSchemaResponse => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const fields = Array.isArray(data.fields) ? (data.fields as FieldSchema[]) : [];
+  const fields = Array.isArray(data.fields) ? data.fields.map(mapFieldSchema) : [];
   return {
     version: String(data.version || '0.7.2'),
     fields,

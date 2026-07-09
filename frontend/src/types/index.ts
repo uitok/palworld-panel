@@ -238,10 +238,12 @@ export type FieldType = 'string' | 'bool' | 'int' | 'float' | 'enum' | 'list';
 
 export interface FieldSchema {
   key: string;
+  label?: string;
   group: string;
   type: FieldType;
   default: string;
   enum?: string[];
+  enum_labels?: Record<string, string>;
   min?: number;
   max?: number;
   requires_restart: boolean;
@@ -304,8 +306,47 @@ export interface ModItem {
   path: string;
   version?: string;
   enabled: boolean;
+  workshop_id?: string;
+  preview_url?: string;
+  steam_url?: string;
+  summary?: string;
+  tags?: string[];
+  file_size?: number;
+  subscriptions?: number;
+  time_updated?: number;
+  last_checked_at?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface WorkshopItem {
+  id: string;
+  title: string;
+  summary?: string;
+  preview_url?: string;
+  steam_url: string;
+  tags: string[];
+  file_size?: number;
+  subscriptions?: number;
+  time_created?: number;
+  time_updated?: number;
+  installed: boolean;
+  enabled: boolean;
+  update_available: boolean;
+  mod_id?: string;
+}
+
+export interface WorkshopSearchResponse {
+  items: WorkshopItem[];
+  next_cursor?: string;
+  total: number;
+  page_size: number;
+}
+
+export interface WorkshopStatus {
+  configured: boolean;
+  key_source?: 'env' | 'embedded' | string;
+  app_id: string;
 }
 
 export interface BackupInfo {

@@ -135,6 +135,17 @@ export const Players: React.FC = () => {
             ]}
             activeTab={activeTab}
             onTabChange={setActiveTab}
+            headerActions={
+              <button
+                type="button"
+                onClick={load}
+                disabled={loading}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+                刷新
+              </button>
+            }
             emptyText={error ? '后端不可用或接口未实现' : '暂无玩家'}
             renderCard={(player) => (
               <PlayerCard

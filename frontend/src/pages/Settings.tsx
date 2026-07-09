@@ -11,8 +11,8 @@ const groupLabels: Record<string, string> = {
   performance: '性能',
   game_balance: '游戏平衡',
   features: '功能开关',
-  pvp: 'PvP',
-  technology: '技术限制',
+  pvp: 'PvP 对战',
+  technology: '科技限制',
 };
 
 const coerceInitialValue = (field: FieldSchema, value: unknown) => {
@@ -135,7 +135,7 @@ export const Settings: React.FC = () => {
             配置已写入，等待重启生效
           </div>
           <p className="mt-1 text-[11px] font-medium leading-relaxed text-amber-700">
-            PalWorldSettings.ini 修改后需要重启 Palworld 服务端。启动后的状态接口会清除 pending restart。
+            PalWorldSettings.ini 修改后需要重启 Palworld 服务端。启动后的状态接口会清除待重启标记。
           </p>
         </div>
       )}
@@ -143,7 +143,7 @@ export const Settings: React.FC = () => {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
           <div className="mb-4 rounded-2xl bg-slate-50 p-4">
-            <p className="text-[11px] font-semibold text-slate-400">Server Guide</p>
+            <p className="text-[11px] font-semibold text-slate-400">服务端指南</p>
             <p className="mt-1 text-sm font-bold text-slate-800">Palworld {version}</p>
             <p className="mt-2 break-all text-[10px] font-medium leading-relaxed text-slate-400">
               {path || '配置文件尚未初始化'}
@@ -247,7 +247,7 @@ export const Settings: React.FC = () => {
 
           <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4">
             <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
-              面板 API Token
+              面板 API 令牌
               <input
                 type="password"
                 value={tokenInput}
@@ -256,7 +256,7 @@ export const Settings: React.FC = () => {
               />
             </label>
             <p className="mt-2 text-[10px] font-medium text-slate-400">
-              保存设置时同步写入 localStorage.palsphere_token。
+              保存设置时同步写入本机 localStorage.palsphere_token。
             </p>
           </div>
 
@@ -284,7 +284,10 @@ const FieldControl: React.FC<{
   const commonLabel = (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <span className="break-all text-xs font-bold text-slate-700">{field.key}</span>
+        <span className="break-all text-xs font-bold text-slate-700">{field.label || field.key}</span>
+        <p className="mt-0.5 break-all font-mono text-[9px] font-semibold leading-relaxed text-slate-400">
+          {field.key}
+        </p>
         <p className="mt-0.5 text-[10px] font-medium leading-relaxed text-slate-400">{field.description}</p>
       </div>
       {field.requires_restart && (
@@ -321,7 +324,7 @@ const FieldControl: React.FC<{
         >
           {(field.enum || []).map((item) => (
             <option key={item} value={item}>
-              {item}
+              {field.enum_labels?.[item] || item}
             </option>
           ))}
         </select>

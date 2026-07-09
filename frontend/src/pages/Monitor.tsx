@@ -12,7 +12,8 @@ type ChartPoint = {
   time: string;
   players: number;
   cpu: number | null;
-  memory: number | null;
+  memoryPercent: number | null;
+  memoryGiB: number | null;
 };
 
 const formatBytes = (bytes: number) => {
@@ -32,11 +33,22 @@ const percent = (used: number, total: number) => {
   return Math.min(100, Math.max(0, (used / total) * 100));
 };
 
+const bytesToGiB = (bytes: number) => bytes / 1024 / 1024 / 1024;
+
 const formatTime = (value: string) => {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+};
+
+const chartTooltipFormatter = (value: unknown, name: unknown) => {
+  const label = String(name);
+  const numeric = Number(Array.isArray(value) ? value[0] : value);
+  if (!Number.isFinite(numeric)) return [String(value), label];
+  if (label.includes('GB')) return [`${numeric.toFixed(2)} GB`, label];
+  if (label.includes('%')) return [`${numeric.toFixed(1)}%`, label];
+  return [numeric, label];
 };
 
 export const Monitor: React.FC = () => {
@@ -80,13 +92,22 @@ export const Monitor: React.FC = () => {
           time: formatTime(sample.created_at),
           players: sample.current_players,
           cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
-          memory: sample.memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
+          memoryPercent: sample.memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
+          memoryGiB: sample.memory_available ? Number(bytesToGiB(sample.memory_usage_bytes).toFixed(2)) : null,
         };
       }),
     [history],
   );
 
   const memoryPct = snapshot ? percent(snapshot.memory_usage_bytes, snapshot.memory_limit_bytes) : null;
+  const hasMemoryPercent = chartData.some((point) => point.memoryPercent != null);
+  const hasMemoryUsage = chartData.some((point) => point.memoryGiB != null);
+  const memoryTrend =
+    snapshot?.memory_available && memoryPct != null
+      ? `${memoryPct.toFixed(1)}% of ${formatBytes(snapshot.memory_limit_bytes)}`
+      : snapshot?.memory_available
+        ? '已采集，未提供内存上限'
+        : snapshot?.unavailable_reason || '未采集';
   const diskUsedPct = snapshot
     ? percent(Math.max(0, snapshot.disk_total_bytes - snapshot.disk_free_bytes), snapshot.disk_total_bytes)
     : null;
@@ -130,7 +151,7 @@ export const Monitor: React.FC = () => {
           title="内存"
           value={snapshot?.memory_available ? formatBytes(snapshot.memory_usage_bytes) : '不可用'}
           icon={<Network size={16} />}
-          trend={memoryPct == null ? '未采集' : `${memoryPct.toFixed(1)}% of ${formatBytes(snapshot?.memory_limit_bytes || 0)}`}
+          trend={memoryTrend}
           trendType={snapshot?.memory_available ? 'neutral' : 'down'}
           color="emerald"
         />
@@ -164,10 +185,17 @@ export const Monitor: React.FC = () => {
             <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
               <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-              <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} />
-              <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-              <Area type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
-              <Area type="monotone" dataKey="memory" name="内存 (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+              <YAxis yAxisId="percent" stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+              {!hasMemoryPercent && hasMemoryUsage && (
+                <YAxis yAxisId="memory" orientation="right" stroke="#94a3b8" fontSize={10} tickLine={false} width={36} tickFormatter={(value) => `${value}G`} />
+              )}
+              <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
+              <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
+              {hasMemoryPercent ? (
+                <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+              ) : hasMemoryUsage ? (
+                <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+              ) : null}
             </AreaChart>
           ) : (
             <EmptyChart />

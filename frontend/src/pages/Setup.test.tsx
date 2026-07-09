@@ -1,3 +1,4 @@
+import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Setup } from './Setup';
@@ -61,7 +62,7 @@ describe('Setup', () => {
     render(<Setup />);
 
     expect(await screen.findByRole('button', { name: '安装 Docker 环境' })).toBeDisabled();
-    expect(screen.getByText('需要手动安装 Docker 环境')).toBeInTheDocument();
+    expect(await screen.findByText('需要手动安装 Docker 环境')).toBeInTheDocument();
     expect(screen.getByText(/ADD_CURRENT_USER_TO_DOCKER_GROUP=1/)).toBeInTheDocument();
     expect(screen.getByText(/TARGET_DOCKER_USER='palpanel'/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '复制命令' })).toBeInTheDocument();
@@ -81,6 +82,52 @@ describe('Setup', () => {
     const button = await screen.findByRole('button', { name: '安装并初始化服务端' });
     expect(button).not.toBeDisabled();
     expect(screen.queryByText('需要手动安装 Docker 环境')).not.toBeInTheDocument();
+  });
+
+  it('finishes the critical refresh in React StrictMode', async () => {
+    setupApiMock.getPrerequisites.mockResolvedValue([{ id: 'docker', label: 'Docker CLI', ok: true, required: true }]);
+    setupApiMock.getHost.mockResolvedValue(linuxHost({ dockerReady: true }));
+    setupApiMock.getDockerPlan.mockResolvedValue(linuxDockerPlan({ docker_ready: true, docker_installed: true, requires_manual: false }));
+
+    render(
+      <React.StrictMode>
+        <Setup />
+      </React.StrictMode>,
+    );
+
+    expect(await screen.findByRole('button', { name: '安装并初始化服务端' })).not.toBeDisabled();
+    expect(screen.queryByRole('button', { name: '正在检查环境' })).not.toBeInTheDocument();
+  });
+
+  it('shows running server state without waiting for Docker mirror plan', async () => {
+    serverApiMock.getStatus.mockResolvedValue({
+      ...baseStatus(),
+      status: 'running',
+      installed: true,
+      config_exists: true,
+      container: { exists: true, status: 'running' },
+      setup_step: 'ready',
+    });
+    let finishMirrorPlan: (plan: DockerMirrorPlan) => void = () => {};
+    setupApiMock.getDockerMirrorPlan.mockImplementation(() => new Promise<DockerMirrorPlan>((resolve) => {
+      finishMirrorPlan = resolve;
+    }));
+
+    render(<Setup />);
+
+    expect(await screen.findByRole('button', { name: '服务端运行中' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '正在检查环境' })).not.toBeInTheDocument();
+    finishMirrorPlan(linuxDockerMirrorPlan());
+  });
+
+  it('does not stay loading when Docker plan fails', async () => {
+    setupApiMock.getDockerPlan.mockRejectedValue(new Error('docker plan failed'));
+
+    render(<Setup />);
+
+    expect(await screen.findByRole('button', { name: '安装 Docker 环境' })).toBeDisabled();
+    expect(await screen.findByText('docker plan failed')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '正在检查环境' })).not.toBeInTheDocument();
   });
 
   it('restores a running setup job after returning to the wizard', async () => {

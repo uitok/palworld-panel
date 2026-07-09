@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"palpanel/internal/appconfig"
@@ -61,7 +62,7 @@ func TestInitializeConfigEnablesRESTForPanelOverview(t *testing.T) {
 	if settings["RESTAPIEnabled"] != "True" {
 		t.Fatalf("RESTAPIEnabled = %q", settings["RESTAPIEnabled"])
 	}
-	if settings["RESTAPIPort"] != "8212" {
+	if settings["RESTAPIPort"] != strconv.Itoa(cfg.RESTPort) {
 		t.Fatalf("RESTAPIPort = %q", settings["RESTAPIPort"])
 	}
 	if settings["AdminPassword"] != "secret-admin-password" {

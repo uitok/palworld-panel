@@ -8,7 +8,7 @@ Go/Gin backend for a Palworld dedicated-server panel. It manages a Windows editi
 cd backend
 $env:PANEL_TOKEN="replace-with-a-random-32-byte-token"
 $env:PALPANEL_REQUIRE_AUTH="true"
-$env:PALPANEL_CORS_ORIGINS="http://127.0.0.1:3000,http://localhost:3000"
+$env:PALPANEL_CORS_ORIGINS="http://127.0.0.1:63107,http://localhost:63107"
 $env:HTTP_PROXY="socks5://127.0.0.1:10808"
 $env:HTTPS_PROXY="socks5://127.0.0.1:10808"
 $env:ALL_PROXY="socks5://127.0.0.1:10808"
@@ -16,7 +16,7 @@ go test ./...
 go run ./cmd/palpanel
 ```
 
-The API listens on `:8080` by default. Runtime data is stored in the repository `data` directory unless `PALPANEL_DATA_DIR` is set. `PANEL_TOKEN` is required by default and must not be empty or `change-me`.
+The API listens on `:8080` by default. Runtime data is stored in the repository `data` directory unless `PALPANEL_DATA_DIR` is set. `PANEL_TOKEN` is required by default and must not be empty or `change-me`. If the Vite frontend is opened from a LAN address such as `http://192.168.x.x:63107`, either include that exact origin in `PALPANEL_CORS_ORIGINS` or use `PALPANEL_CORS_ORIGINS=*` for local development.
 
 ## Auth
 
@@ -49,6 +49,10 @@ The Wine runner build uses `PALPANEL_DOCKER_RUNNER_BASE_IMAGE` as its base image
 
 Startup arguments are managed separately from `PalWorldSettings.ini` through `GET/PUT /api/server/startup`.
 
+## Steam Workshop
+
+Workshop search uses a backend-only Steam Web API key. `STEAM_WEB_API_KEY` is optional and overrides the embedded default key when set; the key is never returned by API responses. `PALPANEL_WORKSHOP_APP_ID` defaults to `1623730` and is used by both Workshop search metadata and the existing SteamCMD `workshop_download_item` flow.
+
 ## Version Checks
 
 Palworld server version is represented as the Steam Build ID for AppID `2394010`, not a semantic game version. Local Build ID comes from `data/server/steamapps/appmanifest_2394010.acf`; latest Build ID comes from SteamCMD `app_info_print 2394010`.
@@ -63,7 +67,7 @@ Palworld server version is represented as the Steam Build ID for AppID `2394010`
 - Audit: `GET /api/audit-logs`
 - Player access: `GET/POST/DELETE /api/players/bans`, `GET/PUT /api/players/whitelist`, `POST /api/players/{id}/kick`
 - Palworld config: `GET /api/config/palworld`, `PUT /api/config/palworld`, `GET /api/config/palworld/schema`, `POST /api/config/palworld/validate`
-- Mods: `GET /api/mods`, `POST /api/mods/upload`, `POST /api/mods/workshop`, `POST /api/mods/{id}/enable`, `POST /api/mods/{id}/disable`, `DELETE /api/mods/{id}`
+- Mods: `GET /api/mods`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/upload`, `POST /api/mods/workshop`, `POST /api/mods/{id}/enable`, `POST /api/mods/{id}/disable`, `DELETE /api/mods/{id}`
 - PalDefender: `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
 
 ## Paths

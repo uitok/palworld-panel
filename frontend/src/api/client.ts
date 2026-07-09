@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosResponse } from 'axios';
+import { CONFIGURED_BACKEND_URL, DEFAULT_BACKEND_PORT } from '../config/defaults';
 
 interface ApiEnvelope<T = unknown> {
   ok: boolean;
@@ -16,6 +17,10 @@ interface HandleRequestOptions<R> {
 }
 
 const fallbackDelayMs = 120;
+const backendUrlStorageKey = 'palsphere_backend_url';
+const sameOriginApiBaseUrl = () => import.meta.env.VITE_API_BASE_URL || '/api';
+
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 
 const readToken = () => {
   if (typeof localStorage === 'undefined') {
@@ -23,6 +28,80 @@ const readToken = () => {
   }
   return localStorage.getItem('palsphere_token') || import.meta.env.VITE_PANEL_TOKEN || '';
 };
+
+const currentPageHostname = () => {
+  if (typeof window === 'undefined') return '';
+  return window.location.hostname;
+};
+
+const isLoopbackHost = (host: string) => loopbackHosts.has(host.toLowerCase());
+
+const withProtocol = (value: string) => (
+  value.startsWith('/') || /^[a-z][a-z\d+\-.]*:\/\//i.test(value) ? value : `http://${value}`
+);
+
+const adaptLoopbackToCurrentHost = (backendUrl: string) => {
+  const value = backendUrl.trim();
+  if (!value || value.startsWith('/')) return value;
+  const normalizedValue = withProtocol(value);
+  const pageHost = currentPageHostname();
+  if (!pageHost || isLoopbackHost(pageHost)) return normalizedValue.replace(/\/+$/, '');
+
+  try {
+    const parsed = new URL(normalizedValue);
+    if (isLoopbackHost(parsed.hostname)) {
+      parsed.hostname = pageHost;
+    }
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return normalizedValue.replace(/\/+$/, '');
+  }
+};
+
+export const defaultBackendUrl = () => {
+  if (CONFIGURED_BACKEND_URL) {
+    return adaptLoopbackToCurrentHost(CONFIGURED_BACKEND_URL);
+  }
+  const pageHost = currentPageHostname();
+  const host = pageHost && !isLoopbackHost(pageHost) ? pageHost : '127.0.0.1';
+  return `http://${host}:${DEFAULT_BACKEND_PORT}`;
+};
+
+export const readBackendUrl = () => {
+  if (typeof localStorage === 'undefined') {
+    return defaultBackendUrl();
+  }
+  const stored = localStorage.getItem(backendUrlStorageKey);
+  return stored ? adaptLoopbackToCurrentHost(stored) : defaultBackendUrl();
+};
+
+export const writeBackendUrl = (value: string) => {
+  if (typeof localStorage === 'undefined') return;
+  const nextValue = value.trim();
+  if (nextValue) {
+    localStorage.setItem(backendUrlStorageKey, nextValue);
+  } else {
+    localStorage.removeItem(backendUrlStorageKey);
+  }
+};
+
+const apiBaseUrlFor = (backendUrl: string) => {
+  const value = backendUrl.trim();
+  if (!value) return import.meta.env.VITE_API_BASE_URL || '/api';
+  const normalizedValue = withProtocol(value);
+  const withoutTrailingSlash = normalizedValue.replace(/\/+$/, '');
+  return withoutTrailingSlash.endsWith('/api') ? withoutTrailingSlash : `${withoutTrailingSlash}/api`;
+};
+
+export const currentApiBaseUrl = () => apiBaseUrlFor(readBackendUrl());
+
+interface RetryableAxiosConfig {
+  baseURL?: string;
+  url?: string;
+  headers?: unknown;
+  _palsphereProxyRetry?: boolean;
+  _palsphereUseProxyBase?: boolean;
+}
 
 export class ApiError extends Error {
   status?: number;
@@ -37,7 +116,7 @@ export class ApiError extends Error {
 }
 
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: currentApiBaseUrl(),
   timeout: 8000,
   headers: {
     'Content-Type': 'application/json',
@@ -45,11 +124,33 @@ export const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use((config) => {
+  const retryConfig = config as typeof config & RetryableAxiosConfig;
+  config.baseURL = retryConfig._palsphereUseProxyBase ? sameOriginApiBaseUrl() : currentApiBaseUrl();
   const token = readToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
+});
+
+const shouldRetryWithDevProxy = (error: AxiosError, config?: RetryableAxiosConfig) => {
+  if (!import.meta.env.DEV || !config || config._palsphereProxyRetry) return false;
+  if (error.response) return false;
+  if (!['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(String(error.code || ''))) return false;
+  const currentBase = currentApiBaseUrl();
+  const proxyBase = sameOriginApiBaseUrl();
+  return /^[a-z][a-z\d+\-.]*:\/\//i.test(currentBase) && proxyBase.startsWith('/');
+};
+
+apiClient.interceptors.response.use(undefined, async (error: AxiosError) => {
+  const config = error.config as (typeof error.config & RetryableAxiosConfig) | undefined;
+  if (!config || !shouldRetryWithDevProxy(error, config)) {
+    return Promise.reject(error);
+  }
+  config._palsphereProxyRetry = true;
+  config._palsphereUseProxyBase = true;
+  config.baseURL = sameOriginApiBaseUrl();
+  return apiClient.request(config);
 });
 
 const isAxiosResponse = (value: unknown): value is AxiosResponse => {
@@ -85,6 +186,15 @@ const apiErrorFrom = (error: unknown): ApiError => {
   const axiosError = error as AxiosError<ApiEnvelope> | undefined;
   const status = axiosError?.response?.status;
   const payload = axiosError?.response?.data;
+  if (!status && axiosError?.code === 'ERR_NETWORK') {
+    return new ApiError(`无法连接后端 ${readBackendUrl()}。请确认后端已启动、地址可从当前浏览器访问，并检查 CORS 配置。`);
+  }
+  if (!status && (axiosError?.code === 'ECONNABORTED' || axiosError?.code === 'ETIMEDOUT')) {
+    return new ApiError(`连接后端 ${readBackendUrl()} 超时。请确认后端正在响应。`);
+  }
+  if (status === 401) {
+    return new ApiError('面板 Token 无效或权限不足，请重新输入。', status, 'unauthorized');
+  }
   if (payload?.error) {
     if (typeof payload.error === 'string') {
       return new ApiError(payload.error, status);

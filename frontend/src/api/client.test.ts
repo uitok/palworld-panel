@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
-import { ApiError, handleRequest, unwrapApiData } from './client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { apiClient, ApiError, currentApiBaseUrl, defaultBackendUrl, handleRequest, unwrapApiData, writeBackendUrl } from './client';
 
 describe('api client response handling', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    window.history.replaceState({}, '', 'http://localhost:3000/');
+  });
+
   it('unwraps backend { ok, data } envelopes', () => {
     const result = unwrapApiData({ data: { ok: true, data: [{ id: 'job_1' }] }, status: 200 }, []);
     expect(result).toEqual([{ id: 'job_1' }]);
@@ -35,5 +40,56 @@ describe('api client response handling', () => {
     await expect(
       handleRequest(() => Promise.resolve({ data: { ok: false, error: { code: 'unsupported', message: '接口未实现' } }, status: 501 }), {}),
     ).rejects.toMatchObject({ message: '接口未实现', code: 'unsupported' });
+  });
+
+  it('builds API base URL from the configured backend URL', () => {
+    expect(defaultBackendUrl()).toBe('http://127.0.0.1:64217');
+    expect(currentApiBaseUrl()).toBe('http://127.0.0.1:64217/api');
+
+    writeBackendUrl('127.0.0.1:65000');
+    expect(currentApiBaseUrl()).toBe('http://127.0.0.1:65000/api');
+
+    writeBackendUrl('http://127.0.0.1:65001/api/');
+    expect(currentApiBaseUrl()).toBe('http://127.0.0.1:65001/api');
+  });
+
+  it('adapts stored loopback backend URLs when the page is opened from a LAN host', () => {
+    const locationSpy = vi.spyOn(window, 'location', 'get').mockReturnValue({
+      ...window.location,
+      hostname: '192.168.200.4',
+    } as Location);
+    writeBackendUrl('http://127.0.0.1:65000');
+
+    expect(currentApiBaseUrl()).toBe('http://192.168.200.4:65000/api');
+    locationSpy.mockRestore();
+  });
+
+  it('retries development network failures through the same-origin API proxy', async () => {
+    writeBackendUrl('http://127.0.0.1:64217');
+    const bases: string[] = [];
+
+    const response = await apiClient.get('/health', {
+      adapter: async (config) => {
+        bases.push(String(config.baseURL));
+        if (bases.length === 1) {
+          return Promise.reject(Object.assign(new Error('Network Error'), {
+            isAxiosError: true,
+            code: 'ERR_NETWORK',
+            config,
+            toJSON: () => ({}),
+          }));
+        }
+        return {
+          data: { ok: true, data: { status: 'ok' } },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+        };
+      },
+    });
+
+    expect(response.data).toEqual({ ok: true, data: { status: 'ok' } });
+    expect(bases).toEqual(['http://127.0.0.1:64217/api', '/api']);
   });
 });

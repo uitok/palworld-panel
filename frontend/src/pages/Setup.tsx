@@ -16,7 +16,7 @@ import {
   Terminal,
   Wand2,
 } from 'lucide-react';
-import { getErrorMessage } from '../api/client';
+import { getErrorMessage, readBackendUrl, writeBackendUrl } from '../api/client';
 import { setupApi } from '../api/setup';
 import { serverApi } from '../api/server';
 import { isJobDone, tasksApi } from '../api/tasks';
@@ -67,6 +67,15 @@ const recoverableSetupJobTypes = new Set([
 
 const isRecoverableSetupJob = (job: Job) => recoverableSetupJobTypes.has(job.type) && !isJobDone(job);
 
+const settledValue = <T,>(result: PromiseSettledResult<T>): T | null => (
+  result.status === 'fulfilled' ? result.value : null
+);
+
+const settledErrorMessage = (results: PromiseSettledResult<unknown>[]) => {
+  const rejected = results.find((result) => result.status === 'rejected');
+  return rejected && rejected.status === 'rejected' ? getErrorMessage(rejected.reason) : null;
+};
+
 interface NextAction {
   kind: NextActionKind;
   label: string;
@@ -102,45 +111,66 @@ export const Setup: React.FC = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [backendUrl, setBackendUrl] = useState(() => readBackendUrl());
   const mountedRef = useRef(true);
   const trackedJobIdRef = useRef<string | null>(null);
+
+  const refreshAdvanced = useCallback(async () => {
+    const results = await Promise.allSettled([
+      serverApi.getVersion(),
+      setupApi.getDockerPlan(dockerSource),
+      setupApi.getDockerMirrorPlan(dockerMirror),
+    ]);
+    if (!mountedRef.current) return;
+
+    const [versionRes, dockerPlanRes, dockerMirrorPlanRes] = results;
+    const nextVersionInfo = settledValue(versionRes);
+    const nextDockerPlan = settledValue(dockerPlanRes);
+    const nextDockerMirrorPlan = settledValue(dockerMirrorPlanRes);
+
+    if (nextVersionInfo) setVersionInfo(nextVersionInfo);
+    if (nextDockerPlan) setDockerPlan(nextDockerPlan);
+    if (nextDockerMirrorPlan) setDockerMirrorPlan(nextDockerMirrorPlan);
+
+    const advancedError = settledErrorMessage(results);
+    if (advancedError) {
+      setMessage((current) => current || advancedError);
+    }
+  }, [dockerSource, dockerMirror]);
 
   const refresh = useCallback(async () => {
     if (mountedRef.current) {
       setLoading(true);
     }
-    try {
-      const [nextStatus, checks, runtimeRes, startupRes, versionRes, hostRes, dockerPlanRes, dockerMirrorPlanRes] = await Promise.all([
-        serverApi.getStatus(),
-        setupApi.getPrerequisites(),
-        setupApi.getRuntime(),
-        setupApi.getStartup(),
-        serverApi.getVersion(),
-        setupApi.getHost(),
-        setupApi.getDockerPlan(dockerSource),
-        setupApi.getDockerMirrorPlan(dockerMirror),
-      ]);
-      if (!mountedRef.current) return;
-      setStatus(nextStatus);
-      setPrerequisites(checks);
-      setRuntime(runtimeRes.mode);
-      setStartup(startupRes);
-      setVersionInfo(versionRes);
-      setHost(hostRes);
-      setDockerPlan(dockerPlanRes);
-      setDockerMirrorPlan(dockerMirrorPlanRes);
-      setMessage(null);
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setMessage(getErrorMessage(error));
-    } finally {
-      if (mountedRef.current) {
-        setLoading(false);
-      }
-    }
-  }, [dockerSource, dockerMirror]);
+    const results = await Promise.allSettled([
+      serverApi.getStatus(),
+      setupApi.getPrerequisites(),
+      setupApi.getRuntime(),
+      setupApi.getStartup(),
+      setupApi.getHost(),
+    ]);
+    if (!mountedRef.current) return;
+
+    const [statusRes, checksRes, runtimeRes, startupRes, hostRes] = results;
+    const nextStatus = settledValue(statusRes);
+    const checks = settledValue(checksRes);
+    const nextRuntime = settledValue(runtimeRes);
+    const startupResValue = settledValue(startupRes);
+    const hostResValue = settledValue(hostRes);
+
+    if (nextStatus) setStatus(nextStatus);
+    if (checks) setPrerequisites(checks);
+    if (nextRuntime) setRuntime(nextRuntime.mode);
+    if (startupResValue) setStartup(startupResValue);
+    if (hostResValue) setHost(hostResValue);
+
+    setMessage(settledErrorMessage(results));
+    setLoading(false);
+    void refreshAdvanced();
+  }, [refreshAdvanced]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -391,6 +421,13 @@ export const Setup: React.FC = () => {
   const copyMirrorCommand = () => copyText(dockerMirrorManualCommand, 'Docker 镜像加速命令已复制');
   const copyMirrorScript = () => copyText(dockerMirrorPlan?.script || '', 'Docker 镜像加速脚本已复制');
   const downloadMirrorScript = () => downloadScript('configure-docker-mirrors.sh', dockerMirrorPlan?.script);
+  const criticalStatusMissing = !loading && (!host || !status);
+
+  const saveBackendUrlAndRefresh = async () => {
+    writeBackendUrl(backendUrl);
+    setMessage(null);
+    await refresh();
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
@@ -404,6 +441,15 @@ export const Setup: React.FC = () => {
       />
 
       <SimpleStatusStrip items={simpleStatuses} />
+
+      {criticalStatusMissing && (
+        <ConnectionIssuePanel
+          backendUrl={backendUrl}
+          message={message}
+          onBackendUrlChange={setBackendUrl}
+          onRetry={saveBackendUrlAndRefresh}
+        />
+      )}
 
       {dockerManualVisible && dockerPlan && (
         <ManualCommandPanel
@@ -599,6 +645,46 @@ const SimpleStatusStrip: React.FC<{ items: SimpleStatus[] }> = ({ items }) => (
         <p className="mt-1 min-h-8 text-xs font-medium leading-4 text-slate-400">{item.description}</p>
       </div>
     ))}
+  </section>
+);
+
+const ConnectionIssuePanel: React.FC<{
+  backendUrl: string;
+  message: string | null;
+  onBackendUrlChange: (value: string) => void;
+  onRetry: () => void;
+}> = ({ backendUrl, message, onBackendUrlChange, onRetry }) => (
+  <section className="rounded-3xl border border-rose-100 bg-rose-50 p-5 text-rose-900 shadow-sm">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div className="min-w-0 flex-1">
+        <h4 className="flex items-center gap-2 text-sm font-bold">
+          <AlertTriangle size={17} />
+          检测失败
+        </h4>
+        <p className="mt-2 text-xs font-semibold leading-5 opacity-85">
+          无法读取后端关键状态。请确认后端地址可从当前浏览器访问，再重新检测。
+        </p>
+        {message && <p className="mt-2 break-words text-[11px] font-semibold opacity-80">{message}</p>}
+        <label className="mt-4 flex max-w-xl flex-col gap-1.5 text-xs font-semibold">
+          后端地址
+          <input
+            type="text"
+            value={backendUrl}
+            onChange={(event) => onBackendUrlChange(event.target.value)}
+            placeholder="http://127.0.0.1:64217"
+            className="rounded-xl border border-rose-200 bg-white p-3 font-mono text-xs font-semibold text-slate-700 focus:border-rose-400 focus:outline-none"
+          />
+        </label>
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="flex shrink-0 items-center justify-center gap-2 rounded-xl border border-rose-200 bg-white px-4 py-3 text-xs font-bold text-rose-700 hover:bg-rose-50"
+      >
+        <RefreshCw size={14} />
+        保存并重新检测
+      </button>
+    </div>
   </section>
 );
 
@@ -1007,12 +1093,22 @@ const getNextAction = ({
   requiredSystemMissing: Prerequisite[];
   isJobRunning: boolean;
 }): NextAction => {
-  if (loading || !host || !status) {
+  if (loading) {
     return {
       kind: 'loading',
       label: '正在检查环境',
       description: '正在读取系统环境和服务端状态。',
       disabled: true,
+    };
+  }
+
+  if (!host || !status) {
+    return {
+      kind: 'blocked',
+      label: '重新检查',
+      description: '无法读取服务端关键状态，请检查后端连接后重新检查。',
+      disabled: true,
+      disabledReason: '关键状态读取失败',
     };
   }
 

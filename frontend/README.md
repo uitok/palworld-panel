@@ -13,11 +13,12 @@
 复制 `.env.development.example` 为 `.env.development`：
 
 ```env
-VITE_API_BASE_URL=/api
+VITE_DEFAULT_BACKEND_URL=http://127.0.0.1:64217
+VITE_DEV_API_PROXY_TARGET=http://127.0.0.1:64217
 VITE_PANEL_TOKEN=
 ```
 
-前端默认通过 Vite proxy 请求 `http://localhost:8080/api`。面板 token 优先读取 `localStorage.palsphere_token`，没有时使用 `VITE_PANEL_TOKEN`；两者都为空时会显示 token 输入页。
+前端开发端口固定为 `63107`。登录页会显示后端地址输入框，默认值来自 `src/config/defaults.ts` / `VITE_DEFAULT_BACKEND_URL`，当前默认是 `http://127.0.0.1:64217`。面板 token 优先读取 `localStorage.palsphere_token`，没有时使用 `VITE_PANEL_TOKEN`；两者都为空时会显示 token 输入页。
 
 ## 常用命令
 
@@ -33,9 +34,9 @@ npm run check
 
 ## 后端联调
 
-1. 在 `backend` 目录启动后端：`go run ./cmd/palpanel`
-2. 在本目录启动前端：`npm run dev -- --host 127.0.0.1`
-3. 浏览器访问 `http://127.0.0.1:3000/dashboard`
+1. 在 `backend` 目录启动后端：`PALPANEL_LISTEN_ADDR=0.0.0.0:64217 PALPANEL_CORS_ORIGINS=http://127.0.0.1:63107,http://localhost:63107 go run ./cmd/palpanel`
+2. 在本目录启动前端：`npm run dev -- --host 0.0.0.0`
+3. 浏览器访问 `http://127.0.0.1:63107/dashboard`
 4. 如需手动设置 token，在控制台执行：
 
 ```js

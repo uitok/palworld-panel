@@ -231,6 +231,7 @@ func (r Runner) DownloadWorkshop(ctx context.Context, itemID string) error {
 		"--add-host", "host.docker.internal:host-gateway",
 		"-e", "STEAM_USERNAME=" + os.Getenv("STEAM_USERNAME"),
 		"-e", "STEAM_PASSWORD=" + os.Getenv("STEAM_PASSWORD"),
+		"-e", "PALPANEL_WORKSHOP_APP_ID=" + r.cfg.WorkshopAppID,
 		"-v", volume(r.cfg.WorkshopModsDir(), "/data/workshop"),
 	}
 	args = append(args, containerProxyEnvArgs()...)

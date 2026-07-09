@@ -29,9 +29,10 @@ const mapPlayers = (raw: unknown): Player[] => {
   });
 };
 
-const mapAccessEntries = (raw: unknown): PlayerAccessEntry[] => {
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item) => {
+export const mapAccessEntries = (raw: unknown): PlayerAccessEntry[] => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const list = Array.isArray(raw) ? raw : Array.isArray(data.players) ? data.players : [];
+  return list.flatMap((item) => {
     const data = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
     const steamId = String(data.steam_id || '').trim();
     if (!steamId) return [];
@@ -65,6 +66,20 @@ export const playersApi = {
       map: mapAccessEntries,
       quiet: true,
     }),
+
+  addLocalBan: (entry: PlayerAccessEntry) =>
+    handleRequest<unknown, PlayerAccessEntry>(
+      () => apiClient.post('/players/bans', entry),
+      entry,
+      { quiet: true, fallbackOnError: false },
+    ),
+
+  deleteLocalBan: (steam_id: string) =>
+    handleRequest<unknown, { deleted: boolean }>(
+      () => apiClient.delete(`/players/bans/${encodeURIComponent(steam_id)}`),
+      { deleted: true },
+      { quiet: true, fallbackOnError: false },
+    ),
 
   banPlayer: (steam_id: string, nickname = '', reason = '') =>
     handleRequest<unknown, { player_id: string; ban?: PlayerAccessEntry }>(
