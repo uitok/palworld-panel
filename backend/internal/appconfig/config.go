@@ -10,6 +10,7 @@ import (
 )
 
 const DefaultDockerRunnerBaseImage = "scottyhardy/docker-wine:latest@sha256:477aae36af41923cfb5eefb23923b035f8010caa49eaded952316f937dd8a49b"
+const DefaultPalDefenderRESTPort = 17993
 
 var DefaultDockerRunnerBaseImageMirrorPrefixes = []string{
 	"docker.m.daocloud.io",
@@ -54,6 +55,14 @@ type Config struct {
 	PalworldRESTBaseURL          string
 	PalworldRESTUser             string
 	PalworldRESTPass             string
+	PalworldRESTReadTimeoutMS    int
+	PalDefenderRESTBaseURL       string
+	PalDefenderRESTPort          int
+	SaveIndexerEnabled           bool
+	SaveIndexerURL               string
+	SaveIndexCacheDir            string
+	SaveIndexTimeoutSeconds      int
+	PerfSlowRequestMS            int
 	RunnerDir                    string
 }
 
@@ -81,6 +90,7 @@ func Load() (Config, error) {
 	}
 
 	steamWebAPIKey, steamWebAPIKeySource := resolveSteamWebAPIKey()
+	palDefenderRESTPort := envInt("PALPANEL_PALDEFENDER_REST_PORT", DefaultPalDefenderRESTPort)
 	cfg := Config{
 		ListenAddr:                   env("PALPANEL_LISTEN_ADDR", ":8080"),
 		DataDir:                      dataDir,
@@ -113,6 +123,14 @@ func Load() (Config, error) {
 		PalworldRESTBaseURL:          env("PALWORLD_REST_BASE_URL", "http://127.0.0.1:8212/v1/api"),
 		PalworldRESTUser:             env("PALWORLD_REST_USER", "admin"),
 		PalworldRESTPass:             env("PALWORLD_ADMIN_PASSWORD", ""),
+		PalworldRESTReadTimeoutMS:    envInt("PALPANEL_PALWORLD_REST_READ_TIMEOUT_MS", 1200),
+		PalDefenderRESTBaseURL:       env("PALPANEL_PALDEFENDER_REST_BASE_URL", fmt.Sprintf("http://127.0.0.1:%d", palDefenderRESTPort)),
+		PalDefenderRESTPort:          palDefenderRESTPort,
+		SaveIndexerEnabled:           envBool("PALPANEL_SAVE_INDEXER_ENABLED", false),
+		SaveIndexerURL:               env("PALPANEL_SAVE_INDEXER_URL", "http://127.0.0.1:8090"),
+		SaveIndexCacheDir:            env("PALPANEL_SAVE_INDEX_CACHE_DIR", filepath.Join(dataDir, "save-index")),
+		SaveIndexTimeoutSeconds:      envInt("PALPANEL_SAVE_INDEX_TIMEOUT_SECONDS", 120),
+		PerfSlowRequestMS:            envInt("PALPANEL_PERF_SLOW_REQUEST_MS", 500),
 		RunnerDir:                    env("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner")),
 	}
 	if cfg.RequireAuth && isWeakToken(cfg.PanelToken) {
@@ -129,8 +147,11 @@ func Load() (Config, error) {
 }
 
 func (c Config) EnsureDirs() error {
-	dirs := []string{c.DataDir, c.ServerDir, c.WinePrefixDir, c.ToolsDir, c.SteamCMDDir, c.UploadsDir, c.BackupsDir, c.LogsDir}
+	dirs := []string{c.DataDir, c.ServerDir, c.WinePrefixDir, c.ToolsDir, c.SteamCMDDir, c.UploadsDir, c.BackupsDir, c.LogsDir, c.SaveIndexCacheDir}
 	for _, dir := range dirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -172,6 +193,20 @@ func (c Config) Win64Dir() string {
 
 func (c Config) PalDefenderDir() string {
 	return filepath.Join(c.Win64Dir(), "PalDefender")
+}
+
+func (c Config) EffectivePalDefenderRESTPort() int {
+	if c.PalDefenderRESTPort > 0 {
+		return c.PalDefenderRESTPort
+	}
+	return DefaultPalDefenderRESTPort
+}
+
+func (c Config) EffectivePalDefenderRESTBaseURL() string {
+	if baseURL := strings.TrimSpace(c.PalDefenderRESTBaseURL); baseURL != "" {
+		return strings.TrimRight(baseURL, "/")
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", c.EffectivePalDefenderRESTPort())
 }
 
 func (c Config) SteamCMDBinaryPath() string {

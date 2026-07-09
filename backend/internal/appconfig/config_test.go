@@ -42,6 +42,38 @@ func TestLoadAllowsExplicitDevNoAuth(t *testing.T) {
 	if cfg.WorkshopAppID != "1623730" {
 		t.Fatalf("WorkshopAppID = %q", cfg.WorkshopAppID)
 	}
+	if cfg.PalDefenderRESTBaseURL != "http://127.0.0.1:17993" {
+		t.Fatalf("PalDefenderRESTBaseURL = %q", cfg.PalDefenderRESTBaseURL)
+	}
+	if cfg.PalDefenderRESTPort != 17993 {
+		t.Fatalf("PalDefenderRESTPort = %d", cfg.PalDefenderRESTPort)
+	}
+}
+
+func TestLoadUsesPalDefenderRESTOverrides(t *testing.T) {
+	t.Setenv("PANEL_TOKEN", "")
+	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
+	t.Setenv("PALPANEL_PALDEFENDER_REST_BASE_URL", "http://10.0.0.4:28080/")
+	t.Setenv("PALPANEL_PALDEFENDER_REST_PORT", "28080")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PALPANEL_DATA_DIR", cwd)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.PalDefenderRESTBaseURL != "http://10.0.0.4:28080/" {
+		t.Fatalf("PalDefenderRESTBaseURL = %q", cfg.PalDefenderRESTBaseURL)
+	}
+	if cfg.EffectivePalDefenderRESTBaseURL() != "http://10.0.0.4:28080" {
+		t.Fatalf("EffectivePalDefenderRESTBaseURL = %q", cfg.EffectivePalDefenderRESTBaseURL())
+	}
+	if cfg.PalDefenderRESTPort != 28080 {
+		t.Fatalf("PalDefenderRESTPort = %d", cfg.PalDefenderRESTPort)
+	}
 }
 
 func TestLoadUsesEmbeddedSteamWebAPIKeyWhenEnvUnset(t *testing.T) {

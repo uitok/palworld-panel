@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiClient, ApiError, currentApiBaseUrl, defaultBackendUrl, handleRequest, unwrapApiData, writeBackendUrl } from './client';
+import { storageKeys } from '../config/defaults';
 
 describe('api client response handling', () => {
   beforeEach(() => {
@@ -45,9 +46,12 @@ describe('api client response handling', () => {
   it('builds API base URL from the configured backend URL', () => {
     expect(defaultBackendUrl()).toBe('http://127.0.0.1:64217');
     expect(currentApiBaseUrl()).toBe('http://127.0.0.1:64217/api');
+    expect(defaultBackendUrl(false)).toBe('');
+    expect(currentApiBaseUrl(false)).toBe('/api');
 
     writeBackendUrl('127.0.0.1:65000');
     expect(currentApiBaseUrl()).toBe('http://127.0.0.1:65000/api');
+    expect(localStorage.getItem(storageKeys.backendUrl)).toBe('127.0.0.1:65000');
 
     writeBackendUrl('http://127.0.0.1:65001/api/');
     expect(currentApiBaseUrl()).toBe('http://127.0.0.1:65001/api');
@@ -62,6 +66,14 @@ describe('api client response handling', () => {
 
     expect(currentApiBaseUrl()).toBe('http://192.168.200.4:65000/api');
     locationSpy.mockRestore();
+  });
+
+  it('migrates legacy backend URL storage once when read', () => {
+    localStorage.setItem('palsphere_backend_url', 'http://127.0.0.1:65002');
+
+    expect(currentApiBaseUrl()).toBe('http://127.0.0.1:65002/api');
+    expect(localStorage.getItem(storageKeys.backendUrl)).toBe('http://127.0.0.1:65002');
+    expect(localStorage.getItem('palsphere_backend_url')).toBeNull();
   });
 
   it('retries development network failures through the same-origin API proxy', async () => {

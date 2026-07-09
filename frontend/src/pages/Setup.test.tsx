@@ -61,7 +61,12 @@ describe('Setup', () => {
   it('shows a prominent manual Docker command on Linux without sudo', async () => {
     render(<Setup />);
 
-    expect(await screen.findByRole('button', { name: '安装 Docker 环境' })).toBeDisabled();
+    const checkButton = await screen.findByRole('button', { name: '检查 Docker 环境' });
+    expect(checkButton).not.toBeDisabled();
+    expect(setupApiMock.getDockerPlan).not.toHaveBeenCalled();
+    fireEvent.click(checkButton);
+
+    await waitFor(() => expect(setupApiMock.getDockerPlan).toHaveBeenCalled());
     expect(await screen.findByText('需要手动安装 Docker 环境')).toBeInTheDocument();
     expect(screen.getByText(/ADD_CURRENT_USER_TO_DOCKER_GROUP=1/)).toBeInTheDocument();
     expect(screen.getByText(/TARGET_DOCKER_USER='palpanel'/)).toBeInTheDocument();
@@ -125,7 +130,10 @@ describe('Setup', () => {
 
     render(<Setup />);
 
-    expect(await screen.findByRole('button', { name: '安装 Docker 环境' })).toBeDisabled();
+    const checkButton = await screen.findByRole('button', { name: '检查 Docker 环境' });
+    expect(checkButton).not.toBeDisabled();
+    fireEvent.click(checkButton);
+
     expect(await screen.findByText('docker plan failed')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '正在检查环境' })).not.toBeInTheDocument();
   });
@@ -202,8 +210,8 @@ describe('Setup', () => {
     render(<Setup />);
 
     fireEvent.click(await screen.findByRole('button', { name: /高级设置/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '配置镜像加速' })).not.toBeDisabled());
     const configureButton = screen.getByRole('button', { name: '配置镜像加速' });
-    expect(configureButton).not.toBeDisabled();
     fireEvent.click(configureButton);
 
     await waitFor(() => expect(setupApiMock.configureDockerMirrors).toHaveBeenCalled());

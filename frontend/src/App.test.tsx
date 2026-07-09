@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AppContent } from './App';
 import { ServerStoreProvider } from './store/ServerStoreProvider';
+import { storageKeys } from './config/defaults';
 
 const renderRoute = (path: string) => {
   return render(
@@ -16,7 +17,7 @@ const renderRoute = (path: string) => {
 
 describe('app routing', () => {
   beforeEach(() => {
-    localStorage.setItem('palsphere_token', 'test-token');
+    localStorage.setItem(storageKeys.token, 'test-token');
   });
 
   it('renders a configured route directly', () => {

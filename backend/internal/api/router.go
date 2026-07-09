@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -25,6 +26,7 @@ import (
 	"palpanel/internal/palconfig"
 	"palpanel/internal/paldefender"
 	"palpanel/internal/palrest"
+	"palpanel/internal/saveindex"
 	"palpanel/internal/scheduler"
 	"palpanel/internal/server"
 )
@@ -38,13 +40,17 @@ type Server struct {
 	palrest   palrest.Client
 	monitor   monitor.Manager
 	scheduler scheduler.Manager
+	saveIndex *saveindex.Manager
+	cache     *ttlCache
 }
 
 func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), cache: newTTLCache()}
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(PerformanceMiddleware(cfg))
+	r.Use(GzipMiddleware())
 	r.Use(CORSMiddleware(cfg.CORSOrigins))
 	r.GET("/api/health", s.health)
 
@@ -130,6 +136,18 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.POST("/server/save", Require(PermServerControl), s.palPost("save"))
 		api.POST("/server/shutdown", Require(PermServerControl), s.palPost("shutdown"))
 
+		api.GET("/save/index/status", s.saveIndexStatus)
+		api.POST("/save/index/rebuild", Require(PermServerControl), s.saveIndexRebuild)
+		api.GET("/players", s.listSavePlayers)
+		api.GET("/guilds", s.listSaveGuilds)
+		api.GET("/guilds/:id", s.getSaveGuild)
+		api.GET("/bases", s.listSaveBases)
+		api.GET("/bases/:id", s.getSaveBase)
+		api.GET("/bases/:id/storage", s.getSaveBaseStorage)
+		api.GET("/pals", s.listSavePals)
+		api.GET("/pals/:id", s.getSavePal)
+		api.GET("/map/entities", s.listMapEntities)
+
 		api.GET("/players/bans", s.listPlayerBans)
 		api.POST("/players/bans", Require(PermPlayersWrite), s.addPlayerBan)
 		api.DELETE("/players/bans/:steam_id", Require(PermPlayersWrite), s.deletePlayerBan)
@@ -138,11 +156,18 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.POST("/players/:id/kick", Require(PermPlayersWrite), s.kickPlayer)
 		api.POST("/players/:id/ban", Require(PermPlayersWrite), s.banPlayer)
 		api.POST("/players/:id/unban", Require(PermPlayersWrite), s.unbanPlayer)
+		api.GET("/players/:id/inventory", s.getSavePlayerInventory)
+		api.GET("/players/:id", s.getSavePlayer)
 	}
 
 	if frontendDistReady(cfg.FrontendDist) {
-		r.Static("/assets", filepath.Join(cfg.FrontendDist, "assets"))
-		r.StaticFile("/", filepath.Join(cfg.FrontendDist, "index.html"))
+		assets := r.Group("/assets")
+		assets.Use(StaticCacheControl("public, max-age=31536000, immutable"))
+		assets.Static("/", filepath.Join(cfg.FrontendDist, "assets"))
+		r.GET("/", func(c *gin.Context) {
+			c.Header("Cache-Control", "no-cache")
+			c.File(filepath.Join(cfg.FrontendDist, "index.html"))
+		})
 		favicon := filepath.Join(cfg.FrontendDist, "favicon.ico")
 		if fileExists(favicon) {
 			r.StaticFile("/favicon.ico", favicon)
@@ -152,6 +177,7 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 				fail(c, http.StatusNotFound, "not_found", "api route not found")
 				return
 			}
+			c.Header("Cache-Control", "no-cache")
 			c.File(filepath.Join(cfg.FrontendDist, "index.html"))
 		})
 	}
@@ -285,7 +311,7 @@ func (s Server) runSchedule(c *gin.Context) {
 }
 
 func (s Server) serverStatus(c *gin.Context) {
-	status, err := s.server.Status(c.Request.Context())
+	status, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "status"), 2*time.Second, s.server.Status)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "server_status_failed", err.Error())
 		return
@@ -294,7 +320,7 @@ func (s Server) serverStatus(c *gin.Context) {
 }
 
 func (s Server) serverPrerequisites(c *gin.Context) {
-	checks, err := s.server.Prerequisites(c.Request.Context())
+	checks, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "prerequisites"), 5*time.Second, s.server.Prerequisites)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "prerequisites_failed", err.Error())
 		return
@@ -303,7 +329,14 @@ func (s Server) serverPrerequisites(c *gin.Context) {
 }
 
 func (s Server) serverHost(c *gin.Context) {
-	ok(c, s.server.HostCapabilities(c.Request.Context()))
+	host, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "host"), 5*time.Second, func(ctx context.Context) (server.HostCapabilities, error) {
+		return s.server.HostCapabilities(ctx), nil
+	})
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "server_host_failed", err.Error())
+		return
+	}
+	ok(c, host)
 }
 
 func (s Server) getRuntime(c *gin.Context) {
@@ -327,11 +360,15 @@ func (s Server) putRuntime(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "runtime_write_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	ok(c, gin.H{"mode": req.Mode})
 }
 
 func (s Server) serverDockerPlan(c *gin.Context) {
-	plan, err := s.server.DockerInstallPlan(c.Request.Context(), c.DefaultQuery("source", "auto"))
+	source := c.DefaultQuery("source", "auto")
+	plan, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "docker-plan", source), 60*time.Second, func(ctx context.Context) (server.DockerInstallPlan, error) {
+		return s.server.DockerInstallPlan(ctx, source)
+	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "docker_plan_failed", err.Error())
 		return
@@ -355,11 +392,15 @@ func (s Server) serverDockerInstall(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "docker_install_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	accepted(c, j)
 }
 
 func (s Server) serverDockerMirrorsPlan(c *gin.Context) {
-	plan, err := s.server.DockerMirrorPlan(c.Request.Context(), c.DefaultQuery("mirror", "auto"))
+	mirror := c.DefaultQuery("mirror", "auto")
+	plan, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "docker-mirror-plan", mirror), 60*time.Second, func(ctx context.Context) (server.DockerMirrorPlan, error) {
+		return s.server.DockerMirrorPlan(ctx, mirror)
+	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "docker_mirror_plan_failed", err.Error())
 		return
@@ -383,6 +424,7 @@ func (s Server) serverDockerMirrorsConfigure(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "docker_mirror_configure_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	accepted(c, j)
 }
 
@@ -392,16 +434,20 @@ func (s Server) serverBootstrap(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "bootstrap_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	accepted(c, j)
 }
 
 func (s Server) serverLogs(c *gin.Context) {
 	tail, _ := strconv.Atoi(c.DefaultQuery("tail", "200"))
-	logs, err := s.server.Logs(c.Request.Context(), server.LogQuery{
+	query := server.LogQuery{
 		Tail:   tail,
 		Search: c.Query("search"),
 		Level:  c.Query("level"),
 		Since:  c.Query("since"),
+	}
+	logs, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "logs", query.Tail, query.Search, query.Level, query.Since), 2*time.Second, func(ctx context.Context) (string, error) {
+		return s.server.Logs(ctx, query)
 	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "server_logs_failed", err.Error())
@@ -411,7 +457,7 @@ func (s Server) serverLogs(c *gin.Context) {
 }
 
 func (s Server) monitorSnapshot(c *gin.Context) {
-	snapshot, err := s.monitor.Snapshot(c.Request.Context())
+	snapshot, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "monitor-snapshot"), 2*time.Second, s.monitor.Snapshot)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "monitor_snapshot_failed", err.Error())
 		return
@@ -421,7 +467,9 @@ func (s Server) monitorSnapshot(c *gin.Context) {
 
 func (s Server) monitorHistory(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "120"))
-	history, err := s.monitor.History(c.Request.Context(), limit)
+	history, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "monitor-history", limit), 5*time.Second, func(ctx context.Context) ([]db.MonitorSample, error) {
+		return s.monitor.History(ctx, limit)
+	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "monitor_history_failed", err.Error())
 		return
@@ -430,32 +478,41 @@ func (s Server) monitorHistory(c *gin.Context) {
 }
 
 func (s Server) serverMetrics(c *gin.Context) {
-	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodGet, "metrics", nil)
-	if err == nil {
-		ok(c, normalizeRESTMetrics(resp.Body))
+	metrics, status, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "metrics"), 2*time.Second, func(ctx context.Context) (gin.H, error) {
+		resp, err := s.palworldRESTRead().Do(ctx, http.MethodGet, "metrics", nil)
+		if err == nil {
+			return normalizeRESTMetrics(resp.Body), nil
+		}
+
+		metrics := gin.H{
+			"server_fps":      0,
+			"current_players": 0,
+			"max_players":     32,
+			"uptime":          0,
+			"total_pals":      0,
+			"active_bases":    0,
+			"frame_time":      0,
+			"source":          "monitor_sample",
+			"rest_healthy":    false,
+			"error":           err.Error(),
+		}
+		if samples, sampleErr := s.store.ListMonitorSamples(ctx, 1); sampleErr == nil && len(samples) > 0 {
+			sample := samples[0]
+			metrics["current_players"] = sample.CurrentPlayers
+			if sample.MaxPlayers > 0 {
+				metrics["max_players"] = sample.MaxPlayers
+			}
+			metrics["rest_healthy"] = sample.RESTHealthy
+			metrics["unavailable_reason"] = sample.UnavailableReason
+		}
+		return metrics, nil
+	})
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "server_metrics_failed", err.Error())
 		return
 	}
-
-	metrics := gin.H{
-		"server_fps":      0,
-		"current_players": 0,
-		"max_players":     32,
-		"uptime":          0,
-		"total_pals":      0,
-		"active_bases":    0,
-		"frame_time":      0,
-		"source":          "monitor_sample",
-		"rest_healthy":    false,
-		"error":           err.Error(),
-	}
-	if samples, sampleErr := s.store.ListMonitorSamples(c.Request.Context(), 1); sampleErr == nil && len(samples) > 0 {
-		sample := samples[0]
-		metrics["current_players"] = sample.CurrentPlayers
-		if sample.MaxPlayers > 0 {
-			metrics["max_players"] = sample.MaxPlayers
-		}
-		metrics["rest_healthy"] = sample.RESTHealthy
-		metrics["unavailable_reason"] = sample.UnavailableReason
+	if status == cacheStatusStale {
+		metrics["stale"] = true
 	}
 	ok(c, metrics)
 }
@@ -466,6 +523,7 @@ func (s Server) serverInstall(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "install_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	accepted(c, j)
 }
 
@@ -475,6 +533,7 @@ func (s Server) serverUpdate(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "update_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	accepted(c, j)
 }
 
@@ -484,6 +543,7 @@ func (s Server) serverUpdateIfNeeded(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "smart_update_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	accepted(c, j)
 }
 
@@ -510,6 +570,7 @@ func (s Server) serverStart(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "start_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	ok(c, gin.H{"status": "started"})
 }
 
@@ -518,6 +579,7 @@ func (s Server) serverStop(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "stop_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	ok(c, gin.H{"status": "stopped"})
 }
 
@@ -526,6 +588,7 @@ func (s Server) serverRestart(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "restart_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	ok(c, gin.H{"status": "restarted"})
 }
 
@@ -550,6 +613,7 @@ func (s Server) serverSafeRestart(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "safe_restart_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	accepted(c, j)
 }
 
@@ -559,6 +623,7 @@ func (s Server) serverForceStop(c *gin.Context) {
 		fail(c, http.StatusBadGateway, "palworld_force_stop_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	status, statusErr := s.server.Status(c.Request.Context())
 	if statusErr != nil {
 		ok(c, gin.H{"status": "stopped", "palworld": resp, "status_error": statusErr.Error()})
@@ -592,6 +657,7 @@ func (s Server) putStartup(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "startup_write_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	ok(c, gin.H{"startup": saved, "args": saved.Args(s.cfg), "issues": issues})
 }
 
@@ -600,6 +666,7 @@ func (s Server) initializeConfig(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "config_init_failed", err.Error())
 		return
 	}
+	s.invalidateServerCaches()
 	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath()})
 }
 
@@ -691,6 +758,7 @@ func (s Server) updatePalworldConfig(c *gin.Context) {
 		return
 	}
 	_ = s.server.MarkPendingRestart(c.Request.Context())
+	s.invalidateServerCaches()
 	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath(), "settings": next, "pending_restart": true, "issues": issues})
 }
 
@@ -1123,7 +1191,7 @@ func (s Server) palDefenderReloadConfig(c *gin.Context) {
 
 func (s Server) palGet(path string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodGet, path, nil)
+		resp, err := s.palworldRESTRead().Do(c.Request.Context(), http.MethodGet, path, nil)
 		if err != nil {
 			fail(c, http.StatusBadGateway, "palworld_api_failed", err.Error())
 			return

@@ -64,6 +64,27 @@ func TestBalancedPresetAndRESTToken(t *testing.T) {
 	}
 }
 
+func TestCreateRESTTokenUsesConfiguredRESTPort(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	manager.cfg.PalDefenderRESTPort = 28080
+
+	if _, err := manager.CreateRESTToken(context.Background(), "Panel", nil); err != nil {
+		t.Fatalf("CreateRESTToken returned error: %v", err)
+	}
+	b, err := os.ReadFile(manager.restConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["Port"] != float64(28080) {
+		t.Fatalf("Port = %#v", cfg["Port"])
+	}
+}
+
 func testManager(t *testing.T) (Manager, func()) {
 	t.Helper()
 	root := t.TempDir()

@@ -1,5 +1,12 @@
 import axios, { AxiosError, AxiosResponse } from 'axios';
-import { CONFIGURED_BACKEND_URL, DEFAULT_BACKEND_PORT } from '../config/defaults';
+import {
+  CONFIGURED_BACKEND_URL,
+  DEFAULT_BACKEND_PORT,
+  appEvents,
+  readAppStorage,
+  removeAppStorage,
+  writeAppStorage,
+} from '../config/defaults';
 
 interface ApiEnvelope<T = unknown> {
   ok: boolean;
@@ -17,7 +24,6 @@ interface HandleRequestOptions<R> {
 }
 
 const fallbackDelayMs = 120;
-const backendUrlStorageKey = 'palsphere_backend_url';
 const sameOriginApiBaseUrl = () => import.meta.env.VITE_API_BASE_URL || '/api';
 
 const loopbackHosts = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
@@ -26,7 +32,7 @@ const readToken = () => {
   if (typeof localStorage === 'undefined') {
     return import.meta.env.VITE_PANEL_TOKEN || '';
   }
-  return localStorage.getItem('palsphere_token') || import.meta.env.VITE_PANEL_TOKEN || '';
+  return readAppStorage('token') || import.meta.env.VITE_PANEL_TOKEN || '';
 };
 
 const currentPageHostname = () => {
@@ -58,30 +64,31 @@ const adaptLoopbackToCurrentHost = (backendUrl: string) => {
   }
 };
 
-export const defaultBackendUrl = () => {
+export const defaultBackendUrl = (isDev = import.meta.env.DEV) => {
   if (CONFIGURED_BACKEND_URL) {
     return adaptLoopbackToCurrentHost(CONFIGURED_BACKEND_URL);
   }
+  if (!isDev) return '';
   const pageHost = currentPageHostname();
   const host = pageHost && !isLoopbackHost(pageHost) ? pageHost : '127.0.0.1';
   return `http://${host}:${DEFAULT_BACKEND_PORT}`;
 };
 
-export const readBackendUrl = () => {
+export const readBackendUrl = (isDev = import.meta.env.DEV) => {
   if (typeof localStorage === 'undefined') {
-    return defaultBackendUrl();
+    return defaultBackendUrl(isDev);
   }
-  const stored = localStorage.getItem(backendUrlStorageKey);
-  return stored ? adaptLoopbackToCurrentHost(stored) : defaultBackendUrl();
+  const stored = readAppStorage('backendUrl');
+  return stored ? adaptLoopbackToCurrentHost(stored) : defaultBackendUrl(isDev);
 };
 
 export const writeBackendUrl = (value: string) => {
   if (typeof localStorage === 'undefined') return;
   const nextValue = value.trim();
   if (nextValue) {
-    localStorage.setItem(backendUrlStorageKey, nextValue);
+    writeAppStorage('backendUrl', nextValue);
   } else {
-    localStorage.removeItem(backendUrlStorageKey);
+    removeAppStorage('backendUrl');
   }
 };
 
@@ -93,14 +100,14 @@ const apiBaseUrlFor = (backendUrl: string) => {
   return withoutTrailingSlash.endsWith('/api') ? withoutTrailingSlash : `${withoutTrailingSlash}/api`;
 };
 
-export const currentApiBaseUrl = () => apiBaseUrlFor(readBackendUrl());
+export const currentApiBaseUrl = (isDev = import.meta.env.DEV) => apiBaseUrlFor(readBackendUrl(isDev));
 
 interface RetryableAxiosConfig {
   baseURL?: string;
   url?: string;
   headers?: unknown;
-  _palsphereProxyRetry?: boolean;
-  _palsphereUseProxyBase?: boolean;
+  _palpanelProxyRetry?: boolean;
+  _palpanelUseProxyBase?: boolean;
 }
 
 export class ApiError extends Error {
@@ -125,7 +132,7 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use((config) => {
   const retryConfig = config as typeof config & RetryableAxiosConfig;
-  config.baseURL = retryConfig._palsphereUseProxyBase ? sameOriginApiBaseUrl() : currentApiBaseUrl();
+  config.baseURL = retryConfig._palpanelUseProxyBase ? sameOriginApiBaseUrl() : currentApiBaseUrl();
   const token = readToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -134,7 +141,7 @@ apiClient.interceptors.request.use((config) => {
 });
 
 const shouldRetryWithDevProxy = (error: AxiosError, config?: RetryableAxiosConfig) => {
-  if (!import.meta.env.DEV || !config || config._palsphereProxyRetry) return false;
+  if (!import.meta.env.DEV || !config || config._palpanelProxyRetry) return false;
   if (error.response) return false;
   if (!['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(String(error.code || ''))) return false;
   const currentBase = currentApiBaseUrl();
@@ -147,8 +154,8 @@ apiClient.interceptors.response.use(undefined, async (error: AxiosError) => {
   if (!config || !shouldRetryWithDevProxy(error, config)) {
     return Promise.reject(error);
   }
-  config._palsphereProxyRetry = true;
-  config._palsphereUseProxyBase = true;
+  config._palpanelProxyRetry = true;
+  config._palpanelUseProxyBase = true;
   config.baseURL = sameOriginApiBaseUrl();
   return apiClient.request(config);
 });
@@ -236,7 +243,7 @@ const logFallback = (error: unknown, quiet?: boolean) => {
 
 const notifyAuthError = (error: unknown) => {
   if (getStatusCode(error) === 401 && typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('palsphere:auth-error'));
+    window.dispatchEvent(new CustomEvent(appEvents.authError));
   }
 };
 

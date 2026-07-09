@@ -1,60 +1,79 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Ban as BanIcon, LogOut, RefreshCw } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertCircle, Ban as BanIcon, Eye, LogOut, RefreshCw, X } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
 import { playersApi } from '../api/players';
+import { saveIndexApi } from '../api/saveIndex';
 import { useServerStore } from '../store/useServerStore';
 import type { Player } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { SaveIndexStatusBar } from '../components/ui/SaveIndexStatusBar';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { appConfig } from '../config/defaults';
+
+const pageSize = 50;
 
 export const Players: React.FC = () => {
   const { refreshKey } = useServerStore();
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState('all');
+  const [page, setPage] = useState(1);
   const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await playersApi.getPlayers();
-      setPlayers(Array.isArray(data) ? data : []);
-      setError(null);
-    } catch (loadError) {
-      setPlayers([]);
-      setError(getErrorMessage(loadError));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
+  const debouncedSearch = useDebouncedValue(searchText, 250);
+  const onlineFilter = activeTab === 'online' ? true : activeTab === 'offline' ? false : undefined;
 
   useEffect(() => {
-    load();
-  }, [load, refreshKey]);
+    setPage(1);
+  }, [activeTab, debouncedSearch]);
 
-  const filtered = useMemo(() => {
-    const keyword = searchText.toLowerCase();
-    return players.filter((player) => {
-      const matches = player.nickname.toLowerCase().includes(keyword) || player.steam_id.includes(keyword);
-      if (activeTab === 'online') return matches && player.is_online;
-      if (activeTab === 'offline') return matches && !player.is_online;
-      return matches;
-    });
-  }, [players, searchText, activeTab]);
+  const playersQuery = useQuery({
+    queryKey: ['players', { page, q: debouncedSearch, online: onlineFilter, refreshKey }],
+    queryFn: () =>
+      playersApi.getPlayersList({
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        q: debouncedSearch,
+        online: onlineFilter,
+      }),
+    placeholderData: (previous) => previous,
+  });
+
+  const rebuildMutation = useMutation({
+    mutationFn: saveIndexApi.rebuild,
+    onSuccess: () => {
+      setNotice('已触发存档索引重建');
+      setActionError(null);
+      void queryClient.invalidateQueries({ queryKey: ['players'] });
+    },
+    onError: (rebuildError) => {
+      setNotice(null);
+      setActionError(getErrorMessage(rebuildError));
+    },
+  });
+
+  const players = playersQuery.data?.items ?? [];
+  const indexStatus = playersQuery.data?.status ?? null;
+  const summary = playersQuery.data?.summary;
+  const loading = playersQuery.isLoading;
+  const error = actionError || (playersQuery.error ? getErrorMessage(playersQuery.error) : null);
+  const totalItems = summary?.total ?? players.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
   const runPlayerAction = async (actionKey: string, action: () => Promise<unknown>, successMessage: string) => {
     setPendingAction(actionKey);
     try {
       await action();
       setNotice(successMessage);
-      setError(null);
-      await load();
+      setActionError(null);
+      await queryClient.invalidateQueries({ queryKey: ['players'] });
     } catch (actionError) {
       setNotice(null);
-      setError(getErrorMessage(actionError));
+      setActionError(getErrorMessage(actionError));
     } finally {
       setPendingAction(null);
     }
@@ -62,20 +81,22 @@ export const Players: React.FC = () => {
 
   const kick = async (player: Player) => {
     if (!window.confirm(`踢出玩家 ${player.nickname} (${player.steam_id})？`)) return;
+    const reason = `Kicked from ${appConfig.brand} panel`;
     await runPlayerAction(
       `kick:${player.steam_id}`,
-      () => playersApi.kickPlayer(player.steam_id, 'Kicked from PalSphere panel'),
+      () => playersApi.kickPlayer(player.steam_id, reason),
       `已向官方 REST 提交踢出请求：${player.nickname}`,
     );
   };
 
   const ban = async (player: Player) => {
-    const reason = window.prompt(`请输入封禁 ${player.nickname} 的原因`, 'Banned from PalSphere panel');
+    const defaultReason = `Banned from ${appConfig.brand} panel`;
+    const reason = window.prompt(`请输入封禁 ${player.nickname} 的原因`, defaultReason);
     if (reason === null) return;
     if (!window.confirm(`确认封禁玩家 ${player.nickname} (${player.steam_id})？`)) return;
     await runPlayerAction(
       `ban:${player.steam_id}`,
-      () => playersApi.banPlayer(player.steam_id, player.nickname, reason.trim() || 'Banned from PalSphere panel'),
+      () => playersApi.banPlayer(player.steam_id, player.nickname, reason.trim() || defaultReason),
       `已向官方 REST 提交封禁请求，并写入本地封禁列表：${player.nickname}`,
     );
   };
@@ -107,13 +128,16 @@ export const Players: React.FC = () => {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Summary label="在线玩家" value={players.filter((player) => player.is_online).length} color="emerald" />
         <Summary label="离线玩家" value={players.filter((player) => !player.is_online).length} color="slate" />
-        <Summary label="玩家总数" value={players.length} color="sky" />
+        <Summary label="匹配玩家" value={totalItems} color="sky" />
       </div>
 
-      <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-3 text-xs font-semibold text-amber-800">
-        <AlertCircle className="mr-2 inline" size={14} />
-        玩家治理会调用 Palworld 官方 REST。REST 不可达或权限不足时，页面只显示失败原因，不会伪造成功。
-      </div>
+      <SaveIndexStatusBar
+        status={indexStatus}
+        loading={playersQuery.isFetching}
+        rebuilding={rebuildMutation.isPending}
+        onRefresh={() => void playersQuery.refetch()}
+        onRebuild={() => rebuildMutation.mutate()}
+      />
 
       <section className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
         {loading && players.length === 0 ? (
@@ -124,7 +148,7 @@ export const Players: React.FC = () => {
         ) : (
           <DataTable
             headers={headers}
-            data={filtered}
+            data={players}
             searchText={searchText}
             onSearchChange={setSearchText}
             searchPlaceholder="搜索玩家昵称或 SteamID"
@@ -138,20 +162,29 @@ export const Players: React.FC = () => {
             headerActions={
               <button
                 type="button"
-                onClick={load}
-                disabled={loading}
+                onClick={() => void playersQuery.refetch()}
+                disabled={playersQuery.isFetching}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
               >
-                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+                <RefreshCw size={13} className={playersQuery.isFetching ? 'animate-spin' : ''} />
                 刷新
               </button>
             }
+            pagination={{
+              currentPage: page,
+              totalPages,
+              totalItems,
+              itemsPerPage: pageSize,
+              onPageChange: setPage,
+            }}
+            virtualized
             emptyText={error ? '后端不可用或接口未实现' : '暂无玩家'}
             renderCard={(player) => (
               <PlayerCard
                 key={player.steam_id}
                 player={player}
                 pendingAction={pendingAction}
+                onDetail={() => setSelectedPlayer(player)}
                 onKick={() => kick(player)}
                 onBan={() => ban(player)}
               />
@@ -174,6 +207,7 @@ export const Players: React.FC = () => {
                   <PlayerActions
                     player={player}
                     pendingAction={pendingAction}
+                    onDetail={() => setSelectedPlayer(player)}
                     onKick={() => kick(player)}
                     onBan={() => ban(player)}
                   />
@@ -183,6 +217,7 @@ export const Players: React.FC = () => {
           />
         )}
       </section>
+      {selectedPlayer && <PlayerDetail player={selectedPlayer} onClose={() => setSelectedPlayer(null)} />}
     </div>
   );
 };
@@ -214,13 +249,23 @@ const PlayerIdentity: React.FC<{ player: Player }> = ({ player }) => (
 const PlayerActions: React.FC<{
   player: Player;
   pendingAction: string | null;
+  onDetail: () => void;
   onKick: () => void;
   onBan: () => void;
-}> = ({ player, pendingAction, onKick, onBan }) => {
+}> = ({ player, pendingAction, onDetail, onKick, onBan }) => {
   const kickPending = pendingAction === `kick:${player.steam_id}`;
   const banPending = pendingAction === `ban:${player.steam_id}`;
   return (
     <div className="flex justify-center gap-2">
+      <button
+        type="button"
+        title="查看详情"
+        onClick={onDetail}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 px-3 py-2 text-[10px] font-bold text-sky-600 hover:bg-sky-50"
+      >
+        <Eye size={12} />
+        详情
+      </button>
       <button
         type="button"
         title="踢出玩家"
@@ -248,9 +293,10 @@ const PlayerActions: React.FC<{
 const PlayerCard: React.FC<{
   player: Player;
   pendingAction: string | null;
+  onDetail: () => void;
   onKick: () => void;
   onBan: () => void;
-}> = ({ player, pendingAction, onKick, onBan }) => (
+}> = ({ player, pendingAction, onDetail, onKick, onBan }) => (
   <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
       <PlayerIdentity player={player} />
@@ -265,7 +311,60 @@ const PlayerCard: React.FC<{
       <span className="col-span-2 text-slate-400">最后在线: {player.last_online_time}</span>
     </div>
     <div className="mt-4">
-      <PlayerActions player={player} pendingAction={pendingAction} onKick={onKick} onBan={onBan} />
+      <PlayerActions player={player} pendingAction={pendingAction} onDetail={onDetail} onKick={onKick} onBan={onBan} />
     </div>
+  </div>
+);
+
+const PlayerDetail: React.FC<{ player: Player; onClose: () => void }> = ({ player, onClose }) => {
+  const inventoryEntries = Object.entries(player.inventory_summary || {});
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-slate-900/20 px-3 py-3 backdrop-blur-sm sm:px-6 sm:py-6">
+      <aside className="flex h-full w-full max-w-md flex-col rounded-2xl border border-slate-100 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold text-slate-800">{player.nickname}</p>
+            <p className="truncate font-mono text-[10px] text-slate-400">{player.steam_id || player.player_uid || '-'}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50" aria-label="关闭详情">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <Detail label="等级" value={`Lv.${player.level}`} />
+            <Detail label="状态" value={player.is_online ? '在线' : '离线'} />
+            <Detail label="公会" value={player.guild_name || '-'} />
+            <Detail label="最后在线" value={player.last_online_time || '-'} />
+            <Detail label="玩家 UID" value={player.player_uid || '-'} mono />
+            <Detail label="Steam ID" value={player.steam_id || '-'} mono />
+            <Detail label="坐标" value={`${player.x.toFixed(0)}, ${player.y.toFixed(0)}, ${player.z.toFixed(0)}`} mono />
+            <Detail label="Ping" value={player.ping == null ? '-' : `${player.ping} ms`} />
+          </div>
+          <div className="mt-5">
+            <p className="text-[11px] font-bold uppercase text-slate-400">背包摘要</p>
+            {inventoryEntries.length > 0 ? (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {inventoryEntries.map(([key, value]) => (
+                  <div key={key} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                    <p className="truncate text-[10px] font-semibold text-slate-400">{key}</p>
+                    <p className="mt-1 truncate text-xs font-bold text-slate-700">{String(value)}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs font-semibold text-slate-400">暂无背包摘要</p>
+            )}
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+};
+
+const Detail: React.FC<{ label: string; value: string; mono?: boolean }> = ({ label, value, mono = false }) => (
+  <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+    <p className="text-[10px] font-semibold text-slate-400">{label}</p>
+    <p className={`mt-1 truncate text-xs font-bold text-slate-700 ${mono ? 'font-mono' : ''}`}>{value}</p>
   </div>
 );

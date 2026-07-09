@@ -9,14 +9,24 @@ cd backend
 $env:PANEL_TOKEN="replace-with-a-random-32-byte-token"
 $env:PALPANEL_REQUIRE_AUTH="true"
 $env:PALPANEL_CORS_ORIGINS="http://127.0.0.1:63107,http://localhost:63107"
-$env:HTTP_PROXY="socks5://127.0.0.1:10808"
-$env:HTTPS_PROXY="socks5://127.0.0.1:10808"
-$env:ALL_PROXY="socks5://127.0.0.1:10808"
 go test ./...
 go run ./cmd/palpanel
 ```
 
-The API listens on `:8080` by default. Runtime data is stored in the repository `data` directory unless `PALPANEL_DATA_DIR` is set. `PANEL_TOKEN` is required by default and must not be empty or `change-me`. If the Vite frontend is opened from a LAN address such as `http://192.168.x.x:63107`, either include that exact origin in `PALPANEL_CORS_ORIGINS` or use `PALPANEL_CORS_ORIGINS=*` for local development.
+The API listens on `:8080` by default. Runtime data is stored in the repository `data` directory unless `PALPANEL_DATA_DIR` is set. `PANEL_TOKEN` is required by default and must not be empty or `change-me`. The Vite frontend port comes from `VITE_DEV_PORT` and defaults to `63107`; if it is opened from a LAN address such as `http://192.168.x.x:63107`, either include that exact origin in `PALPANEL_CORS_ORIGINS` or use `PALPANEL_CORS_ORIGINS=*` for local development.
+
+Proxy environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` are optional host-level settings. They are intentionally not enabled by default in `.env.example`.
+
+## Production Package
+
+The repository-level `scripts/package.sh` and `scripts/package.ps1` build offline packages for Linux amd64 and Windows amd64. In those packages the backend binary serves `frontend/dist` directly and the start scripts set package-local defaults:
+
+- `PALPANEL_FRONTEND_DIST=<package>/frontend/dist`
+- `PALPANEL_BACKEND_DIR=<package>/backend`
+- `PALPANEL_DATA_DIR=<package>/data`
+- `PALPANEL_RUNNER_DIR=<package>/backend/deployments/wine-runner`
+
+First startup creates `config/palpanel.env` from the example file and writes a random `PANEL_TOKEN`.
 
 ## Auth
 
@@ -40,6 +50,10 @@ Set `PALPANEL_REQUIRE_AUTH=false` only for isolated local development.
 
 Build the frontend with `npm run build`, then set `PALPANEL_FRONTEND_DIST` to the frontend `dist` directory. The backend serves the SPA from this directory and falls back to `index.html` for routes such as `/dashboard`. For reverse proxies, forward `/api/*` to the backend and serve the frontend dist with HTTPS.
 
+## Configuration Priority
+
+The backend reads process environment variables only. For source development, export variables in the shell or load `backend/.env.example` with your own tooling. For offline packages, edit `config/palpanel.env`; the start scripts load that file and then fill package-local path defaults for variables that were not set.
+
 ## Runtime Modes
 
 - `windows_steamcmd`: recommended for production Windows hosts. The backend downloads SteamCMD into `data/tools/steamcmd` when needed and installs the Windows dedicated server with `steamcmd +login anonymous +app_update 2394010 validate +quit`.
@@ -52,6 +66,38 @@ Startup arguments are managed separately from `PalWorldSettings.ini` through `GE
 ## Steam Workshop
 
 Workshop search uses a backend-only Steam Web API key. `STEAM_WEB_API_KEY` is optional and overrides the embedded default key when set; the key is never returned by API responses. `PALPANEL_WORKSHOP_APP_ID` defaults to `1623730` and is used by both Workshop search metadata and the existing SteamCMD `workshop_download_item` flow.
+
+## Performance Knobs
+
+Read-only Palworld REST calls use a short timeout so offline save pages can fall back quickly when the official REST API is unavailable:
+
+```bash
+PALPANEL_PALWORLD_REST_READ_TIMEOUT_MS=1200
+PALPANEL_PERF_SLOW_REQUEST_MS=500
+```
+
+`PALPANEL_PERF_SLOW_REQUEST_MS` controls slow-request logging. API responses also include `Server-Timing` and `X-Palpanel-Cache` headers where cached read paths are used.
+
+## Save Indexer
+
+Offline players, guilds, bases, pals, inventories, and map points come from a separate read-only save indexer. Start the sidecar from the repository root:
+
+```bash
+docker build -t palpanel-sav-cli:local ./sav-cli
+docker run --rm --network host \
+  -v "$PWD/data/server:$PWD/data/server:ro" \
+  palpanel-sav-cli:local
+```
+
+Then set:
+
+```bash
+PALPANEL_SAVE_INDEXER_ENABLED=true
+PALPANEL_SAVE_INDEXER_URL=http://127.0.0.1:8090
+PALPANEL_SAVE_INDEX_CACHE_DIR=../data/save-index
+```
+
+The sidecar is the self-developed Go `sav-cli` in `sav-cli/` and never writes back to `.sav`. It reports unsupported save containers or schema changes as `parser_incompatible`; the backend keeps the last successful cache when available and does not block other panel features.
 
 ## Version Checks
 

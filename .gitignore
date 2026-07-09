@@ -1,5 +1,6 @@
 # Runtime data
 /data/
+/dist/packages/
 
 # Backend build and local logs
 /backend/bin/

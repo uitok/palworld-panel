@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { Menu, Megaphone, RefreshCw, Save, ServerCrash } from 'lucide-react';
 import { useServerStore } from '../../store/useServerStore';
 import { getRouteMetaByPathname } from '../../routes';
+import { appConfig } from '../../config/defaults';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -38,7 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="min-w-0">
             <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase text-slate-400">
               <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-              PalSphere Admin
+              {appConfig.brand} Admin
             </span>
             <h2 className="truncate text-lg font-bold leading-tight text-slate-800 sm:text-xl">{title}</h2>
           </div>

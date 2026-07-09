@@ -109,6 +109,19 @@ func TestNewContractRoutes(t *testing.T) {
 		"GET /api/backups/:name/download",
 		"DELETE /api/backups/:name",
 		"POST /api/backups/:name/verify",
+		"GET /api/save/index/status",
+		"POST /api/save/index/rebuild",
+		"GET /api/players",
+		"GET /api/players/:id",
+		"GET /api/players/:id/inventory",
+		"GET /api/guilds",
+		"GET /api/guilds/:id",
+		"GET /api/bases",
+		"GET /api/bases/:id",
+		"GET /api/bases/:id/storage",
+		"GET /api/pals",
+		"GET /api/pals/:id",
+		"GET /api/map/entities",
 	} {
 		if !routes[want] {
 			t.Fatalf("missing route %s", want)
@@ -129,5 +142,13 @@ func TestNewContractRoutes(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("viewer docker mirror configure expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/save/index/rebuild", nil)
+	req.Header.Set("Authorization", "Bearer viewer")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer save index rebuild expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

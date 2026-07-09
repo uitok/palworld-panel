@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsApi } from '../api/settings';
 import { serverApi } from '../api/server';
 import { ServerStoreProvider } from '../store/ServerStoreProvider';
+import { storageKeys } from '../config/defaults';
 import { Settings } from './Settings';
 
 vi.mock('../api/settings', () => ({
@@ -30,7 +31,7 @@ const renderSettings = () =>
 describe('Settings page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.setItem('palsphere_token', 'test-token');
+    localStorage.setItem(storageKeys.token, 'test-token');
 
     vi.mocked(serverApi.getStatus).mockResolvedValue({
       status: 'stopped',

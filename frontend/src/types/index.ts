@@ -467,9 +467,11 @@ export interface TokenResult {
 
 export interface Player {
   id: string;
+  player_uid?: string;
   steam_id: string;
   nickname: string;
   level: number;
+  guild_id?: string;
   guild_name: string;
   is_online: boolean;
   last_online_time: string;
@@ -478,6 +480,7 @@ export interface Player {
   z: number;
   ping?: number;
   ip?: string;
+  inventory_summary?: Record<string, unknown>;
 }
 
 export interface PalSkill {
@@ -504,12 +507,20 @@ export interface WorkSuitability {
 
 export interface Pal {
   id: string;
+  instance_id?: string;
+  character_id?: string;
   name: string;
+  nickname?: string;
   level: number;
   rarity: 'Common' | 'Rare' | 'Boss';
+  owner_player_uid?: string;
   owner_nickname: string;
   owner_steam_id: string;
+  guild_id?: string;
+  container_id?: string;
   skills: PalSkill[];
+  passives?: string[];
+  raw_skills?: string[];
   work_suitability: WorkSuitability[];
   health: number;
   max_health: number;
@@ -522,6 +533,7 @@ export interface Pal {
 export interface Base {
   id: string;
   name: string;
+  guild_id?: string;
   guild_name: string;
   x: number;
   y: number;
@@ -530,6 +542,72 @@ export interface Base {
   pals_count: number;
   status: 'Safe' | 'Raid';
   online_members: string[];
+  workers?: Array<{ instance_id: string; character_id: string; nickname?: string; level?: number }>;
+  containers?: string[];
+}
+
+export interface GuildMember {
+  player_uid: string;
+  nickname: string;
+  last_online_time?: string;
+}
+
+export interface Guild {
+  id: string;
+  name: string;
+  owner_player_uid: string;
+  members: GuildMember[];
+  base_ids: string[];
+  online_member_count: number;
+}
+
+export interface SaveIndexCounts {
+  players: number;
+  guilds: number;
+  bases: number;
+  pals: number;
+  containers: number;
+  map_entities: number;
+}
+
+export interface SaveIndexStatus {
+  enabled: boolean;
+  state: 'disabled' | 'missing' | 'not_indexed' | 'ready' | 'stale' | 'error' | string;
+  stale: boolean;
+  source_path: string;
+  updated_at: string;
+  duration_ms: number;
+  error?: string;
+  warnings: string[];
+  counts: SaveIndexCounts;
+  parser?: string;
+  cache_path?: string;
+}
+
+export interface ListSummary {
+  total: number;
+  limit: number;
+  offset: number;
+  returned: number;
+  page: number;
+}
+
+export interface EntityListResponse<T> {
+  items: T[];
+  status: SaveIndexStatus;
+  summary: ListSummary;
+}
+
+export interface EntityListParams {
+  limit?: number;
+  offset?: number;
+  page?: number;
+  q?: string;
+  online?: boolean;
+  status?: string;
+  owner_player_uid?: string;
+  guild_id?: string;
+  container_id?: string;
 }
 
 export type UnsupportedActionResult = {

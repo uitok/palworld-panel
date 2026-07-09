@@ -69,7 +69,7 @@ type TokenResult struct {
 }
 
 func NewManager(cfg appconfig.Config, store *db.Store) Manager {
-	return Manager{cfg: cfg, store: store, client: &http.Client{Timeout: 60 * time.Second}, restBaseURL: "http://127.0.0.1:17993"}
+	return Manager{cfg: cfg, store: store, client: &http.Client{Timeout: 60 * time.Second}, restBaseURL: cfg.EffectivePalDefenderRESTBaseURL()}
 }
 
 func (m Manager) Releases(ctx context.Context) ([]Release, error) {
@@ -505,7 +505,8 @@ func (m Manager) restEnabled() bool {
 
 func (m Manager) enableRESTConfig() error {
 	path := m.restConfigPath()
-	cfg := map[string]any{"Enabled": true, "Port": 17993}
+	restPort := m.cfg.EffectivePalDefenderRESTPort()
+	cfg := map[string]any{"Enabled": true, "Port": restPort}
 	if fileExists(path) {
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -514,7 +515,7 @@ func (m Manager) enableRESTConfig() error {
 		_ = json.Unmarshal(b, &cfg)
 		cfg["Enabled"] = true
 		if _, ok := cfg["Port"]; !ok {
-			cfg["Port"] = 17993
+			cfg["Port"] = restPort
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

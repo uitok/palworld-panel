@@ -4,6 +4,7 @@ import { getErrorMessage } from '../api/client';
 import { serverApi } from '../api/server';
 import { settingsApi } from '../api/settings';
 import { useServerStore } from '../store/useServerStore';
+import { storageKeys } from '../config/defaults';
 import type { FieldSchema, PalworldSettings, ValidationIssue } from '../types';
 
 const groupLabels: Record<string, string> = {
@@ -256,7 +257,7 @@ export const Settings: React.FC = () => {
               />
             </label>
             <p className="mt-2 text-[10px] font-medium text-slate-400">
-              保存设置时同步写入本机 localStorage.palsphere_token。
+              保存设置时同步写入本机 localStorage.{storageKeys.token}。
             </p>
           </div>
 

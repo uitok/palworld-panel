@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { Compass, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 import { useServerStore } from '../../store/useServerStore';
 import { navGroups } from '../../routes';
+import { appConfig } from '../../config/defaults';
 
 interface SidebarProps {
   mobile?: boolean;
@@ -27,7 +28,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
             </div>
             {!collapsed && (
               <div className="min-w-0">
-                <h1 className="truncate text-[14px] font-bold leading-tight text-slate-800">PalSphere OS</h1>
+                <h1 className="truncate text-[14px] font-bold leading-tight text-slate-800">{appConfig.brand}</h1>
                 <p className="truncate text-[10px] font-medium text-slate-400">Palworld Control Panel</p>
               </div>
             )}
@@ -107,7 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
 
       <div className={`flex shrink-0 items-center border-t border-slate-100/80 pt-4 ${collapsed ? 'justify-center px-0' : 'gap-3 px-2'}`}>
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-100 bg-slate-900 text-xs font-bold text-white">
-          PS
+          {appConfig.brand.slice(0, 2).toUpperCase()}
         </div>
         {!collapsed && (
           <div className="min-w-0 flex-1">

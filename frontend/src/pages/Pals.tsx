@@ -1,11 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Hammer, HeartPulse, RefreshCw, Trash2 } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
 import { palsApi } from '../api/pals';
+import { saveIndexApi } from '../api/saveIndex';
 import { useServerStore } from '../store/useServerStore';
 import type { Pal } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { SaveIndexStatusBar } from '../components/ui/SaveIndexStatusBar';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const suitabilityText: Record<string, string> = {
   Handiwork: '手工',
@@ -21,45 +25,62 @@ const suitabilityText: Record<string, string> = {
   Medicine: '制药',
 };
 
+const pageSize = 50;
+const statusFilterByTab: Record<string, string | undefined> = {
+  all: undefined,
+  working: 'Working',
+  battling: 'Battling',
+  injured: 'Injured',
+  dead: 'Dead',
+};
+
 export const Pals: React.FC = () => {
   const { refreshKey } = useServerStore();
-  const [pals, setPals] = useState<Pal[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
   const [activeFilterTab, setActiveFilterTab] = useState('all');
+  const [page, setPage] = useState(1);
   const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchPals = async () => {
-    setLoading(true);
-    try {
-      const data = await palsApi.getPals();
-      setPals(Array.isArray(data) ? data : []);
-      setError(null);
-    } catch (loadError) {
-      setPals([]);
-      setError(getErrorMessage(loadError));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [actionError, setActionError] = useState<string | null>(null);
+  const debouncedSearch = useDebouncedValue(searchText, 250);
+  const statusFilter = statusFilterByTab[activeFilterTab];
 
   useEffect(() => {
-    fetchPals();
-  }, [refreshKey]);
+    setPage(1);
+  }, [activeFilterTab, debouncedSearch]);
 
-  const filteredPals = useMemo(() => {
-    const keyword = searchText.toLowerCase();
-    return pals.filter((pal) => {
-      const matches =
-        pal.name.toLowerCase().includes(keyword) || pal.owner_nickname.toLowerCase().includes(keyword);
-      if (activeFilterTab === 'working') return matches && pal.status === 'Working';
-      if (activeFilterTab === 'battling') return matches && pal.status === 'Battling';
-      if (activeFilterTab === 'injured') return matches && pal.status === 'Injured';
-      if (activeFilterTab === 'dead') return matches && pal.status === 'Dead';
-      return matches;
-    });
-  }, [pals, searchText, activeFilterTab]);
+  const palsQuery = useQuery({
+    queryKey: ['pals', { page, q: debouncedSearch, status: statusFilter, refreshKey }],
+    queryFn: () =>
+      palsApi.getPalsList({
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        q: debouncedSearch,
+        status: statusFilter,
+      }),
+    placeholderData: (previous) => previous,
+  });
+
+  const rebuildMutation = useMutation({
+    mutationFn: saveIndexApi.rebuild,
+    onSuccess: () => {
+      setNotice('已触发存档索引重建');
+      setActionError(null);
+      void queryClient.invalidateQueries({ queryKey: ['pals'] });
+    },
+    onError: (rebuildError) => {
+      setNotice(null);
+      setActionError(getErrorMessage(rebuildError));
+    },
+  });
+
+  const pals = palsQuery.data?.items ?? [];
+  const indexStatus = palsQuery.data?.status ?? null;
+  const summary = palsQuery.data?.summary;
+  const loading = palsQuery.isLoading;
+  const error = actionError || (palsQuery.error ? getErrorMessage(palsQuery.error) : null);
+  const totalItems = summary?.total ?? pals.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
   const unsupported = async (promise: Promise<{ message: string }>) => {
     const result = await promise;
@@ -98,9 +119,13 @@ export const Pals: React.FC = () => {
         <Summary label="死亡" value={pals.filter((pal) => pal.status === 'Dead').length} tone="rose" />
       </div>
 
-      <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-3 text-xs font-semibold text-slate-500">
-        帕鲁列表当前使用后端 `/pals` 作为可选接口；后端未提供时显示未接入空态，写操作不会模拟成功。
-      </div>
+      <SaveIndexStatusBar
+        status={indexStatus}
+        loading={palsQuery.isFetching}
+        rebuilding={rebuildMutation.isPending}
+        onRefresh={() => void palsQuery.refetch()}
+        onRebuild={() => rebuildMutation.mutate()}
+      />
 
       <section className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
         {loading && pals.length === 0 ? (
@@ -111,7 +136,7 @@ export const Pals: React.FC = () => {
         ) : (
           <DataTable
             headers={headers}
-            data={filteredPals}
+            data={pals}
             searchText={searchText}
             onSearchChange={setSearchText}
             searchPlaceholder="搜索帕鲁名称或所属玩家"
@@ -124,6 +149,14 @@ export const Pals: React.FC = () => {
             ]}
             activeTab={activeFilterTab}
             onTabChange={setActiveFilterTab}
+            pagination={{
+              currentPage: page,
+              totalPages,
+              totalItems,
+              itemsPerPage: pageSize,
+              onPageChange: setPage,
+            }}
+            virtualized
             emptyText={error ? '后端不可用或接口未实现' : '暂无帕鲁'}
             renderCard={(pal) => (
               <PalCard

@@ -1,16 +1,27 @@
 import { apiClient, handleRequest } from './client';
-import type { Pal, UnsupportedActionResult } from '../types';
+import { emptySummary, entityListQuery, mapSummary } from './entityList';
+import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
+import type { EntityListParams, EntityListResponse, Pal, UnsupportedActionResult } from '../types';
 
 const mapPal = (raw: unknown): Pal => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const location = data.location && typeof data.location === 'object' ? (data.location as Record<string, unknown>) : {};
   return {
     id: String(data.id || data.instance_id || ''),
+    instance_id: String(data.instance_id || data.id || ''),
+    character_id: String(data.character_id || ''),
     name: String(data.name || data.character_id || 'Unknown Pal'),
+    nickname: data.nickname ? String(data.nickname) : undefined,
     level: Number(data.level || 1),
     rarity: data.rarity === 'Boss' || data.rarity === 'Rare' ? data.rarity : 'Common',
+    owner_player_uid: data.owner_player_uid ? String(data.owner_player_uid) : undefined,
     owner_nickname: String(data.owner_nickname || data.owner || ''),
     owner_steam_id: String(data.owner_steam_id || ''),
+    guild_id: data.guild_id ? String(data.guild_id) : undefined,
+    container_id: data.container_id ? String(data.container_id) : undefined,
     skills: Array.isArray(data.skills) ? (data.skills as Pal['skills']) : [],
+    passives: Array.isArray(data.passives) ? data.passives.map(String) : [],
+    raw_skills: Array.isArray(data.raw_skills) ? data.raw_skills.map(String) : [],
     work_suitability: Array.isArray(data.work_suitability) ? (data.work_suitability as Pal['work_suitability']) : [],
     health: Number(data.health || 0),
     max_health: Number(data.max_health || data.health || 0),
@@ -22,21 +33,42 @@ const mapPal = (raw: unknown): Pal => {
       data.status === 'Dead'
         ? data.status
         : 'Healthy',
-    x: Number(data.x || 0),
-    y: Number(data.y || 0),
-    z: Number(data.z || 0),
+    x: Number(data.x ?? location.x ?? 0),
+    y: Number(data.y ?? location.y ?? 0),
+    z: Number(data.z ?? location.z ?? 0),
   };
 };
 
 const mapPals = (raw: unknown): Pal[] => {
-  if (!Array.isArray(raw)) return [];
-  return raw.map(mapPal);
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const list = Array.isArray(raw) ? raw : Array.isArray(data.pals) ? data.pals : [];
+  return list.map(mapPal);
+};
+
+const mapPalsList = (raw: unknown): EntityListResponse<Pal> => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const items = mapPals(raw);
+  return {
+    items,
+    status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+    summary: data.summary ? mapSummary(data.summary) : { ...emptySummary, total: items.length, returned: items.length },
+  };
 };
 
 const unsupported = (message: string): Promise<UnsupportedActionResult> =>
   Promise.resolve({ ok: false, unsupported: true, message });
 
 export const palsApi = {
+  getPalsList: (params: EntityListParams = {}) =>
+    handleRequest<unknown, EntityListResponse<Pal>>(
+      () => apiClient.get(`/pals${entityListQuery(params)}`),
+      { items: [], status: emptySaveIndexStatus, summary: emptySummary },
+      {
+        map: mapPalsList,
+        quiet: true,
+      },
+    ),
+
   getPals: () =>
     handleRequest<unknown, Pal[]>(() => apiClient.get('/pals'), [], {
       map: mapPals,

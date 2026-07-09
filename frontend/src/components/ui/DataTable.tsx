@@ -1,4 +1,5 @@
 import React from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 
 interface Header {
@@ -35,6 +36,8 @@ interface DataTableProps<T> {
   onTabChange?: (tabId: string) => void;
   headerActions?: React.ReactNode;
   emptyText?: string;
+  virtualized?: boolean;
+  estimatedRowHeight?: number;
 }
 
 export function DataTable<T>({
@@ -52,9 +55,30 @@ export function DataTable<T>({
   onTabChange,
   headerActions,
   emptyText = '暂无匹配数据',
+  virtualized = false,
+  estimatedRowHeight = 64,
 }: DataTableProps<T>) {
   const showCards = Boolean(renderCard);
   const safeData = Array.isArray(data) ? data : [];
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const useVirtualRows = virtualized && safeData.length > 80;
+  const rowVirtualizer = useVirtualizer({
+    count: safeData.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => estimatedRowHeight,
+    overscan: 10,
+    enabled: useVirtualRows,
+  });
+  const virtualRows = useVirtualRows ? rowVirtualizer.getVirtualItems() : [];
+  const topPadding = useVirtualRows && virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const bottomPadding =
+    useVirtualRows && virtualRows.length > 0
+      ? Math.max(0, rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end)
+      : 0;
+  const rowsToRender: Array<{ key: React.Key; index: number; item: T }> = useVirtualRows
+    ? virtualRows.map((row) => ({ key: row.key, index: row.index, item: safeData[row.index] }))
+    : safeData.map((item, index) => ({ key: index, index, item }));
+  const paginationPages = pagination ? visiblePages(pagination.currentPage, pagination.totalPages) : [];
 
   return (
     <div className="w-full bg-white">
@@ -114,7 +138,10 @@ export function DataTable<T>({
         </div>
       )}
 
-      <div className={showCards ? 'hidden overflow-x-auto md:block' : 'overflow-x-auto'}>
+      <div
+        ref={scrollRef}
+        className={`${showCards ? 'hidden overflow-x-auto md:block' : 'overflow-x-auto'} ${useVirtualRows ? 'max-h-[680px] overflow-y-auto' : ''}`}
+      >
         <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-slate-100/80 bg-slate-50/40">
@@ -132,7 +159,21 @@ export function DataTable<T>({
           </thead>
           <tbody className="divide-y divide-slate-100/60">
             {safeData.length > 0 ? (
-              safeData.map((item, index) => renderRow(item, index))
+              <>
+                {topPadding > 0 && (
+                  <tr aria-hidden="true">
+                    <td colSpan={headers.length} style={{ height: topPadding }} className="p-0" />
+                  </tr>
+                )}
+                {rowsToRender.map((row) => (
+                  <React.Fragment key={row.key}>{renderRow(row.item, row.index)}</React.Fragment>
+                ))}
+                {bottomPadding > 0 && (
+                  <tr aria-hidden="true">
+                    <td colSpan={headers.length} style={{ height: bottomPadding }} className="p-0" />
+                  </tr>
+                )}
+              </>
             ) : (
               <tr>
                 <td colSpan={headers.length} className="px-6 py-12 text-center text-xs font-semibold text-slate-400">
@@ -163,8 +204,7 @@ export function DataTable<T>({
               <ChevronLeft size={14} />
             </button>
 
-            {Array.from({ length: pagination.totalPages }).map((_, index) => {
-              const page = index + 1;
+            {paginationPages.map((page) => {
               const isActive = pagination.currentPage === page;
               return (
                 <button
@@ -197,3 +237,22 @@ export function DataTable<T>({
     </div>
   );
 }
+
+const visiblePages = (currentPage: number, totalPages: number) => {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+  const pages = new Set([1, totalPages, currentPage]);
+  for (const page of [currentPage - 1, currentPage + 1]) {
+    if (page > 1 && page < totalPages) pages.add(page);
+  }
+  if (currentPage <= 3) {
+    pages.add(2);
+    pages.add(3);
+  }
+  if (currentPage >= totalPages - 2) {
+    pages.add(totalPages - 1);
+    pages.add(totalPages - 2);
+  }
+  return Array.from(pages).sort((a, b) => a - b);
+};

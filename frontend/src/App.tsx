@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ServerStoreProvider } from './store/ServerStoreProvider';
 import { useServerStore } from './store/useServerStore';
 import { readBackendUrl, writeBackendUrl } from './api/client';
 import { AppLayout } from './components/layout/AppLayout';
 import { ErrorBoundary } from './components/layout/ErrorBoundary';
+import { QueryProvider } from './queryClient';
 import { appRoutes } from './routes';
+import { DEFAULT_BACKEND_PORT, appConfig } from './config/defaults';
 
 export const AppContent: React.FC = () => {
   const location = useLocation();
@@ -25,17 +27,27 @@ export const AppContent: React.FC = () => {
   }
 
   return (
-    <AppLayout>
-      <ErrorBoundary key={location.pathname}>
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          {appRoutes.map((route) => (
-            <Route key={route.id} path={route.path} element={route.element} />
-          ))}
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-      </ErrorBoundary>
-    </AppLayout>
+    <QueryProvider>
+      <AppLayout>
+        <ErrorBoundary key={location.pathname}>
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center p-12 text-xs font-semibold text-slate-400">
+                正在加载页面...
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              {appRoutes.map((route) => (
+                <Route key={route.id} path={route.path} element={route.element} />
+              ))}
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </Suspense>
+        </ErrorBoundary>
+      </AppLayout>
+    </QueryProvider>
   );
 };
 
@@ -51,7 +63,7 @@ const TokenGate: React.FC<{ authError: boolean; onSubmit: (token: string, backen
           if (token.trim()) onSubmit(token.trim(), backendUrl.trim());
         }}
       >
-        <p className="text-[11px] font-bold uppercase text-sky-500">PalSphere Admin</p>
+        <p className="text-[11px] font-bold uppercase text-sky-500">{appConfig.brand} Admin</p>
         <h1 className="mt-2 text-xl font-bold text-slate-900">输入面板访问 Token</h1>
         <p className="mt-2 text-xs font-medium leading-6 text-slate-500">
           {authError ? '当前 token 已失效或权限不足，请重新输入后继续。' : '后端已启用鉴权，请输入 PANEL_TOKEN。'}
@@ -62,7 +74,7 @@ const TokenGate: React.FC<{ authError: boolean; onSubmit: (token: string, backen
             type="text"
             value={backendUrl}
             onChange={(event) => setBackendUrl(event.target.value)}
-            placeholder="http://127.0.0.1:64217"
+            placeholder={`http://127.0.0.1:${DEFAULT_BACKEND_PORT}`}
             className="rounded-xl border border-slate-200 p-3 font-mono text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
           />
         </label>

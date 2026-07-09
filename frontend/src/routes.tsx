@@ -1,4 +1,4 @@
-import type React from 'react';
+import React from 'react';
 import {
   Activity,
   Archive,
@@ -6,6 +6,7 @@ import {
   Home,
   LayoutDashboard,
   ListTodo,
+  Network,
   Puzzle,
   Settings as SettingsIcon,
   Shield,
@@ -14,19 +15,24 @@ import {
   UserX,
   Users,
 } from 'lucide-react';
-import { Backups } from './pages/Backups';
-import { AuditLogs } from './pages/AuditLogs';
-import { BanList } from './pages/BanList';
-import { Bases } from './pages/Bases';
-import { Dashboard } from './pages/Dashboard';
-import { Mods } from './pages/Mods';
-import { Monitor } from './pages/Monitor';
-import { Pals } from './pages/Pals';
-import { Players } from './pages/Players';
-import { Security } from './pages/Security';
-import { Settings } from './pages/Settings';
-import { Setup } from './pages/Setup';
-import { TaskQueue } from './pages/TaskQueue';
+
+const lazyPage = <T extends Record<string, React.ComponentType>>(loader: () => Promise<T>, exportName: keyof T) =>
+  React.lazy(async () => ({ default: (await loader())[exportName] }));
+
+const Backups = lazyPage(() => import('./pages/Backups'), 'Backups');
+const AuditLogs = lazyPage(() => import('./pages/AuditLogs'), 'AuditLogs');
+const BanList = lazyPage(() => import('./pages/BanList'), 'BanList');
+const Bases = lazyPage(() => import('./pages/Bases'), 'Bases');
+const Dashboard = lazyPage(() => import('./pages/Dashboard'), 'Dashboard');
+const Guilds = lazyPage(() => import('./pages/Guilds'), 'Guilds');
+const Mods = lazyPage(() => import('./pages/Mods'), 'Mods');
+const Monitor = lazyPage(() => import('./pages/Monitor'), 'Monitor');
+const Pals = lazyPage(() => import('./pages/Pals'), 'Pals');
+const Players = lazyPage(() => import('./pages/Players'), 'Players');
+const Security = lazyPage(() => import('./pages/Security'), 'Security');
+const Settings = lazyPage(() => import('./pages/Settings'), 'Settings');
+const Setup = lazyPage(() => import('./pages/Setup'), 'Setup');
+const TaskQueue = lazyPage(() => import('./pages/TaskQueue'), 'TaskQueue');
 
 export interface AppRoute {
   id: string;
@@ -101,6 +107,15 @@ export const appRoutes: AppRoute[] = [
     navGroup: 'world',
     icon: <Home size={18} />,
     element: <Bases />,
+  },
+  {
+    id: 'guilds',
+    path: '/guilds',
+    title: '公会列表',
+    navLabel: '公会列表',
+    navGroup: 'world',
+    icon: <Network size={18} />,
+    element: <Guilds />,
   },
   {
     id: 'mods',

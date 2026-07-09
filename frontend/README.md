@@ -1,4 +1,4 @@
-# PalSphere 前端
+# PalPanel 前端
 
 幻兽帕鲁开服面板前端，面向同仓库 `backend` 目录中的 Go REST API。前端使用 React + Vite + React Router + Tailwind + lucide + Recharts，不引入额外 UI 框架。
 
@@ -13,12 +13,18 @@
 复制 `.env.development.example` 为 `.env.development`：
 
 ```env
-VITE_DEFAULT_BACKEND_URL=http://127.0.0.1:64217
+VITE_APP_BRAND=PalPanel
+VITE_STORAGE_PREFIX=palpanel
+VITE_DEFAULT_BACKEND_URL=
+VITE_DEFAULT_BACKEND_PORT=64217
 VITE_DEV_API_PROXY_TARGET=http://127.0.0.1:64217
+VITE_DEV_PORT=63107
 VITE_PANEL_TOKEN=
 ```
 
-前端开发端口固定为 `63107`。登录页会显示后端地址输入框，默认值来自 `src/config/defaults.ts` / `VITE_DEFAULT_BACKEND_URL`，当前默认是 `http://127.0.0.1:64217`。面板 token 优先读取 `localStorage.palsphere_token`，没有时使用 `VITE_PANEL_TOKEN`；两者都为空时会显示 token 输入页。
+前端开发端口来自 `VITE_DEV_PORT`，默认 `63107`。开发模式默认后端地址由 `VITE_DEFAULT_BACKEND_URL` 或 `VITE_DEFAULT_BACKEND_PORT` 生成；生产构建默认使用同源 `/api`，适合由后端直接托管 `frontend/dist`。
+
+品牌名来自 `VITE_APP_BRAND`，默认 `PalPanel`。本地存储 key 使用 `VITE_STORAGE_PREFIX` 生成，例如默认 token key 是 `localStorage.palpanel_token`；旧版 key 会在读取时迁移一次。`VITE_PANEL_TOKEN` 只适合本地开发预填 token。
 
 ## 常用命令
 
@@ -40,7 +46,7 @@ npm run check
 4. 如需手动设置 token，在控制台执行：
 
 ```js
-localStorage.setItem('palsphere_token', '<your-panel-token>')
+localStorage.setItem('palpanel_token', '<your-panel-token>')
 ```
 
 ## 路由

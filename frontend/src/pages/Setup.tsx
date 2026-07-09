@@ -20,6 +20,7 @@ import { getErrorMessage, readBackendUrl, writeBackendUrl } from '../api/client'
 import { setupApi } from '../api/setup';
 import { serverApi } from '../api/server';
 import { isJobDone, tasksApi } from '../api/tasks';
+import { DEFAULT_BACKEND_PORT } from '../config/defaults';
 import type {
   DockerInstallPlan,
   DockerMirrorID,
@@ -53,7 +54,15 @@ const dockerMirrorOptions: { value: DockerMirrorID; label: string }[] = [
   { value: 'free_hubfast', label: 'free.hubfast.cn' },
 ];
 
-type NextActionKind = 'install_docker' | 'bootstrap' | 'initialize_config' | 'start_server' | 'running' | 'blocked' | 'loading';
+type NextActionKind =
+  | 'check_docker'
+  | 'install_docker'
+  | 'bootstrap'
+  | 'initialize_config'
+  | 'start_server'
+  | 'running'
+  | 'blocked'
+  | 'loading';
 
 const recoverableSetupJobTypes = new Set([
   'bootstrap',
@@ -166,8 +175,7 @@ export const Setup: React.FC = () => {
 
     setMessage(settledErrorMessage(results));
     setLoading(false);
-    void refreshAdvanced();
-  }, [refreshAdvanced]);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -398,6 +406,10 @@ export const Setup: React.FC = () => {
 
   const handlePrimaryAction = async () => {
     switch (nextAction.kind) {
+      case 'check_docker':
+        setShowAdvanced(true);
+        await refreshAdvanced();
+        break;
       case 'install_docker':
         await installDocker();
         break;
@@ -481,7 +493,11 @@ export const Setup: React.FC = () => {
 
       <AdvancedSetupPanel
         open={showAdvanced}
-        onToggle={() => setShowAdvanced((value) => !value)}
+        onToggle={() => {
+          const nextOpen = !showAdvanced;
+          setShowAdvanced(nextOpen);
+          if (nextOpen) void refreshAdvanced();
+        }}
         host={host}
         runtime={runtime}
         status={status}
@@ -671,7 +687,7 @@ const ConnectionIssuePanel: React.FC<{
             type="text"
             value={backendUrl}
             onChange={(event) => onBackendUrlChange(event.target.value)}
-            placeholder="http://127.0.0.1:64217"
+            placeholder={`http://127.0.0.1:${DEFAULT_BACKEND_PORT}`}
             className="rounded-xl border border-rose-200 bg-white p-3 font-mono text-xs font-semibold text-slate-700 focus:border-rose-400 focus:outline-none"
           />
         </label>
@@ -1146,6 +1162,14 @@ const getNextAction = ({
   }
 
   if (needsDocker && !dockerReady) {
+    if (!dockerPlan) {
+      return {
+        kind: 'check_docker',
+        label: '检查 Docker 环境',
+        description: 'Docker 安装方案会在需要时单独检测，不阻塞开服向导首屏。',
+        disabled: false,
+      };
+    }
     const canAutoInstall = Boolean(dockerPlan?.supported && dockerPlan.can_auto_install);
     return {
       kind: 'install_docker',
@@ -1245,6 +1269,7 @@ const primaryActionIcon = (kind: NextActionKind) => {
       return <Play size={18} />;
     case 'running':
       return <CheckCircle2 size={18} />;
+    case 'check_docker':
     case 'install_docker':
     case 'bootstrap':
     case 'initialize_config':

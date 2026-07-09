@@ -1,42 +1,62 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Copy, MapPin, ShieldAlert, Sparkles, Users } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
 import { basesApi } from '../api/bases';
+import { saveIndexApi } from '../api/saveIndex';
 import { useServerStore } from '../store/useServerStore';
 import type { Base } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { SaveIndexStatusBar } from '../components/ui/SaveIndexStatusBar';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+
+const pageSize = 50;
 
 export const Bases: React.FC = () => {
   const { refreshKey } = useServerStore();
-  const [bases, setBases] = useState<Base[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
+  const [page, setPage] = useState(1);
   const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchBases = async () => {
-    setLoading(true);
-    try {
-      const data = await basesApi.getBases();
-      setBases(Array.isArray(data) ? data : []);
-      setError(null);
-    } catch (loadError) {
-      setBases([]);
-      setError(getErrorMessage(loadError));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [actionError, setActionError] = useState<string | null>(null);
+  const debouncedSearch = useDebouncedValue(searchText, 250);
 
   useEffect(() => {
-    fetchBases();
-  }, [refreshKey]);
+    setPage(1);
+  }, [debouncedSearch]);
 
-  const filteredBases = useMemo(() => {
-    const keyword = searchText.toLowerCase();
-    return bases.filter((base) => base.name.toLowerCase().includes(keyword) || base.guild_name.toLowerCase().includes(keyword));
-  }, [bases, searchText]);
+  const basesQuery = useQuery({
+    queryKey: ['bases', { page, q: debouncedSearch, refreshKey }],
+    queryFn: () =>
+      basesApi.getBasesList({
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        q: debouncedSearch,
+      }),
+    placeholderData: (previous) => previous,
+  });
+
+  const rebuildMutation = useMutation({
+    mutationFn: saveIndexApi.rebuild,
+    onSuccess: () => {
+      setNotice('已触发存档索引重建');
+      setActionError(null);
+      void queryClient.invalidateQueries({ queryKey: ['bases'] });
+    },
+    onError: (rebuildError) => {
+      setNotice(null);
+      setActionError(getErrorMessage(rebuildError));
+    },
+  });
+
+  const bases = basesQuery.data?.items ?? [];
+  const indexStatus = basesQuery.data?.status ?? null;
+  const summary = basesQuery.data?.summary;
+  const loading = basesQuery.isLoading;
+  const error = actionError || (basesQuery.error ? getErrorMessage(basesQuery.error) : null);
+  const totalItems = summary?.total ?? bases.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
   const unsupported = async (promise: Promise<{ message: string }>) => {
     const result = await promise;
@@ -80,9 +100,13 @@ export const Bases: React.FC = () => {
         <Summary icon={<Users size={18} />} label="总建筑数" value={`${bases.reduce((acc, base) => acc + base.structures_count, 0)} 件`} />
       </div>
 
-      <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-3 text-xs font-semibold text-slate-500">
-        基地列表当前使用后端 `/bases` 作为可选接口；后端未提供时显示未接入空态，清理和单基地备份不会模拟成功。
-      </div>
+      <SaveIndexStatusBar
+        status={indexStatus}
+        loading={basesQuery.isFetching}
+        rebuilding={rebuildMutation.isPending}
+        onRefresh={() => void basesQuery.refetch()}
+        onRebuild={() => rebuildMutation.mutate()}
+      />
 
       <section className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
         {loading && bases.length === 0 ? (
@@ -93,10 +117,18 @@ export const Bases: React.FC = () => {
         ) : (
           <DataTable
             headers={headers}
-            data={filteredBases}
+            data={bases}
             searchText={searchText}
             onSearchChange={setSearchText}
             searchPlaceholder="搜索基地名称或所属公会"
+            pagination={{
+              currentPage: page,
+              totalPages,
+              totalItems,
+              itemsPerPage: pageSize,
+              onPageChange: setPage,
+            }}
+            virtualized
             emptyText={error ? '后端不可用或接口未实现' : '暂无基地'}
             renderCard={(base) => (
               <BaseCard

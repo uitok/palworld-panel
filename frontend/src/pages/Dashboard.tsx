@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Activity, Bell, Clock, Cpu, Home, Play, RefreshCw, Square, Sword, Terminal, Users, Zap } from 'lucide-react';
 import {
   Area,
@@ -17,6 +18,7 @@ import { emptyLogs, serverApi } from '../api/server';
 import { useServerStore } from '../store/useServerStore';
 import { StatCard } from '../components/ui/StatCard';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 type ChartPoint = {
   time: string;
@@ -65,59 +67,82 @@ const chartTooltipFormatter = (value: unknown, name: unknown) => {
 };
 
 export const Dashboard: React.FC = () => {
-  const { status, setStatus, metrics, setMetrics, autoRefresh, refreshKey, triggerRefresh } = useServerStore();
-  const [logs, setLogs] = useState('');
+  const { status: cachedStatus, setStatus, metrics: cachedMetrics, setMetrics, autoRefresh, refreshKey, triggerRefresh } = useServerStore();
   const [logSearch, setLogSearch] = useState('');
   const [logLevel, setLogLevel] = useState('');
-  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
-  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const debouncedLogSearch = useDebouncedValue(logSearch, 300);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [statusRes, monitorHistory] = await Promise.all([serverApi.getStatus(), monitorApi.history(48)]);
-      setStatus(statusRes);
-      setChartData(
-        monitorHistory.map((sample) => {
-          const memoryPct = percent(sample.memory_usage_bytes, sample.memory_limit_bytes);
-          return {
-            time: formatTime(sample.created_at),
-            players: sample.current_players,
-            cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
-            memoryPercent: sample.memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
-            memoryGiB: sample.memory_available ? Number(bytesToGiB(sample.memory_usage_bytes).toFixed(2)) : null,
-          };
-        }),
-      );
+  const statusQuery = useQuery({
+    queryKey: ['dashboard-status', refreshKey],
+    queryFn: serverApi.getStatus,
+    refetchInterval: autoRefresh ? 5000 : false,
+    placeholderData: (previous) => previous,
+  });
 
-      if (statusRes.status !== 'running') {
-        setMetrics(stoppedMetrics);
-        setLogs(emptyLogs);
-        setNotice(null);
-        return;
-      }
+  const status = statusQuery.data ?? cachedStatus;
+  const metricsQuery = useQuery({
+    queryKey: ['dashboard-metrics', refreshKey],
+    queryFn: serverApi.getMetrics,
+    enabled: status?.status === 'running',
+    refetchInterval: autoRefresh && status?.status === 'running' ? 5000 : false,
+    placeholderData: (previous) => previous,
+  });
 
-      const [metricsRes, logsRes] = await Promise.all([serverApi.getMetrics(), serverApi.getLogs(80, logSearch, logLevel)]);
-      setMetrics(metricsRes);
-      setLogs(logsRes.logs);
-      setNotice(null);
-    } catch (error) {
-      setNotice(getErrorMessage(error));
-      setLogs('');
-    } finally {
-      setLoading(false);
+  const historyQuery = useQuery({
+    queryKey: ['dashboard-history', 48, refreshKey],
+    queryFn: () => monitorApi.history(48),
+    placeholderData: (previous) => previous,
+  });
+
+  const logsQuery = useQuery({
+    queryKey: ['dashboard-logs', 80, debouncedLogSearch, logLevel, refreshKey],
+    queryFn: () => serverApi.getLogs(80, debouncedLogSearch, logLevel),
+    enabled: status?.status === 'running',
+    placeholderData: (previous) => previous,
+  });
+
+  useEffect(() => {
+    if (!statusQuery.data) return;
+    setStatus(statusQuery.data);
+    if (statusQuery.data.status !== 'running') {
+      setMetrics(stoppedMetrics);
     }
-  }, [logLevel, logSearch, setMetrics, setStatus]);
+  }, [setMetrics, setStatus, statusQuery.data]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData, refreshKey]);
+    if (metricsQuery.data) setMetrics(metricsQuery.data);
+  }, [metricsQuery.data, setMetrics]);
 
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = window.setInterval(fetchData, 5000);
-    return () => window.clearInterval(interval);
-  }, [autoRefresh, fetchData]);
+  const chartData = useMemo<ChartPoint[]>(() => {
+    return (historyQuery.data ?? []).map((sample) => {
+      const memoryPct = percent(sample.memory_usage_bytes, sample.memory_limit_bytes);
+      return {
+        time: formatTime(sample.created_at),
+        players: sample.current_players,
+        cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
+        memoryPercent: sample.memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
+        memoryGiB: sample.memory_available ? Number(bytesToGiB(sample.memory_usage_bytes).toFixed(2)) : null,
+      };
+    });
+  }, [historyQuery.data]);
+
+  const metrics = status?.status === 'running' ? (metricsQuery.data ?? cachedMetrics) : stoppedMetrics;
+  const logs = status?.status === 'running' ? (logsQuery.data?.logs ?? '') : emptyLogs;
+  const loading = statusQuery.isLoading && !status;
+  const queryNotice =
+    notice ||
+    (statusQuery.error
+      ? getErrorMessage(statusQuery.error)
+      : metricsQuery.error
+        ? getErrorMessage(metricsQuery.error)
+        : logsQuery.error
+          ? getErrorMessage(logsQuery.error)
+          : null);
+
+  const refreshDashboard = async () => {
+    await Promise.all([statusQuery.refetch(), metricsQuery.refetch(), historyQuery.refetch(), logsQuery.refetch()]);
+  };
 
   const control = async (action: 'start' | 'stop' | 'forceStop') => {
     const text =
@@ -128,7 +153,6 @@ export const Dashboard: React.FC = () => {
           : '停止服务器？请确认在线玩家已经收到通知。';
     if (!window.confirm(text)) return;
     try {
-      setLoading(true);
       if (action === 'start') await serverApi.start();
       if (action === 'stop') await serverApi.stop();
       if (action === 'forceStop') await serverApi.forceStop();
@@ -136,7 +160,6 @@ export const Dashboard: React.FC = () => {
       triggerRefresh();
     } catch (error) {
       setNotice(getErrorMessage(error));
-      setLoading(false);
     }
   };
 
@@ -169,9 +192,9 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
-      {notice && (
+      {queryNotice && (
         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">
-          {notice}
+          {queryNotice}
         </div>
       )}
 
@@ -297,7 +320,7 @@ export const Dashboard: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={fetchData}
+            onClick={() => void refreshDashboard()}
             className="flex items-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-100"
           >
             <RefreshCw size={10} />
@@ -324,7 +347,7 @@ export const Dashboard: React.FC = () => {
           </select>
         </div>
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] leading-relaxed text-emerald-300">
-          {logs || (notice ? '后端不可用或接口未实现' : '暂无日志')}
+          {logs || (queryNotice ? '后端不可用或接口未实现' : '暂无日志')}
         </pre>
       </section>
     </div>

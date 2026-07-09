@@ -1,5 +1,7 @@
 import { apiClient, handleRequest } from './client';
-import type { Player, PlayerAccessEntry, UnsupportedActionResult } from '../types';
+import { emptySummary, entityListQuery, mapSummary } from './entityList';
+import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
+import type { EntityListParams, EntityListResponse, Player, PlayerAccessEntry, UnsupportedActionResult } from '../types';
 
 const mapPlayers = (raw: unknown): Player[] => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -8,14 +10,17 @@ const mapPlayers = (raw: unknown): Player[] => {
 
   return list.flatMap((item) => {
     const player = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
-    const steamId = String(player.userId || player.steam_id || player.playerId || '').trim();
-    if (!steamId) return [];
+    const steamId = String(player.userId || player.steam_id || player.playerId || player.player_uid || '').trim();
+    const playerUid = String(player.player_uid || '').trim();
+    if (!steamId && !playerUid) return [];
     return [
       {
-        id: steamId,
+        id: steamId || playerUid,
         steam_id: steamId,
+        player_uid: playerUid,
         nickname: String(player.name || player.nickname || player.playerName || '未知玩家'),
         level: Number(player.level || 0),
+        guild_id: String(player.guild_id || ''),
         guild_name: String(player.guild_name || player.guild || '未知公会'),
         is_online: player.is_online == null ? true : Boolean(player.is_online),
         last_online_time: String(player.last_online_time || ''),
@@ -24,9 +29,23 @@ const mapPlayers = (raw: unknown): Player[] => {
         z: Number(player.location_z || player.z || 0),
         ping: player.ping ? Number(player.ping) : undefined,
         ip: player.ip ? String(player.ip) : undefined,
+        inventory_summary:
+          player.inventory_summary && typeof player.inventory_summary === 'object'
+            ? (player.inventory_summary as Record<string, unknown>)
+            : undefined,
       },
     ];
   });
+};
+
+const mapPlayersList = (raw: unknown): EntityListResponse<Player> => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const items = mapPlayers(raw);
+  return {
+    items,
+    status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+    summary: data.summary ? mapSummary(data.summary) : { ...emptySummary, total: items.length, returned: items.length },
+  };
 };
 
 export const mapAccessEntries = (raw: unknown): PlayerAccessEntry[] => {
@@ -49,8 +68,18 @@ export const mapAccessEntries = (raw: unknown): PlayerAccessEntry[] => {
 };
 
 export const playersApi = {
+  getPlayersList: (params: EntityListParams = {}) =>
+    handleRequest<unknown, EntityListResponse<Player>>(
+      () => apiClient.get(`/players${entityListQuery(params)}`),
+      { items: [], status: emptySaveIndexStatus, summary: emptySummary },
+      {
+        map: mapPlayersList,
+        quiet: true,
+      },
+    ),
+
   getPlayers: () =>
-    handleRequest<unknown, Player[]>(() => apiClient.get('/server/players'), [], {
+    handleRequest<unknown, Player[]>(() => apiClient.get('/players'), [], {
       map: mapPlayers,
       quiet: true,
     }),
