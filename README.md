@@ -187,6 +187,11 @@ scripts/package.sh --version v1.0.0 --targets linux-amd64 --clean
 
 目前没有 Authenticode 证书，因此 `v1.0.0` Release 不上传未签名的 EXE 或 ZIP。源码和 CI 可以继续演进，正式 Windows 资产会在签名链路准备好后发布。
 
+## 群交流
+<p align="center">
+  <img src="docs/images/2.jpg" width="220" alt="PalPanel QQ交流群二维码">
+</p>
+
 ## 许可证
 
 `sav-cli` 及其 vendored gooz 源码按 GPL-3.0-or-later 分发，对应源码包随 Release 提供。后端和前端维持仓库现有的许可状态，完整第三方清单见 [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt)。
