@@ -174,3 +174,34 @@ func TestBuildImageDoesNotRetryDockerfileSyntaxError(t *testing.T) {
 		t.Fatalf("expected one build attempt for non-pull error, got %d:\n%s", lines, string(body))
 	}
 }
+
+func TestStartMountsPersistentLogsAndBoundsDockerLogs(t *testing.T) {
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + shellQuote(commandLog) + "\n" +
+		"if [ \"$1\" = inspect ]; then echo 'No such object' >&2; exit 1; fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{
+		DockerBinary: fakeDocker, DockerImage: "image", DockerContainer: "container",
+		ServerDir: filepath.Join(root, "server"), WinePrefixDir: filepath.Join(root, "wineprefix"), LogsDir: filepath.Join(root, "logs"),
+		GamePort: 8211, QueryPort: 27015, RESTPort: 8212,
+	}
+	if err := NewRunner(cfg).StartWithArgs(t.Context(), []string{"-port=8211", "-log"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := string(body)
+	for _, expected := range []string{"max-size=20m", "max-file=5", cfg.LogsDir + ":/data/logs", "-log"} {
+		if !strings.Contains(command, expected) {
+			t.Errorf("Docker start command missing %q:\n%s", expected, command)
+		}
+	}
+}

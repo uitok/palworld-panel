@@ -1,11 +1,12 @@
 import { createContext } from 'react';
-import type { Job, ServerMetrics, ServerStatus } from '../types';
+import type { Job, ServerMetrics, ServerStatus, SessionInfo } from '../types';
 
 export interface ServerStoreContextType {
   panelToken: string;
   setPanelToken: (token: string) => void;
   authError: boolean;
   clearAuthError: () => void;
+  session: SessionInfo | null;
   autoRefresh: boolean;
   setAutoRefresh: (auto: boolean) => void;
   refreshKey: number;

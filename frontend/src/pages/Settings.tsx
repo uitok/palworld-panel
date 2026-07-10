@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Info, RefreshCw, Save, Shield } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, KeyRound, Languages, Plus, RefreshCw, Save, Shield } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
+import { aiTranslationApi } from '../api/aiTranslation';
 import { serverApi } from '../api/server';
 import { settingsApi } from '../api/settings';
 import { useServerStore } from '../store/useServerStore';
 import { storageKeys } from '../config/defaults';
-import type { FieldSchema, PalworldSettings, ValidationIssue } from '../types';
+import type { AITranslationConfig, AITranslationConfigUpdate, FieldSchema, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
 
 const groupLabels: Record<string, string> = {
   server_management: '服务器管理',
@@ -17,34 +18,49 @@ const groupLabels: Record<string, string> = {
 };
 
 const coerceInitialValue = (field: FieldSchema, value: unknown) => {
-  const raw = value ?? field.default ?? '';
+  const raw = value ?? field.default;
+  if (raw === undefined) return undefined;
   if (field.type === 'bool') {
     return String(raw).toLowerCase() === 'true';
   }
   if (field.type === 'int' || field.type === 'float') {
     const number = Number(raw);
-    return Number.isFinite(number) ? number : Number(field.default || 0);
+    return Number.isFinite(number) ? number : undefined;
   }
   return String(raw);
 };
 
 export const Settings: React.FC = () => {
-  const { panelToken, setPanelToken, triggerRefresh } = useServerStore();
+  const { panelToken, setPanelToken, triggerRefresh, session } = useServerStore();
   const [fields, setFields] = useState<FieldSchema[]>([]);
   const [draft, setDraft] = useState<PalworldSettings>({});
   const [path, setPath] = useState('');
-  const [version, setVersion] = useState('0.7.2');
+  const [version, setVersion] = useState('1.0.0');
+  const [versionInfo, setVersionInfo] = useState<ServerVersionInfo | null>(null);
+  const [originalKeys, setOriginalKeys] = useState<Set<string>>(new Set());
+  const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [activeGroup, setActiveGroup] = useState('server_management');
   const [tokenInput, setTokenInput] = useState(panelToken);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const [aiConfig, setAIConfig] = useState<AITranslationConfig | null>(null);
+  const [aiBaseURL, setAIBaseURL] = useState('');
+  const [aiModel, setAIModel] = useState('');
+  const [aiAPIKey, setAIAPIKey] = useState('');
+  const [clearAIAPIKey, setClearAIAPIKey] = useState(false);
+  const [aiBusy, setAIBusy] = useState(false);
+  const canConfigureAI = Boolean(session?.permissions.includes('ai:config'));
 
   const load = async () => {
     setLoading(true);
     try {
-      const [schema, status] = await Promise.all([settingsApi.getSchema(), serverApi.getStatus()]);
+      const [schema, status, serverVersion] = await Promise.all([
+        settingsApi.getSchema(),
+        serverApi.getStatus(),
+        serverApi.getVersion(),
+      ]);
       const config = status.config_exists
         ? await settingsApi.getSettings()
         : { settings: {}, path: status.settings_path || '', pending_restart: status.pending_restart, issues: [] };
@@ -57,7 +73,10 @@ export const Settings: React.FC = () => {
       });
       setFields(schema.fields);
       setVersion(schema.version);
+      setVersionInfo(serverVersion);
       setDraft(nextDraft);
+      setOriginalKeys(new Set(Object.keys(config.settings)));
+      setDirtyKeys(new Set());
       setPath(config.path);
       setIssues(config.issues || []);
       setPendingRestart(config.pending_restart);
@@ -76,6 +95,26 @@ export const Settings: React.FC = () => {
     load();
   }, []);
 
+  useEffect(() => {
+    if (!canConfigureAI) return;
+    let active = true;
+    void aiTranslationApi.getConfig()
+      .then((config) => {
+        if (!active) return;
+        setAIConfig(config);
+        setAIBaseURL(config.base_url);
+        setAIModel(config.model);
+        setAIAPIKey('');
+        setClearAIAPIKey(false);
+      })
+      .catch((error) => {
+        if (active) setMessage(getErrorMessage(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [canConfigureAI]);
+
   const groups = useMemo(() => {
     const ids = Array.from(new Set(fields.map((field) => field.group)));
     return ids.map((id) => ({ id, label: groupLabels[id] || id, fields: fields.filter((field) => field.group === id) }));
@@ -87,10 +126,18 @@ export const Settings: React.FC = () => {
 
   const updateField = (key: string, value: string | number | boolean) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
+    setDirtyKeys((prev) => new Set(prev).add(key));
   };
 
+  const submission = () =>
+    Object.fromEntries(
+      Object.entries(draft).filter(
+        ([key, value]) => value !== undefined && (originalKeys.has(key) || dirtyKeys.has(key)),
+      ),
+    ) as PalworldSettings;
+
   const validate = async () => {
-    const result = await settingsApi.validateSettings(draft);
+    const result = await settingsApi.validateSettings(submission());
     setIssues(result.issues);
     setMessage(result.valid ? '配置校验通过' : '配置存在错误，请修正后再保存');
     return result.valid;
@@ -101,13 +148,51 @@ export const Settings: React.FC = () => {
     if (!valid) return;
     try {
       setPanelToken(tokenInput);
-      const saved = await settingsApi.updateSettings(draft);
+      const saved = await settingsApi.updateSettings(submission());
       setPendingRestart(saved.pending_restart);
       setIssues(saved.issues || []);
+      setOriginalKeys(new Set(Object.keys(saved.settings)));
+      setDirtyKeys(new Set());
       setMessage('配置已保存，重启服务器后生效');
       triggerRefresh();
     } catch (error) {
       setMessage(getErrorMessage(error));
+    }
+  };
+
+  const aiUpdate = (): AITranslationConfigUpdate => ({
+    base_url: aiBaseURL.trim(),
+    model: aiModel.trim(),
+    ...(aiAPIKey.trim() ? { api_key: aiAPIKey.trim() } : {}),
+    ...(clearAIAPIKey ? { clear_api_key: true } : {}),
+  });
+
+  const saveAIConfig = async () => {
+    setAIBusy(true);
+    try {
+      const saved = await aiTranslationApi.updateConfig(aiUpdate());
+      setAIConfig(saved);
+      setAIBaseURL(saved.base_url);
+      setAIModel(saved.model);
+      setAIAPIKey('');
+      setClearAIAPIKey(false);
+      setMessage(saved.configured ? 'AI 翻译配置已保存' : 'AI 翻译配置已保存，但尚未完整配置');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setAIBusy(false);
+    }
+  };
+
+  const testAIConfig = async () => {
+    setAIBusy(true);
+    try {
+      await aiTranslationApi.testConfig(aiUpdate());
+      setMessage('AI 翻译连接测试通过');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setAIBusy(false);
     }
   };
 
@@ -144,12 +229,27 @@ export const Settings: React.FC = () => {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
           <div className="mb-4 rounded-2xl bg-slate-50 p-4">
-            <p className="text-[11px] font-semibold text-slate-400">服务端指南</p>
-            <p className="mt-1 text-sm font-bold text-slate-800">Palworld {version}</p>
+            <p className="text-[11px] font-semibold text-slate-400">配置规范</p>
+            <p className="mt-1 text-sm font-bold text-slate-800">配置规范 {version}</p>
+            <dl className="mt-3 grid gap-1.5 text-[10px] font-semibold text-slate-500">
+              <div className="flex justify-between gap-3"><dt>游戏版本</dt><dd>{versionInfo?.game_version || '离线未知'}</dd></div>
+              <div className="flex justify-between gap-3"><dt>当前 Build</dt><dd>{versionInfo?.current_build_id || '未知'}</dd></div>
+              <div className="flex justify-between gap-3"><dt>最新 Build</dt><dd>{versionInfo?.latest_build_id || '未检查'}</dd></div>
+              <div className="flex justify-between gap-3">
+                <dt>兼容状态</dt>
+                <dd>{versionInfo?.compatible === true ? '兼容' : versionInfo?.compatible === false ? '不匹配' : '待运行确认'}</dd>
+              </div>
+            </dl>
             <p className="mt-2 break-all text-[10px] font-medium leading-relaxed text-slate-400">
               {path || '配置文件尚未初始化'}
             </p>
           </div>
+
+          {versionInfo?.compatibility_warnings && versionInfo.compatibility_warnings.length > 0 && (
+            <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 p-3 text-[10px] font-semibold leading-relaxed text-amber-800">
+              {versionInfo.compatibility_warnings.join(' / ')}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:flex xl:flex-col">
             {groups.length > 0 ? (
@@ -236,6 +336,7 @@ export const Settings: React.FC = () => {
                   key={field.key}
                   field={field}
                   value={draft[field.key]}
+                  isSet={originalKeys.has(field.key) || dirtyKeys.has(field.key)}
                   onChange={(value) => updateField(field.key, value)}
                 />
               ))}
@@ -273,15 +374,57 @@ export const Settings: React.FC = () => {
           </div>
         </section>
       </div>
+
+      {canConfigureAI && (
+        <section className="rounded-lg border border-slate-100 bg-white p-5 sm:p-6">
+          <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-emerald-50 p-2 text-emerald-600"><Languages size={18} /></div>
+              <div>
+                <h3 className="text-[15px] font-bold text-slate-800">AI 翻译</h3>
+                <p className="mt-0.5 text-[11px] font-semibold text-slate-400">{aiConfig?.configured ? '已配置' : '未完整配置'}</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => void testAIConfig()} disabled={aiBusy} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                <RefreshCw className={aiBusy ? 'animate-spin' : ''} size={14} />连接测试
+              </button>
+              <button type="button" onClick={() => void saveAIConfig()} disabled={aiBusy} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40">
+                <Save size={14} />保存 AI 配置
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600 md:col-span-2">
+              OpenAI-compatible Base URL
+              <input type="url" value={aiBaseURL} onChange={(event) => setAIBaseURL(event.target.value)} placeholder="https://api.example.com/v1" className="rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-emerald-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              Model
+              <input type="text" value={aiModel} onChange={(event) => setAIModel(event.target.value)} placeholder="model-name" className="rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-emerald-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              <span className="flex items-center gap-2"><KeyRound size={13} />API Key {aiConfig?.api_key_present ? '（已保存）' : ''}</span>
+              <input type="password" value={aiAPIKey} onChange={(event) => { setAIAPIKey(event.target.value); if (event.target.value) setClearAIAPIKey(false); }} placeholder={aiConfig?.api_key_present ? '留空以保留现有密钥' : '输入 API Key'} className="rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-emerald-500 focus:outline-none" />
+            </label>
+          </div>
+          <label className="mt-4 inline-flex items-center gap-2 text-xs font-semibold text-rose-600">
+            <input type="checkbox" checked={clearAIAPIKey} onChange={(event) => { setClearAIAPIKey(event.target.checked); if (event.target.checked) setAIAPIKey(''); }} className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+            删除已保存的 API Key
+          </label>
+        </section>
+      )}
     </div>
   );
 };
 
 const FieldControl: React.FC<{
   field: FieldSchema;
-  value: string | number | boolean;
+  value: string | number | boolean | undefined;
+  isSet: boolean;
   onChange: (value: string | number | boolean) => void;
-}> = ({ field, value, onChange }) => {
+}> = ({ field, value, isSet, onChange }) => {
   const commonLabel = (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -296,6 +439,30 @@ const FieldControl: React.FC<{
       )}
     </div>
   );
+
+  if (!isSet) {
+    const initialValue =
+      coerceInitialValue(field, field.default) ??
+      (field.type === 'bool' ? false : field.type === 'int' || field.type === 'float' ? 0 : '');
+    return (
+      <div className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4">
+        {commonLabel}
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="text-[10px] font-semibold text-slate-400">
+            {field.default === undefined ? '当前未设置' : `当前未设置，服务端默认 ${field.default}`}
+          </span>
+          <button
+            type="button"
+            onClick={() => onChange(initialValue)}
+            className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-100"
+          >
+            <Plus size={12} />
+            设置
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (field.type === 'bool') {
     return (

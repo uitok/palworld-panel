@@ -328,6 +328,19 @@ func (m *Manager) FindWorldDir() (string, error) {
 	return worldDir, nil
 }
 
+func (m *Manager) Invalidate() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.TrimSpace(m.cfg.SaveIndexCacheDir) != "" {
+		_ = os.Remove(m.cachePath())
+	}
+	m.cacheMu.Lock()
+	m.cache = nil
+	m.cacheLoaded = false
+	m.cacheMTime = time.Time{}
+	m.cacheMu.Unlock()
+}
+
 func (m *Manager) fingerprint() (string, string, error) {
 	worldDir, err := m.FindWorldDir()
 	if err != nil {

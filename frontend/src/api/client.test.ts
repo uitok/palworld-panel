@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiClient, ApiError, currentApiBaseUrl, defaultBackendUrl, handleRequest, unwrapApiData, writeBackendUrl } from './client';
+import { apiClient, ApiError, currentApiBaseUrl, defaultBackendUrl, handleRequest, readBackendUrl, unwrapApiData, writeBackendUrl } from './client';
 import { storageKeys } from '../config/defaults';
 
 describe('api client response handling', () => {
@@ -66,6 +66,13 @@ describe('api client response handling', () => {
 
     expect(currentApiBaseUrl()).toBe('http://192.168.200.4:65000/api');
     locationSpy.mockRestore();
+  });
+
+  it('prefers an explicitly configured same-origin proxy over a stored absolute URL', () => {
+    writeBackendUrl('http://175.30.217.48:64217');
+
+    expect(readBackendUrl(true, '/api')).toBe('/api');
+    expect(currentApiBaseUrl(true, '/api')).toBe('/api');
   });
 
   it('migrates legacy backend URL storage once when read', () => {

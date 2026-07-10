@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,6 +117,44 @@ func TestUpdateIfNeededRunsInstallWhenBuildIsStale(t *testing.T) {
 	}
 	if info.CurrentBuildID != "200" || info.LatestBuildID != "200" || info.UpdateAvailable {
 		t.Fatalf("unexpected version info after update: %#v", info)
+	}
+}
+
+func TestUpdateFailsWhenInstalledBuildDoesNotMatchPublicBranch(t *testing.T) {
+	m, cleanup := newVersionTestManager(t, "100")
+	defer cleanup()
+	m.remoteBuildIDFunc = func(context.Context) (string, string, error) {
+		return "200", "test", nil
+	}
+	m.installOrUpdateFunc = func(_ context.Context, _ string) error {
+		writeAppManifest(t, m, "199")
+		return nil
+	}
+
+	job, err := m.UpdateIfNeeded(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("UpdateIfNeeded returned error: %v", err)
+	}
+	done := waitForJob(t, m.store, job.ID)
+	if done.Status != "failed" || !strings.Contains(done.Error, "does not match Steam public Build") {
+		t.Fatalf("expected actionable build mismatch, got %#v", done)
+	}
+	backups, err := m.ListBackups()
+	if err != nil || len(backups) != 1 || backups[0].Reason != "pre-update" {
+		t.Fatalf("verified pre-update backup was not retained: %#v, %v", backups, err)
+	}
+}
+
+func TestWithGameVersionReportsCompatibility(t *testing.T) {
+	m, cleanup := newVersionTestManager(t, "100")
+	defer cleanup()
+	info := m.WithGameVersion(context.Background(), VersionInfo{CompatibilityTarget: CompatibilityTarget}, "v1.0.0.81201")
+	if info.GameVersion != "v1.0.0.81201" || info.Compatible == nil || !*info.Compatible {
+		t.Fatalf("expected compatible semantic version, got %#v", info)
+	}
+	info = m.WithGameVersion(context.Background(), info, "v1.1.0")
+	if info.Compatible == nil || *info.Compatible || len(info.CompatibilityWarnings) == 0 {
+		t.Fatalf("expected incompatible semantic version warning, got %#v", info)
 	}
 }
 

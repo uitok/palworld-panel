@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"palpanel/internal/aitranslation"
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
 	"palpanel/internal/id"
@@ -41,12 +42,13 @@ type Server struct {
 	monitor   monitor.Manager
 	scheduler scheduler.Manager
 	saveIndex *saveindex.Manager
+	ai        *aitranslation.Service
 	cache     *ttlCache
 }
 
 func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), cache: newTTLCache()}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), ai: aitranslation.New(cfg, store), cache: newTTLCache()}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))
@@ -58,6 +60,7 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 	api.Use(Auth(cfg))
 	api.Use(AuditMiddleware(store))
 	{
+		api.GET("/auth/me", authMe)
 		api.GET("/jobs", s.listJobs)
 		api.GET("/jobs/:id", s.getJob)
 		api.GET("/audit-logs", Require(PermAuditRead), s.listAuditLogs)
@@ -80,6 +83,8 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.POST("/server/docker/mirrors/configure", Require(PermServerControl), s.serverDockerMirrorsConfigure)
 		api.POST("/server/bootstrap", Require(PermServerControl), s.serverBootstrap)
 		api.GET("/server/logs", s.serverLogs)
+		api.GET("/server/world", s.serverWorld)
+		api.POST("/server/world/reset", Require(PermWorldReset), s.serverWorldReset)
 		api.POST("/server/install", Require(PermServerControl), s.serverInstall)
 		api.POST("/server/update", Require(PermServerControl), s.serverUpdate)
 		api.POST("/server/update-if-needed", Require(PermServerControl), s.serverUpdateIfNeeded)
@@ -111,11 +116,16 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.GET("/mods/workshop/status", s.workshopStatus)
 		api.GET("/mods/workshop/search", s.searchWorkshopMods)
 		api.GET("/mods/workshop/:id", s.getWorkshopMod)
+		api.POST("/mods/workshop/:id/translate", Require(PermModsWrite), s.translateWorkshopMod)
 		api.POST("/mods/upload", Require(PermModsWrite), s.uploadMod)
 		api.POST("/mods/workshop", Require(PermModsWrite), s.downloadWorkshop)
 		api.POST("/mods/:id/enable", Require(PermModsWrite), s.enableMod)
 		api.POST("/mods/:id/disable", Require(PermModsWrite), s.disableMod)
 		api.DELETE("/mods/:id", Require(PermModsWrite), s.deleteMod)
+
+		api.GET("/ai/translation/config", s.getAITranslationConfig)
+		api.PUT("/ai/translation/config", Require(PermAIConfig), s.putAITranslationConfig)
+		api.POST("/ai/translation/test", Require(PermAIConfig), s.testAITranslationConfig)
 
 		api.GET("/security/paldefender/releases", s.palDefenderReleases)
 		api.GET("/security/paldefender/status", s.palDefenderStatus)
@@ -132,6 +142,7 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 		api.GET("/server/players", s.palGet("players"))
 		api.GET("/server/settings", s.palGet("settings"))
 		api.GET("/server/metrics", s.serverMetrics)
+		api.GET("/server/game-data", s.serverGameData)
 		api.POST("/server/announce", Require(PermServerControl), s.palPost("announce"))
 		api.POST("/server/save", Require(PermServerControl), s.palPost("save"))
 		api.POST("/server/shutdown", Require(PermServerControl), s.palPost("shutdown"))
@@ -446,14 +457,14 @@ func (s Server) serverLogs(c *gin.Context) {
 		Level:  c.Query("level"),
 		Since:  c.Query("since"),
 	}
-	logs, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "logs", query.Tail, query.Search, query.Level, query.Since), 2*time.Second, func(ctx context.Context) (string, error) {
+	logs, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "logs", query.Tail, query.Search, query.Level, query.Since), 2*time.Second, func(ctx context.Context) (server.LogResult, error) {
 		return s.server.Logs(ctx, query)
 	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "server_logs_failed", err.Error())
 		return
 	}
-	ok(c, gin.H{"logs": logs})
+	ok(c, logs)
 }
 
 func (s Server) monitorSnapshot(c *gin.Context) {
@@ -552,6 +563,16 @@ func (s Server) serverVersion(c *gin.Context) {
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "version_read_failed", err.Error())
 		return
+	}
+	status, statusErr := s.server.Status(c.Request.Context())
+	if statusErr == nil && status.Container.Status == "running" {
+		if response, restErr := s.palworldRESTRead().Do(c.Request.Context(), http.MethodGet, "info", nil); restErr == nil {
+			if body, bodyOK := response.Body.(map[string]any); bodyOK {
+				if gameVersion, versionOK := body["version"]; versionOK {
+					info = s.server.WithGameVersion(c.Request.Context(), info, fmt.Sprint(gameVersion))
+				}
+			}
+		}
 	}
 	ok(c, info)
 }
@@ -763,7 +784,7 @@ func (s Server) updatePalworldConfig(c *gin.Context) {
 }
 
 func (s Server) getPalworldConfigSchema(c *gin.Context) {
-	ok(c, gin.H{"version": "0.7.2", "fields": palconfig.Schema()})
+	ok(c, gin.H{"version": palconfig.SchemaVersion, "fields": palconfig.Schema()})
 }
 
 func (s Server) validatePalworldConfig(c *gin.Context) {
@@ -826,6 +847,12 @@ func (s Server) getWorkshopMod(c *gin.Context) {
 		failWorkshop(c, err)
 		return
 	}
+	translation, err := s.ai.Cached(c.Request.Context(), item.ID, item.Summary)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "ai_translation_cache_read_failed", err.Error())
+		return
+	}
+	item.Translation = translation
 	ok(c, item)
 }
 
@@ -1200,6 +1227,29 @@ func (s Server) palGet(path string) gin.HandlerFunc {
 	}
 }
 
+func (s Server) serverGameData(c *gin.Context) {
+	timeout := time.Duration(s.cfg.PalworldGameDataTimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	maxBytes := s.cfg.PalworldGameDataMaxBytes
+	if maxBytes <= 0 {
+		maxBytes = 16 * 1024 * 1024
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+	defer cancel()
+	response, err := s.palworldREST().DoWithLimit(ctx, http.MethodGet, "game-data", nil, maxBytes)
+	if errors.Is(err, palrest.ErrResponseTooLarge) {
+		fail(c, http.StatusBadGateway, "palworld_game_data_too_large", err.Error())
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusBadGateway, "palworld_game_data_failed", err.Error())
+		return
+	}
+	ok(c, response.Body)
+}
+
 func (s Server) palPost(path string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var payload any
@@ -1263,7 +1313,8 @@ func normalizeRESTMetrics(body any) gin.H {
 		"max_players":     int(metricNumber(data, "max_players", "maxPlayerNum", "maxplayernum")),
 		"uptime":          int(metricNumber(data, "uptime", "uptime_seconds")),
 		"total_pals":      int(metricNumber(data, "total_pals", "pals")),
-		"active_bases":    int(metricNumber(data, "active_bases", "bases")),
+		"active_bases":    int(metricNumber(data, "active_bases", "bases", "basecampnum")),
+		"days":            int(metricNumber(data, "days")),
 		"frame_time":      metricNumber(data, "frame_time", "frameTime", "frametime", "server_frame_time", "serverFrameTime", "serverframetime"),
 		"source":          "palworld_rest",
 		"rest_healthy":    true,

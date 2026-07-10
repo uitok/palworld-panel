@@ -44,6 +44,8 @@ Optional role tokens:
 - `PANEL_OPERATOR_TOKEN`: operator, server/config/mod/player operations.
 - `PANEL_VIEWER_TOKEN`: viewer, read-only.
 
+`GET /api/auth/me` returns the authenticated role and permission names without returning any token. The destructive `world:reset` and `ai:config` permissions belong only to the admin role; Workshop translation uses the operator-compatible `mods:write` permission.
+
 Set `PALPANEL_REQUIRE_AUTH=false` only for isolated local development.
 
 ## Production Web Serving
@@ -61,11 +63,29 @@ The backend reads process environment variables only. For source development, ex
 
 The Wine runner build uses `PALPANEL_DOCKER_RUNNER_BASE_IMAGE` as its base image and keeps the pinned digest by default. If Docker Hub metadata requests time out, the backend retries the same image through comma-separated `PALPANEL_DOCKER_RUNNER_BASE_IMAGE_MIRRORS` prefixes such as `docker.1ms.run` or `registry.cyou`.
 
-Startup arguments are managed separately from `PalWorldSettings.ini` through `GET/PUT /api/server/startup`.
+Startup arguments are managed separately from `PalWorldSettings.ini` through `GET/PUT /api/server/startup`. PalPanel always adds `-enable-gamedata-api`, `-log`, `-stdout`, and `-FullStdOutLogOutput` (case-insensitively deduplicated) so the bounded game-data proxy and live log collection work on Palworld 1.0 servers.
 
 ## Steam Workshop
 
 Workshop search uses a backend-only Steam Web API key. `STEAM_WEB_API_KEY` is optional and overrides the embedded default key when set; the key is never returned by API responses. `PALPANEL_WORKSHOP_APP_ID` defaults to `1623730` and is used by both Workshop search metadata and the existing SteamCMD `workshop_download_item` flow.
+
+## AI Translation
+
+Admins configure an OpenAI-compatible Base URL, model, and API key from Settings. Base URLs must use HTTPS; HTTP is accepted only for loopback addresses. Embedded URL credentials, redirects, and oversized responses are rejected. The API key is atomically stored in `data/secrets/ai-translation.key` with mode `0600` and is never returned by APIs, application logs, or audit records.
+
+Workshop detail translation always fetches the authoritative description from Steam instead of accepting arbitrary browser text. Cached translations are keyed by Workshop ID, source SHA-256, target language, provider URL, and model, so source or model changes invalidate the cache automatically.
+
+## World Reset
+
+`GET /api/server/world` previews the active `DedicatedServerName`, save timestamp, and running state. Admin reset requests must include the previewed world ID and the exact confirmation phrase `RESET WORLD`. The asynchronous task rechecks the active world, saves/notifies and stops a running server, creates and verifies a `pre-world-reset` backup, then atomically stages only `SaveGames/0/<world-id>`.
+
+When the server was running, the task starts it again and waits up to 180 seconds for a non-empty new `Level.sav`. Success removes the staged old world but keeps the verified backup. Start or generation failures stop the new process and retain both the backup and `.palpanel-world-reset/<job-id>` directory with recovery paths in the Job error. Server binaries, INI files, Workshop mods, PalDefender, and panel data are not removed.
+
+## Server Logs
+
+Wine mode mounts `data/logs` at `/data/logs` and mirrors PalServer stdout/stderr to both Docker stdout and `palserver.log`. Persistent files and Docker `json-file` output each use a 20 MiB limit with five backups. Windows SteamCMD mode uses the same bounded persistent-file policy.
+
+`GET /api/server/logs` reads the persistent file first and falls back to `docker logs` only when the file is missing or unreadable. It remains available after the server stops and returns `source`, `available`, `reason`, and `updated_at` metadata alongside the compatible `logs` field.
 
 ## Performance Knobs
 
@@ -101,19 +121,30 @@ The sidecar is the self-developed Go `sav-cli` in `sav-cli/` and never writes ba
 
 ## Version Checks
 
-Palworld server version is represented as the Steam Build ID for AppID `2394010`, not a semantic game version. Local Build ID comes from `data/server/steamapps/appmanifest_2394010.acf`; latest Build ID comes from SteamCMD `app_info_print 2394010`.
+Steam Build IDs remain the authoritative update signal for AppID `2394010`. The local Build ID comes from `data/server/steamapps/appmanifest_2394010.acf`; the latest public Build ID comes from SteamCMD `app_info_print 2394010`.
+
+While the server is running, `GET /api/server/version` also reads the semantic game version from the official `/info` endpoint. The response reports the `1.0.0` compatibility target, a compatibility result, and warnings for enabled Workshop mods, PalDefender, and save-parser verification. An offline server still reports Build IDs without pretending the configuration schema version is the game version.
+
+## Palworld 1.0 REST
+
+The backend contracts cover the official `/info`, `/players`, `/settings`, `/metrics`, and `/game-data` response shapes. `GET /api/server/game-data` is deliberately excluded from periodic polling, has a 3-second default timeout, and rejects responses larger than 16 MiB. Configure those bounds with `PALPANEL_GAME_DATA_TIMEOUT_MS` and `PALPANEL_GAME_DATA_MAX_MB`.
+
+Metrics retain the existing frontend fields and additionally map `basecampnum` to `active_bases` and expose `days`.
 
 ## Main Endpoints
 
 - Lifecycle: `POST /api/server/install`, `POST /api/server/update`, `POST /api/server/update-if-needed`, `POST /api/server/start`, `POST /api/server/stop`, `POST /api/server/restart`, `POST /api/server/bootstrap`
 - Safe restart: `POST /api/server/safe-restart`
 - Setup: `GET /api/server/prerequisites`, `GET/PUT /api/server/runtime`, `GET/PUT /api/server/startup`, `POST /api/server/initialize-config`
-- Status/logs/jobs: `GET /api/server/status`, `GET /api/server/version`, `POST /api/server/version/check`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
+- Session: `GET /api/auth/me`
+- Status/logs/jobs: `GET /api/server/status`, `GET /api/server/version`, `POST /api/server/version/check`, `GET /api/server/metrics`, `GET /api/server/game-data`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
+- World reset: `GET /api/server/world`, `POST /api/server/world/reset`
 - Backups: `POST /api/server/backup`, `GET /api/backups`, `POST /api/backups/{name}/restore`
 - Audit: `GET /api/audit-logs`
 - Player access: `GET/POST/DELETE /api/players/bans`, `GET/PUT /api/players/whitelist`, `POST /api/players/{id}/kick`
 - Palworld config: `GET /api/config/palworld`, `PUT /api/config/palworld`, `GET /api/config/palworld/schema`, `POST /api/config/palworld/validate`
-- Mods: `GET /api/mods`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/upload`, `POST /api/mods/workshop`, `POST /api/mods/{id}/enable`, `POST /api/mods/{id}/disable`, `DELETE /api/mods/{id}`
+- Mods: `GET /api/mods`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/workshop/{id}/translate`, `POST /api/mods/upload`, `POST /api/mods/workshop`, `POST /api/mods/{id}/enable`, `POST /api/mods/{id}/disable`, `DELETE /api/mods/{id}`
+- AI translation: `GET/PUT /api/ai/translation/config`, `POST /api/ai/translation/test`
 - PalDefender: `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
 
 ## Paths
@@ -123,5 +154,7 @@ Palworld server version is represented as the Steam Build ID for AppID `2394010`
 - Mod settings: `data/server/Mods/PalModSettings.ini`
 - PalDefender binaries: `data/server/Pal/Binaries/Win64/PalDefender.dll` and `data/server/Pal/Binaries/Win64/d3d9.dll`
 - PalDefender config after first server start: `data/server/Pal/Binaries/Win64/PalDefender/Config.json`
+- Persistent PalServer log: `data/logs/palserver.log` (plus `.1` through `.5`)
+- AI translation API key: `data/secrets/ai-translation.key`
 
 Server files, Wine prefix, tools, mods, saves, backups, logs, PalDefender files, and SQLite data are kept outside the backend source tree.

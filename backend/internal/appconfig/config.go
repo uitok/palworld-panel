@@ -56,6 +56,8 @@ type Config struct {
 	PalworldRESTUser             string
 	PalworldRESTPass             string
 	PalworldRESTReadTimeoutMS    int
+	PalworldGameDataTimeoutMS    int
+	PalworldGameDataMaxBytes     int64
 	PalDefenderRESTBaseURL       string
 	PalDefenderRESTPort          int
 	SaveIndexerEnabled           bool
@@ -124,6 +126,8 @@ func Load() (Config, error) {
 		PalworldRESTUser:             env("PALWORLD_REST_USER", "admin"),
 		PalworldRESTPass:             env("PALWORLD_ADMIN_PASSWORD", ""),
 		PalworldRESTReadTimeoutMS:    envInt("PALPANEL_PALWORLD_REST_READ_TIMEOUT_MS", 1200),
+		PalworldGameDataTimeoutMS:    envInt("PALPANEL_GAME_DATA_TIMEOUT_MS", 3000),
+		PalworldGameDataMaxBytes:     int64(envInt("PALPANEL_GAME_DATA_MAX_MB", 16)) * 1024 * 1024,
 		PalDefenderRESTBaseURL:       env("PALPANEL_PALDEFENDER_REST_BASE_URL", fmt.Sprintf("http://127.0.0.1:%d", palDefenderRESTPort)),
 		PalDefenderRESTPort:          palDefenderRESTPort,
 		SaveIndexerEnabled:           envBool("PALPANEL_SAVE_INDEXER_ENABLED", false),
@@ -215,6 +219,10 @@ func (c Config) SteamCMDBinaryPath() string {
 
 func (c Config) ServerLogPath() string {
 	return filepath.Join(c.LogsDir, "palserver.log")
+}
+
+func (c Config) AITranslationKeyPath() string {
+	return filepath.Join(c.DataDir, "secrets", "ai-translation.key")
 }
 
 func (c Config) EffectiveSteamWebAPIKey() string {

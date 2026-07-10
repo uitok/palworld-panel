@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerStoreProvider } from '../store/ServerStoreProvider';
+import { storageKeys } from '../config/defaults';
 import { Mods } from './Mods';
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     workshopStatus: vi.fn(),
     searchWorkshop: vi.fn(),
     getWorkshopItem: vi.fn(),
+    translateWorkshop: vi.fn(),
     downloadWorkshop: vi.fn(),
     upload: vi.fn(),
     setEnabled: vi.fn(),
@@ -19,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   },
   tasksApi: {
     waitForJob: vi.fn(),
+  },
+  authApi: {
+    me: vi.fn(),
   },
 }));
 
@@ -32,6 +37,10 @@ vi.mock('../api/server', () => ({
 
 vi.mock('../api/tasks', () => ({
   tasksApi: mocks.tasksApi,
+}));
+
+vi.mock('../api/auth', () => ({
+  authApi: mocks.authApi,
 }));
 
 const renderMods = () =>
@@ -48,9 +57,17 @@ describe('Mods Workshop store', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.setItem(storageKeys.token, 'operator-token');
     mocks.modsApi.list.mockResolvedValue([]);
     mocks.modsApi.workshopStatus.mockResolvedValue({ configured: true, key_source: 'embedded', app_id: '1623730' });
     mocks.modsApi.searchWorkshop.mockResolvedValue({ items: [], total: 0, page_size: 24 });
+    mocks.modsApi.getWorkshopItem.mockResolvedValue({
+      id: '123456789', title: 'Test Mod', summary: 'Original description', steam_url: 'https://steamcommunity.com/sharedfiles/filedetails/?id=123456789',
+      tags: [], installed: false, enabled: false, update_available: false,
+    });
+    mocks.modsApi.translateWorkshop.mockResolvedValue({
+      text: '中文译文', target_language: 'zh-CN', model: 'translate-model', generated_at: '2026-07-10T00:00:00Z', cached: false,
+    });
     mocks.modsApi.downloadWorkshop.mockResolvedValue({
       id: 'job_1',
       type: 'workshop_download',
@@ -60,6 +77,7 @@ describe('Mods Workshop store', () => {
       created_at: new Date(0).toISOString(),
     });
     mocks.serverApi.getStatus.mockResolvedValue({ pending_restart: false });
+    mocks.authApi.me.mockResolvedValue({ name: 'operator', role: 'operator', permissions: ['read', 'mods:write'] });
     mocks.tasksApi.waitForJob.mockResolvedValue({
       id: 'job_1',
       type: 'workshop_download',
@@ -99,5 +117,24 @@ describe('Mods Workshop store', () => {
     fireEvent.click(screen.getByText('下载'));
 
     await waitFor(() => expect(mocks.modsApi.downloadWorkshop).toHaveBeenCalledWith('123456789', false));
+  });
+
+  it('translates authoritative Workshop details and switches to Chinese', async () => {
+    mocks.modsApi.searchWorkshop.mockResolvedValue({
+      items: [{
+        id: '123456789', title: 'Test Mod', summary: 'Short', steam_url: 'https://steamcommunity.com/sharedfiles/filedetails/?id=123456789',
+        tags: [], installed: false, enabled: false, update_available: false,
+      }],
+      total: 1,
+      page_size: 24,
+    });
+    renderMods();
+
+    fireEvent.click(await screen.findByRole('button', { name: '查看详情' }));
+    fireEvent.click(await screen.findByRole('button', { name: '翻译为中文' }));
+
+    await waitFor(() => expect(mocks.modsApi.translateWorkshop).toHaveBeenCalledWith('123456789', false));
+    expect(await screen.findByText('中文译文')).toBeInTheDocument();
+    expect(screen.getByText(/translate-model/)).toBeInTheDocument();
   });
 });

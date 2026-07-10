@@ -33,6 +33,16 @@ func TestSerializeSettingsQuotesStrings(t *testing.T) {
 	}
 }
 
+func TestMergePreservesUnknownKeysAndDoesNotMaterializeMissingFields(t *testing.T) {
+	got := Merge(Settings{"FutureOfficialKey": "keep", "ServerName": "old"}, map[string]any{"ServerName": "new"})
+	if got["FutureOfficialKey"] != "keep" {
+		t.Fatalf("unknown key was not preserved: %#v", got)
+	}
+	if _, ok := got["bEnableVoiceChat"]; ok {
+		t.Fatalf("missing optional field was materialized: %#v", got)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

@@ -4,7 +4,7 @@ import { mapSchema } from './settings';
 describe('settings dto mapping', () => {
   it('preserves localized labels and enum labels', () => {
     const schema = mapSchema({
-      version: '0.7.2',
+      version: '1.0.0',
       fields: [
         {
           key: 'DeathPenalty',
@@ -32,5 +32,13 @@ describe('settings dto mapping', () => {
         All: '全部掉落（物品、装备和队伍帕鲁）',
       },
     });
+  });
+
+  it('preserves an explicitly unset schema default', () => {
+    const schema = mapSchema({
+      version: '1.0.0',
+      fields: [{ key: 'FutureField', group: 'features', type: 'bool', default: null }],
+    });
+    expect(schema.fields[0].default).toBeUndefined();
   });
 });

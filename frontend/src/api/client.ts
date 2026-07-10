@@ -64,9 +64,12 @@ const adaptLoopbackToCurrentHost = (backendUrl: string) => {
   }
 };
 
-export const defaultBackendUrl = (isDev = import.meta.env.DEV) => {
-  if (CONFIGURED_BACKEND_URL) {
-    return adaptLoopbackToCurrentHost(CONFIGURED_BACKEND_URL);
+export const defaultBackendUrl = (
+  isDev = import.meta.env.DEV,
+  configuredBackendUrl = CONFIGURED_BACKEND_URL,
+) => {
+  if (configuredBackendUrl) {
+    return adaptLoopbackToCurrentHost(configuredBackendUrl);
   }
   if (!isDev) return '';
   const pageHost = currentPageHostname();
@@ -74,12 +77,20 @@ export const defaultBackendUrl = (isDev = import.meta.env.DEV) => {
   return `http://${host}:${DEFAULT_BACKEND_PORT}`;
 };
 
-export const readBackendUrl = (isDev = import.meta.env.DEV) => {
+export const readBackendUrl = (
+  isDev = import.meta.env.DEV,
+  configuredBackendUrl = CONFIGURED_BACKEND_URL,
+) => {
+  // A relative deployment URL is an explicit same-origin proxy choice. Do not
+  // let an absolute URL left in browser storage bypass that proxy.
+  if (configuredBackendUrl.trim().startsWith('/')) {
+    return adaptLoopbackToCurrentHost(configuredBackendUrl);
+  }
   if (typeof localStorage === 'undefined') {
-    return defaultBackendUrl(isDev);
+    return defaultBackendUrl(isDev, configuredBackendUrl);
   }
   const stored = readAppStorage('backendUrl');
-  return stored ? adaptLoopbackToCurrentHost(stored) : defaultBackendUrl(isDev);
+  return stored ? adaptLoopbackToCurrentHost(stored) : defaultBackendUrl(isDev, configuredBackendUrl);
 };
 
 export const writeBackendUrl = (value: string) => {
@@ -100,7 +111,10 @@ const apiBaseUrlFor = (backendUrl: string) => {
   return withoutTrailingSlash.endsWith('/api') ? withoutTrailingSlash : `${withoutTrailingSlash}/api`;
 };
 
-export const currentApiBaseUrl = (isDev = import.meta.env.DEV) => apiBaseUrlFor(readBackendUrl(isDev));
+export const currentApiBaseUrl = (
+  isDev = import.meta.env.DEV,
+  configuredBackendUrl = CONFIGURED_BACKEND_URL,
+) => apiBaseUrlFor(readBackendUrl(isDev, configuredBackendUrl));
 
 interface RetryableAxiosConfig {
   baseURL?: string;

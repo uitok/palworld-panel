@@ -157,21 +157,24 @@ export const Setup: React.FC = () => {
       setupApi.getRuntime(),
       setupApi.getStartup(),
       setupApi.getHost(),
+      serverApi.getVersion(),
     ]);
     if (!mountedRef.current) return;
 
-    const [statusRes, checksRes, runtimeRes, startupRes, hostRes] = results;
+    const [statusRes, checksRes, runtimeRes, startupRes, hostRes, versionRes] = results;
     const nextStatus = settledValue(statusRes);
     const checks = settledValue(checksRes);
     const nextRuntime = settledValue(runtimeRes);
     const startupResValue = settledValue(startupRes);
     const hostResValue = settledValue(hostRes);
+    const versionResValue = settledValue(versionRes);
 
     if (nextStatus) setStatus(nextStatus);
     if (checks) setPrerequisites(checks);
     if (nextRuntime) setRuntime(nextRuntime.mode);
     if (startupResValue) setStartup(startupResValue);
     if (hostResValue) setHost(hostResValue);
+    if (versionResValue) setVersionInfo(versionResValue);
 
     setMessage(settledErrorMessage(results));
     setLoading(false);
@@ -209,6 +212,10 @@ export const Setup: React.FC = () => {
     trackedJobIdRef.current = null;
     setMessage(done.status === 'success' ? '任务已完成' : done.error || '任务执行失败');
     await refresh();
+    if (done.type === 'update' || done.type === 'smart_update' || done.type === 'version_check') {
+      const refreshedVersion = await serverApi.getVersion();
+      if (mountedRef.current) setVersionInfo(refreshedVersion);
+    }
   }, [refresh]);
 
   useEffect(() => {
@@ -453,6 +460,24 @@ export const Setup: React.FC = () => {
       />
 
       <SimpleStatusStrip items={simpleStatuses} />
+
+      {status?.installed && versionInfo && (
+        <section className="grid grid-cols-2 gap-3 border-y border-slate-100 bg-white px-4 py-4 sm:grid-cols-4">
+          <StatusItem label="游戏版本" value={versionInfo.game_version || '离线未知'} ok={versionInfo.compatible === true} />
+          <StatusItem label="当前 Build" value={versionInfo.current_build_id || '未知'} ok={Boolean(versionInfo.current_build_id)} />
+          <StatusItem label="最新 Build" value={versionInfo.latest_build_id || '未检查'} ok={Boolean(versionInfo.latest_build_id)} />
+          <StatusItem
+            label={`兼容目标 ${versionInfo.compatibility_target || '1.0.0'}`}
+            value={versionInfo.compatible === true ? '兼容' : versionInfo.compatible === false ? '不匹配' : '待运行确认'}
+            ok={versionInfo.compatible === true}
+          />
+          {versionInfo.compatibility_warnings.length > 0 && (
+            <p className="col-span-2 text-[11px] font-semibold leading-relaxed text-amber-700 sm:col-span-4">
+              {versionInfo.compatibility_warnings.join(' / ')}
+            </p>
+          )}
+        </section>
+      )}
 
       {criticalStatusMissing && (
         <ConnectionIssuePanel
@@ -1050,17 +1075,24 @@ const AdvancedSetupPanel: React.FC<{
             <div className="mt-4 grid grid-cols-2 gap-3 text-xs font-semibold">
               <StatusItem label="进程" value={status?.status || 'stopped'} ok={status?.status === 'running'} />
               <StatusItem label="配置状态" value={status?.pending_restart ? '待重启' : '已生效'} ok={!status?.pending_restart} />
+              <StatusItem label="游戏版本" value={versionInfo?.game_version || '离线未知'} ok={versionInfo?.compatible === true} />
               <StatusItem label="当前 Build" value={versionInfo?.current_build_id || '未知'} ok={Boolean(versionInfo?.current_build_id)} />
+              <StatusItem label="最新 Build" value={versionInfo?.latest_build_id || '未检查'} ok={Boolean(versionInfo?.latest_build_id)} />
               <StatusItem
-                label="更新状态"
-                value={versionInfo?.update_available ? '有新版本' : versionInfo?.latest_build_id ? '已是最新' : '未检查'}
-                ok={Boolean(versionInfo?.latest_build_id && !versionInfo.update_available)}
+                label={`兼容目标 ${versionInfo?.compatibility_target || '1.0.0'}`}
+                value={versionInfo?.compatible === true ? '兼容' : versionInfo?.compatible === false ? '不匹配' : '待运行确认'}
+                ok={versionInfo?.compatible === true}
               />
             </div>
 
             {versionInfo?.error && (
               <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 p-3 text-[11px] font-medium text-amber-800">
                 {versionInfo.error}
+              </div>
+            )}
+            {versionInfo?.compatibility_warnings && versionInfo.compatibility_warnings.length > 0 && (
+              <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 p-3 text-[11px] font-medium text-amber-800">
+                {versionInfo.compatibility_warnings.join(' / ')}
               </div>
             )}
             {status?.warnings && status.warnings.length > 0 && (

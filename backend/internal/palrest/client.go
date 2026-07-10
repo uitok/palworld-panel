@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var ErrResponseTooLarge = fmt.Errorf("palworld rest api response exceeds configured limit")
+
 type Client struct {
 	BaseURL  string
 	User     string
@@ -34,6 +36,10 @@ func New(baseURL, user, password string) Client {
 }
 
 func (c Client) Do(ctx context.Context, method, path string, payload any) (Response, error) {
+	return c.DoWithLimit(ctx, method, path, payload, 0)
+}
+
+func (c Client) DoWithLimit(ctx context.Context, method, path string, payload any, maxBytes int64) (Response, error) {
 	var body io.Reader
 	if payload != nil {
 		b, err := json.Marshal(payload)
@@ -57,9 +63,16 @@ func (c Client) Do(ctx context.Context, method, path string, payload any) (Respo
 		return Response{}, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
+	reader := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		reader = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	b, err := io.ReadAll(reader)
 	if err != nil {
 		return Response{}, err
+	}
+	if maxBytes > 0 && int64(len(b)) > maxBytes {
+		return Response{Status: resp.StatusCode}, fmt.Errorf("%w: %d bytes", ErrResponseTooLarge, maxBytes)
 	}
 	out := Response{Status: resp.StatusCode}
 	if len(b) > 0 {

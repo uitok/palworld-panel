@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AxiosResponse } from 'axios';
 import { apiClient } from './client';
 import { mapWorkshopItem, mapWorkshopStatus, modsApi } from './mods';
+import { AI_OPERATION_TIMEOUT_MS } from './requestTimeouts';
 
 describe('mods api mapping', () => {
   it('maps Workshop metadata with safe fallbacks', () => {
@@ -76,5 +77,30 @@ describe('mods api mapping', () => {
 
     expect(postSpy).toHaveBeenCalledWith('/mods/workshop', { item_id: '123456789', enable: true });
     postSpy.mockRestore();
+  });
+
+  it('allows Workshop AI translation to run through the provider timeout', async () => {
+    const post = vi.spyOn(apiClient, 'post').mockResolvedValue({
+      data: {
+        ok: true,
+        data: {
+          text: '中文译文',
+          target_language: 'zh-CN',
+          model: 'translation-model',
+          generated_at: '2026-07-10T08:23:16Z',
+          cached: false,
+        },
+      },
+      status: 200,
+    });
+
+    await expect(modsApi.translateWorkshop('3625364851')).resolves.toMatchObject({ text: '中文译文' });
+    expect(post).toHaveBeenCalledWith(
+      '/mods/workshop/3625364851/translate',
+      { force: false },
+      { timeout: AI_OPERATION_TIMEOUT_MS },
+    );
+    expect(AI_OPERATION_TIMEOUT_MS).toBeGreaterThan(105_000);
+    post.mockRestore();
   });
 });

@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -20,9 +21,11 @@ func Normalize(file *gvas.File, sourcePath string) Index {
 
 	memberGuild := normalizeGuilds(&index, world)
 	normalizeCharacters(&index, world, memberGuild)
+	normalizeContainers(&index, world)
 	normalizeBases(&index, world)
 	applyGuildNames(&index)
 	rebuildMapEntities(&index)
+	normalizeMapObjects(&index, world)
 	index.Finalize()
 	return index
 }
@@ -95,6 +98,10 @@ func normalizeGuilds(index *Index, world map[string]any) map[string]Guild {
 
 func normalizeCharacters(index *Index, world map[string]any, memberGuild map[string]Guild) {
 	entries := asList(getField(world, "CharacterSaveParameterMap"))
+	guildByID := map[string]Guild{}
+	for _, guild := range index.Guilds {
+		guildByID[guild.ID] = guild
+	}
 	rawDecoded := 0
 	saveParams := 0
 	for _, entryAny := range entries {
@@ -128,8 +135,12 @@ func normalizeCharacters(index *Index, world map[string]any, memberGuild map[str
 			instanceID = firstNonEmpty(playerUID, fmt.Sprintf("character-%d", len(index.Pals)+len(index.Players)+1))
 		}
 		location := locationFromAny(firstNonEmptyAny(getField(saveParam, "Transform"), getField(saveParam, "Location"), getField(saveParam, "LastJumpedLocation")))
+		groupID := asString(raw["group_id"])
 		if asBool(getField(saveParam, "IsPlayer")) {
 			guild := memberGuild[playerUID]
+			if guild.ID == "" {
+				guild = guildByID[groupID]
+			}
 			player := Player{
 				PlayerUID:        playerUID,
 				SteamID:          asString(firstNonEmptyAny(getField(saveParam, "PlatformUserId"), getField(saveParam, "SteamId"))),
@@ -147,10 +158,14 @@ func normalizeCharacters(index *Index, world map[string]any, memberGuild map[str
 			continue
 		}
 		ownerUID := asString(getField(saveParam, "OwnerPlayerUId"))
-		if ownerUID == "" {
+		containerID := containerIDFromAny(firstNonEmptyAny(getField(saveParam, "SlotID"), getField(saveParam, "SlotId"), getField(saveParam, "EquipItemContainerId")))
+		if ownerUID == "" && (groupID == "" || isZeroGUID(groupID)) && containerID == "" {
 			continue
 		}
 		guild := memberGuild[ownerUID]
+		if guild.ID == "" {
+			guild = guildByID[groupID]
+		}
 		pal := Pal{
 			InstanceID:     instanceID,
 			CharacterID:    asString(firstNonEmptyAny(getField(saveParam, "CharacterID"), getField(saveParam, "CharacterId"))),
@@ -158,7 +173,7 @@ func normalizeCharacters(index *Index, world map[string]any, memberGuild map[str
 			Level:          asIntDefault(getField(saveParam, "Level"), 1),
 			OwnerPlayerUID: ownerUID,
 			GuildID:        guild.ID,
-			ContainerID:    containerIDFromAny(firstNonEmptyAny(getField(saveParam, "SlotID"), getField(saveParam, "EquipItemContainerId"))),
+			ContainerID:    containerID,
 			Location:       location,
 			Skills:         stringSlice(firstNonEmptyAny(getField(saveParam, "SkillList"), getField(saveParam, "EquipWaza"), getField(saveParam, "MasteredWaza"))),
 			Passives:       stringSlice(getField(saveParam, "PassiveSkillList")),
@@ -171,6 +186,11 @@ func normalizeCharacters(index *Index, world map[string]any, memberGuild map[str
 }
 
 func normalizeBases(index *Index, world map[string]any) {
+	characterContainers := characterContainerMembers(index, world)
+	palsByInstance := map[string]Pal{}
+	for _, pal := range index.Pals {
+		palsByInstance[pal.InstanceID] = pal
+	}
 	entries := asList(getField(world, "BaseCampSaveData"))
 	rawDecoded := 0
 	for i, entryAny := range entries {
@@ -205,9 +225,219 @@ func normalizeBases(index *Index, world map[string]any) {
 			Status:          "Safe",
 			Raw:             raw,
 		}
+		workerRaw := bytesFromAny(getField(getField(value, "WorkerDirector"), "RawData"))
+		if len(workerRaw) > 0 {
+			containerID, err := workerContainerID(workerRaw)
+			if err != nil {
+				index.Warnings = append(index.Warnings, "base worker director decode failed: "+err.Error())
+			} else {
+				for _, instanceID := range characterContainers[containerID] {
+					pal, ok := palsByInstance[instanceID]
+					if !ok {
+						continue
+					}
+					base.Workers = append(base.Workers, Worker{
+						InstanceID: pal.InstanceID, CharacterID: pal.CharacterID, Nickname: pal.Nickname, Level: pal.Level,
+					})
+				}
+			}
+		}
 		index.Bases = append(index.Bases, base)
 	}
 	_ = rawDecoded
+}
+
+func normalizeContainers(index *Index, world map[string]any) {
+	for _, entryAny := range asList(getField(world, "ItemContainerSaveData")) {
+		entry, ok := rawMap(entryAny)
+		if !ok {
+			continue
+		}
+		key, _ := asMap(entry["key"])
+		value, _ := asMap(entry["value"])
+		containerID := containerIDFromAny(getField(key, "ID"))
+		if containerID == "" || isZeroGUID(containerID) {
+			continue
+		}
+		container := Container{ContainerID: containerID, Slots: []Slot{}}
+		belong, _ := asMap(getField(value, "BelongInfo"))
+		for _, owner := range []struct {
+			field    string
+			typeName string
+		}{
+			{field: "BaseCampId", typeName: "base"},
+			{field: "BaseCampID", typeName: "base"},
+			{field: "GroupId", typeName: "guild"},
+			{field: "GroupID", typeName: "guild"},
+			{field: "OwnerPlayerUId", typeName: "player"},
+		} {
+			ownerID := asString(getField(belong, owner.field))
+			if ownerID != "" && !isZeroGUID(ownerID) {
+				container.OwnerType, container.OwnerID = owner.typeName, ownerID
+				break
+			}
+		}
+		for _, slotAny := range asList(getField(value, "Slots")) {
+			slotMap, ok := asMap(slotAny)
+			if !ok {
+				continue
+			}
+			itemID := asString(getField(getField(slotMap, "ItemId"), "StaticId"))
+			count := asInt(getField(slotMap, "StackCount"))
+			slotIndex := asInt(getField(slotMap, "SlotIndex"))
+			if raw := bytesFromAny(getField(slotMap, "RawData")); len(raw) > 0 {
+				decoded, err := gvas.DecodeItemContainerSlotRaw(raw)
+				if err != nil {
+					index.Warnings = append(index.Warnings, "item container slot RawData decode failed: "+err.Error())
+					continue
+				}
+				item, _ := asMap(decoded["item"])
+				itemID = asString(item["static_id"])
+				count = asInt(decoded["count"])
+				slotIndex = asInt(decoded["slot_index"])
+			}
+			if itemID == "" && count == 0 {
+				continue
+			}
+			slot := Slot{Slot: slotIndex, ItemID: itemID, Count: count}
+			if durabilityValue := getField(slotMap, "Durability"); durabilityValue != nil {
+				durability := asFloat(durabilityValue)
+				slot.Durability = &durability
+			}
+			container.Slots = append(container.Slots, slot)
+		}
+		index.Containers = append(index.Containers, container)
+	}
+}
+
+func characterContainerMembers(index *Index, world map[string]any) map[string][]string {
+	out := map[string][]string{}
+	for _, entryAny := range asList(getField(world, "CharacterContainerSaveData")) {
+		entry, ok := rawMap(entryAny)
+		if !ok {
+			continue
+		}
+		key, _ := asMap(entry["key"])
+		value, _ := asMap(entry["value"])
+		containerID := containerIDFromAny(getField(key, "ID"))
+		if containerID == "" || isZeroGUID(containerID) {
+			continue
+		}
+		for _, slotAny := range asList(getField(value, "Slots")) {
+			instanceID := asString(getField(getField(slotAny, "IndividualId"), "InstanceId"))
+			if raw := bytesFromAny(getField(slotAny, "RawData")); len(raw) > 0 {
+				decoded, err := gvas.DecodeCharacterContainerSlotRaw(raw)
+				if err != nil {
+					index.Warnings = append(index.Warnings, "character container slot RawData decode failed: "+err.Error())
+					continue
+				}
+				instanceID = asString(decoded["instance_id"])
+			}
+			if instanceID != "" && !isZeroGUID(instanceID) {
+				out[containerID] = appendUnique(out[containerID], instanceID)
+			}
+		}
+	}
+	return out
+}
+
+func workerContainerID(raw []byte) (string, error) {
+	reader := gvas.NewReader(raw)
+	if _, err := reader.GUID(); err != nil {
+		return "", err
+	}
+	if _, err := reader.Transform(); err != nil {
+		return "", err
+	}
+	if _, err := reader.Byte(); err != nil {
+		return "", err
+	}
+	if _, err := reader.Byte(); err != nil {
+		return "", err
+	}
+	return reader.GUID()
+}
+
+func normalizeMapObjects(index *Index, world map[string]any) {
+	containerIndex := map[string]int{}
+	for i := range index.Containers {
+		containerIndex[index.Containers[i].ContainerID] = i
+	}
+	baseIndexByID := map[string]int{}
+	for i := range index.Bases {
+		baseIndexByID[index.Bases[i].ID] = i
+	}
+	for _, objectAny := range asList(getField(world, "MapObjectSaveData")) {
+		object, ok := asMap(objectAny)
+		if !ok {
+			continue
+		}
+		label := asString(getField(object, "MapObjectId"))
+		model, _ := asMap(getField(object, "Model"))
+		raw, err := rawDataMap(getField(model, "RawData"), gvas.DecodeMapObjectModelRaw)
+		if err != nil {
+			index.Warnings = append(index.Warnings, "map object model RawData decode failed: "+err.Error())
+			continue
+		}
+		id := firstNonEmpty(asString(raw["instance_id"]), asString(getField(object, "MapObjectInstanceId")))
+		location := locationFromAny(firstNonEmptyAny(raw["initial_transform_cache"], getField(object, "WorldLocation")))
+		if id == "" {
+			continue
+		}
+		if location.X != 0 || location.Y != 0 || location.Z != 0 {
+			index.MapEntities = append(index.MapEntities, MapEntity{Type: "map_object", ID: id, Label: label, Location: location})
+		}
+		baseIndex := -1
+		if direct, found := baseIndexByID[asString(raw["base_camp_id_belong_to"])]; found {
+			baseIndex = direct
+		} else {
+			baseIndex = nearestBase(index.Bases, location)
+		}
+		if baseIndex >= 0 && !strings.HasPrefix(label, "PickupItem_") {
+			index.Bases[baseIndex].StructuresCount++
+		}
+		concrete := getField(object, "ConcreteModel")
+		for _, moduleAny := range asList(getField(concrete, "ModuleMap")) {
+			module, ok := rawMap(moduleAny)
+			if !ok || asString(module["key"]) != "EPalMapObjectConcreteModelModuleType::ItemContainer" {
+				continue
+			}
+			moduleValue, _ := asMap(module["value"])
+			raw := bytesFromAny(getField(moduleValue, "RawData"))
+			if len(raw) < 16 {
+				continue
+			}
+			containerID, err := gvas.NewReader(raw).GUID()
+			if err != nil || isZeroGUID(containerID) {
+				continue
+			}
+			if containerPosition, found := containerIndex[containerID]; found {
+				index.Containers[containerPosition].OwnerType = "map_object"
+				index.Containers[containerPosition].OwnerID = id
+			}
+			if baseIndex >= 0 {
+				index.Bases[baseIndex].Containers = appendUnique(index.Bases[baseIndex].Containers, containerID)
+			}
+		}
+	}
+}
+
+func nearestBase(bases []Base, location Coordinates) int {
+	bestIndex := -1
+	bestDistance := math.MaxFloat64
+	for i, base := range bases {
+		raw, _ := base.Raw.(map[string]any)
+		radius := asFloat(raw["area_range"])
+		if radius <= 0 {
+			continue
+		}
+		dx, dy := base.Location.X-location.X, base.Location.Y-location.Y
+		distance := dx*dx + dy*dy
+		if distance <= radius*radius && distance < bestDistance {
+			bestIndex, bestDistance = i, distance
+		}
+	}
+	return bestIndex
 }
 
 func applyGuildNames(index *Index) {
@@ -251,7 +481,9 @@ func getField(data any, key string) any {
 
 func rawDataMap(value any, decode func([]byte) (map[string]any, error)) (map[string]any, error) {
 	if raw, ok := asMap(value); ok {
-		return raw, nil
+		if _, encodedBytes := raw["values"]; !encodedBytes {
+			return raw, nil
+		}
 	}
 	rawBytes := bytesFromAny(value)
 	if len(rawBytes) == 0 {
@@ -325,15 +557,25 @@ func asIntDefault(value any, fallback int) int {
 	switch v := value.(type) {
 	case int:
 		return v
+	case int8:
+		return int(v)
+	case int16:
+		return int(v)
 	case int32:
 		return int(v)
 	case int64:
 		return int(v)
 	case uint:
 		return int(v)
+	case uint8:
+		return int(v)
+	case uint16:
+		return int(v)
 	case uint32:
 		return int(v)
 	case uint64:
+		return int(v)
+	case float32:
 		return int(v)
 	case float64:
 		return int(v)
@@ -351,11 +593,19 @@ func asInt64(value any) int64 {
 	switch v := value.(type) {
 	case int:
 		return int64(v)
+	case int8:
+		return int64(v)
+	case int16:
+		return int64(v)
 	case int32:
 		return int64(v)
 	case int64:
 		return v
 	case uint:
+		return int64(v)
+	case uint8:
+		return int64(v)
+	case uint16:
 		return int64(v)
 	case uint32:
 		return int64(v)
@@ -381,9 +631,23 @@ func asFloat(value any) float64 {
 		return float64(v)
 	case int:
 		return float64(v)
+	case int8:
+		return float64(v)
+	case int16:
+		return float64(v)
 	case int32:
 		return float64(v)
 	case int64:
+		return float64(v)
+	case uint:
+		return float64(v)
+	case uint8:
+		return float64(v)
+	case uint16:
+		return float64(v)
+	case uint32:
+		return float64(v)
+	case uint64:
 		return float64(v)
 	case string:
 		n, err := strconv.ParseFloat(v, 64)
@@ -402,6 +666,10 @@ func asBool(value any) bool {
 	case string:
 		return strings.EqualFold(v, "true") || v == "1"
 	case int:
+		return v != 0
+	case int8:
+		return v != 0
+	case uint8:
 		return v != 0
 	default:
 		return false
@@ -473,6 +741,19 @@ func firstNonEmptyAny(values ...any) any {
 		}
 	}
 	return nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func isZeroGUID(value string) bool {
+	return strings.TrimSpace(value) == "00000000-0000-0000-0000-000000000000"
 }
 
 func containerIDFromAny(value any) string {

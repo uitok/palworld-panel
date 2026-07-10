@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,7 +80,7 @@ func TestSteamClientPublishedFileDetailsForm(t *testing.T) {
 		if query.Get("return_tags") != "1" || query.Get("return_short_description") != "1" || query.Get("return_metadata") != "1" {
 			t.Fatalf("missing detail return params: %#v", query)
 		}
-		_, _ = w.Write([]byte(`{"response":{"result":1,"publishedfiledetails":[{"publishedfileid":"999","result":1,"title":"Detail","file_description":"Description","lifetime_subscriptions":"33","time_updated":"44"}]}}`))
+		_, _ = w.Write([]byte(`{"response":{"result":1,"publishedfiledetails":[{"publishedfileid":"999","result":1,"title":"Detail","short_description":"Short","file_description":"Complete description with paragraphs\n\n[url=https://example.com]Docs[/url]","lifetime_subscriptions":"33","time_updated":"44"}]}}`))
 	}))
 	defer server.Close()
 
@@ -90,7 +91,7 @@ func TestSteamClientPublishedFileDetailsForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDetails returned error: %v", err)
 	}
-	if len(items) != 1 || items[0].ID != "999" || items[0].Subscriptions != 33 || items[0].TimeUpdated != 44 {
+	if len(items) != 1 || items[0].ID != "999" || items[0].Subscriptions != 33 || items[0].TimeUpdated != 44 || !strings.Contains(items[0].Summary, "Complete description") {
 		t.Fatalf("unexpected details: %#v", items)
 	}
 }
@@ -140,5 +141,8 @@ func TestWorkshopServiceUsesEffectiveConfigKey(t *testing.T) {
 	}
 	if len(service.client.apiKey) != 32 {
 		t.Fatal("embedded Steam Web API key has invalid length")
+	}
+	if service.client.httpClient.Timeout != workshopRequestTimeout {
+		t.Fatalf("Steam request timeout = %s, want %s", service.client.httpClient.Timeout, workshopRequestTimeout)
 	}
 }

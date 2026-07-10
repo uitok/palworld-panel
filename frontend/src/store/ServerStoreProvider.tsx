@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import type { Job, ServerMetrics, ServerStatus } from '../types';
+import type { Job, ServerMetrics, ServerStatus, SessionInfo } from '../types';
 import { appEvents, readAppStorage, writeAppStorage } from '../config/defaults';
+import { authApi } from '../api/auth';
 import { ServerStoreContext } from './serverStoreContext';
 
 export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -8,6 +9,7 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return readAppStorage('token') || import.meta.env.VITE_PANEL_TOKEN || '';
   });
   const [authError, setAuthError] = useState(false);
+  const [session, setSession] = useState<SessionInfo | null>(null);
   const [autoRefresh, setAutoRefreshState] = useState<boolean>(true);
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -24,6 +26,26 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const clearAuthError = () => setAuthError(false);
+
+  useEffect(() => {
+    let active = true;
+    setSession(null);
+    if (!panelToken) {
+      return () => {
+        active = false;
+      };
+    }
+    void authApi.me()
+      .then((nextSession) => {
+        if (active) setSession(nextSession);
+      })
+      .catch(() => {
+        if (active) setSession(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [panelToken]);
 
   useEffect(() => {
     const onAuthError = () => setAuthError(true);
@@ -59,6 +81,7 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setPanelToken,
         authError,
         clearAuthError,
+        session,
         autoRefresh,
         setAutoRefresh,
         refreshKey,

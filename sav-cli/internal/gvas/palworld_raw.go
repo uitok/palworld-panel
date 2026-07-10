@@ -164,24 +164,222 @@ func decodeGroupRaw(data []byte, groupType string) (any, error) {
 }
 
 func DecodeGroupRaw(data []byte, groupType string) (map[string]any, error) {
+	switch groupType {
+	case "EPalGroupType::Guild":
+		if out, err := decodeCurrentGuildRaw(data, true); err == nil {
+			return out, nil
+		}
+		if out, err := decodeCurrentGuildRaw(data, false); err == nil {
+			return out, nil
+		}
+		return decodeLegacyGroupRaw(data, groupType)
+	case "EPalGroupType::Organization":
+		if out, err := decodeCurrentOrganizationRaw(data, groupType); err == nil {
+			return out, nil
+		}
+		return decodeLegacyGroupRaw(data, groupType)
+	case "EPalGroupType::IndependentGuild":
+		if out, err := decodeCurrentIndependentGuildRaw(data, groupType); err == nil {
+			return out, nil
+		}
+		return decodeLegacyGroupRaw(data, groupType)
+	default:
+		reader := NewReader(data)
+		out, err := readGroupHeader(reader, groupType)
+		if err != nil {
+			return nil, err
+		}
+		if !reader.EOF() {
+			out["trailing_unparsed_data"] = intsFromBytes(mustReadRest(reader))
+		}
+		return out, nil
+	}
+}
+
+// decodeCurrentGuildRaw supports the post-0.3 guild prefix and both the
+// pre-1.0 and 1.0 role/permission tails. The blob has no explicit format tag,
+// so callers try both tails and accept only a layout that reaches EOF.
+func decodeCurrentGuildRaw(data []byte, withRolePermissions bool) (map[string]any, error) {
 	reader := NewReader(data)
-	groupID, err := reader.GUID()
+	out, err := readGroupHeader(reader, "EPalGroupType::Guild")
 	if err != nil {
 		return nil, err
 	}
-	groupName, err := reader.FString()
+	orgType, err := reader.Byte()
 	if err != nil {
 		return nil, err
 	}
-	handles, err := reader.TArray(readInstanceID)
+	leading, err := reader.Read(4)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{
-		"group_type":                      groupType,
-		"group_id":                        groupID,
-		"group_name":                      groupName,
-		"individual_character_handle_ids": handles,
+	baseIDs, err := reader.TArray(readGUIDAny)
+	if err != nil {
+		return nil, err
+	}
+	unknown1, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	baseLevel, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	points, err := reader.TArray(readGUIDAny)
+	if err != nil {
+		return nil, err
+	}
+	guildName, err := reader.FString()
+	if err != nil {
+		return nil, err
+	}
+	lastNameModifier, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	markers, err := reader.TArray(readGuildMarker)
+	if err != nil {
+		return nil, err
+	}
+
+	out["org_type"] = int(orgType)
+	out["leading_bytes"] = intsFromBytes(leading)
+	out["base_ids"] = baseIDs
+	out["unknown_1"] = int(unknown1)
+	out["base_camp_level"] = int(baseLevel)
+	out["map_object_instance_ids_base_camp_points"] = points
+	out["guild_name"] = guildName
+	out["last_guild_name_modifier_player_uid"] = lastNameModifier
+	out["guild_markers"] = markers
+
+	if withRolePermissions {
+		chestRoles, err := reader.TArray(readByteAny)
+		if err != nil {
+			return nil, err
+		}
+		unknown, err := reader.I32()
+		if err != nil {
+			return nil, err
+		}
+		adminUID, err := reader.GUID()
+		if err != nil {
+			return nil, err
+		}
+		players, err := reader.TArray(readGuildPlayerWithRole)
+		if err != nil {
+			return nil, err
+		}
+		permissions, err := reader.TArray(readGuildRolePermission)
+		if err != nil {
+			return nil, err
+		}
+		trailing, err := reader.Read(4)
+		if err != nil {
+			return nil, err
+		}
+		out["guild_chest_allowed_roles"] = chestRoles
+		out["unknown_i32"] = int(unknown)
+		out["admin_player_uid"] = adminUID
+		out["players"] = players
+		out["role_permissions"] = permissions
+		out["trailing_bytes"] = intsFromBytes(trailing)
+	} else {
+		adminUID, err := reader.GUID()
+		if err != nil {
+			return nil, err
+		}
+		players, err := reader.TArray(readGuildPlayer)
+		if err != nil {
+			return nil, err
+		}
+		trailing, err := reader.Read(4)
+		if err != nil {
+			return nil, err
+		}
+		out["admin_player_uid"] = adminUID
+		out["players"] = players
+		out["trailing_bytes"] = intsFromBytes(trailing)
+	}
+	if !reader.EOF() {
+		return nil, fmt.Errorf("guild layout left %d unparsed bytes", reader.Remaining())
+	}
+	return out, nil
+}
+
+func decodeCurrentOrganizationRaw(data []byte, groupType string) (map[string]any, error) {
+	reader := NewReader(data)
+	out, err := readGroupHeader(reader, groupType)
+	if err != nil {
+		return nil, err
+	}
+	orgType, err := reader.Byte()
+	if err != nil {
+		return nil, err
+	}
+	if reader.Remaining() != 12 {
+		return nil, fmt.Errorf("organization layout has %d trailing bytes", reader.Remaining())
+	}
+	out["org_type"] = int(orgType)
+	out["trailing_bytes"] = intsFromBytes(mustReadRest(reader))
+	return out, nil
+}
+
+func decodeCurrentIndependentGuildRaw(data []byte, groupType string) (map[string]any, error) {
+	reader := NewReader(data)
+	out, err := readGroupHeader(reader, groupType)
+	if err != nil {
+		return nil, err
+	}
+	orgType, err := reader.Byte()
+	if err != nil {
+		return nil, err
+	}
+	baseLevel, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	points, err := reader.TArray(readGUIDAny)
+	if err != nil {
+		return nil, err
+	}
+	guildName, err := reader.FString()
+	if err != nil {
+		return nil, err
+	}
+	playerUID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	guildName2, err := reader.FString()
+	if err != nil {
+		return nil, err
+	}
+	lastOnline, err := reader.I64()
+	if err != nil {
+		return nil, err
+	}
+	playerName, err := reader.FString()
+	if err != nil {
+		return nil, err
+	}
+	if !reader.EOF() {
+		return nil, fmt.Errorf("independent guild layout left %d unparsed bytes", reader.Remaining())
+	}
+	out["org_type"] = int(orgType)
+	out["base_camp_level"] = int(baseLevel)
+	out["map_object_instance_ids_base_camp_points"] = points
+	out["guild_name"] = guildName
+	out["player_uid"] = playerUID
+	out["guild_name_2"] = guildName2
+	out["player_info"] = map[string]any{"last_online_real_time": lastOnline, "player_name": playerName}
+	return out, nil
+}
+
+func decodeLegacyGroupRaw(data []byte, groupType string) (map[string]any, error) {
+	reader := NewReader(data)
+	out, err := readGroupHeader(reader, groupType)
+	if err != nil {
+		return nil, err
 	}
 	if groupType == "EPalGroupType::Guild" || groupType == "EPalGroupType::IndependentGuild" || groupType == "EPalGroupType::Organization" {
 		orgType, err := reader.Byte()
@@ -238,34 +436,209 @@ func DecodeGroupRaw(data []byte, groupType string) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		count, err := reader.I32()
+		players, err := reader.TArray(readGuildPlayer)
 		if err != nil {
 			return nil, err
 		}
-		if count < 0 || count > 1_000_000 {
-			return nil, fmt.Errorf("guild player count is unreasonable: %d", count)
-		}
-		players := make([]any, 0, count)
-		for range count {
-			playerUID, err := reader.GUID()
-			if err != nil {
-				return nil, err
-			}
-			lastOnline, err := reader.I64()
-			if err != nil {
-				return nil, err
-			}
-			playerName, err := reader.FString()
-			if err != nil {
-				return nil, err
-			}
-			players = append(players, map[string]any{
-				"player_uid":  playerUID,
-				"player_info": map[string]any{"last_online_real_time": lastOnline, "player_name": playerName},
-			})
-		}
 		out["admin_player_uid"] = adminUID
 		out["players"] = players
+	}
+	if !reader.EOF() {
+		out["trailing_unparsed_data"] = intsFromBytes(mustReadRest(reader))
+	}
+	return out, nil
+}
+
+func readGroupHeader(reader *Reader, groupType string) (map[string]any, error) {
+	groupID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	groupName, err := reader.FString()
+	if err != nil {
+		return nil, err
+	}
+	handles, err := reader.TArray(readInstanceID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"group_type":                      groupType,
+		"group_id":                        groupID,
+		"group_name":                      groupName,
+		"individual_character_handle_ids": handles,
+	}, nil
+}
+
+func readGuildPlayer(reader *Reader) (any, error) {
+	playerUID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	lastOnline, err := reader.I64()
+	if err != nil {
+		return nil, err
+	}
+	playerName, err := reader.FString()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"player_uid":  playerUID,
+		"player_info": map[string]any{"last_online_real_time": lastOnline, "player_name": playerName},
+	}, nil
+}
+
+func readGuildPlayerWithRole(reader *Reader) (any, error) {
+	value, err := readGuildPlayer(reader)
+	if err != nil {
+		return nil, err
+	}
+	role, err := reader.Byte()
+	if err != nil {
+		return nil, err
+	}
+	value.(map[string]any)["role"] = int(role)
+	return value, nil
+}
+
+func readGuildMarker(reader *Reader) (any, error) {
+	markerID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	location, err := reader.Vector()
+	if err != nil {
+		return nil, err
+	}
+	iconType, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	ownerUID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"marker_id": markerID, "icon_location": location, "icon_type": int(iconType), "owner_player_uid": ownerUID}, nil
+}
+
+func readGuildRolePermission(reader *Reader) (any, error) {
+	role, err := reader.Byte()
+	if err != nil {
+		return nil, err
+	}
+	permissions, err := reader.TArray(readByteAny)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"role": int(role), "permissions": permissions}, nil
+}
+
+func readByteAny(reader *Reader) (any, error) {
+	value, err := reader.Byte()
+	return int(value), err
+}
+
+func DecodeCharacterContainerSlotRaw(data []byte) (map[string]any, error) {
+	reader := NewReader(data)
+	playerUID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	instanceID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"player_uid": playerUID, "instance_id": instanceID}
+	if !reader.EOF() {
+		permission, err := reader.Byte()
+		if err != nil {
+			return nil, err
+		}
+		out["permission_tribe_id"] = int(permission)
+	}
+	if !reader.EOF() {
+		out["trailing_unparsed_data"] = intsFromBytes(mustReadRest(reader))
+	}
+	return out, nil
+}
+
+func DecodeItemContainerSlotRaw(data []byte) (map[string]any, error) {
+	reader := NewReader(data)
+	slotIndex, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	count, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	staticID, err := reader.FString()
+	if err != nil {
+		return nil, err
+	}
+	createdWorldID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	localID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"slot_index": int(slotIndex),
+		"count":      int(count),
+		"item": map[string]any{
+			"static_id": staticID,
+			"dynamic_id": map[string]any{
+				"created_world_id":          createdWorldID,
+				"local_id_in_created_world": localID,
+			},
+		},
+	}
+	if !reader.EOF() {
+		out["trailing_unparsed_data"] = intsFromBytes(mustReadRest(reader))
+	}
+	return out, nil
+}
+
+func DecodeMapObjectModelRaw(data []byte) (map[string]any, error) {
+	reader := NewReader(data)
+	instanceID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	concreteID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	baseID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	groupID, err := reader.GUID()
+	if err != nil {
+		return nil, err
+	}
+	hpCurrent, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	hpMax, err := reader.I32()
+	if err != nil {
+		return nil, err
+	}
+	transform, err := reader.Transform()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"instance_id":                instanceID,
+		"concrete_model_instance_id": concreteID,
+		"base_camp_id_belong_to":     baseID,
+		"group_id_belong_to":         groupID,
+		"hp":                         map[string]any{"current": int(hpCurrent), "max": int(hpMax)},
+		"initial_transform_cache":    transform,
 	}
 	if !reader.EOF() {
 		out["trailing_unparsed_data"] = intsFromBytes(mustReadRest(reader))

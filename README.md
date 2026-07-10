@@ -64,6 +64,8 @@ go run ./cmd/palpanel
 - `PALPANEL_BACKEND_DIR`: 后端资源目录。离线包默认是包内 `backend/`。
 - `PALPANEL_PALDEFENDER_REST_BASE_URL`: PalDefender REST 地址，默认 `http://127.0.0.1:17993`。
 - `PALPANEL_PALDEFENDER_REST_PORT`: 写入 PalDefender RESTConfig 的端口，默认 `17993`。
+- `PALPANEL_GAME_DATA_TIMEOUT_MS`: 官方 `/game-data` 代理超时，默认 `3000` 毫秒。
+- `PALPANEL_GAME_DATA_MAX_MB`: 官方 `/game-data` 响应上限，默认 `16` MiB。
 
 ## 配置优先级
 
@@ -86,8 +88,11 @@ go run ./cmd/palpanel
 ## 运维功能
 
 - 安全重启会创建后端任务：保存/通知、等待倒计时、停止、启动。
-- 版本检查使用 Steam Build ID：读取本地 `appmanifest_2394010.acf`，再通过 SteamCMD 查询 public 分支最新 Build；Build ID 不是游戏语义版本号。
+- 更新判断使用 Steam Build ID：读取本地 `appmanifest_2394010.acf`，再通过 SteamCMD 查询 public 分支最新 Build。服务器运行时另从官方 `/info` 展示语义版本，并按 `1.0.0` 兼容目标提示 Mod、PalDefender 和存档解析风险；配置规范版本不会被当作游戏版本。
 - “检查后更新”会先比对 Build ID，只有发现新版本才执行备份、停服、更新和必要的重启。
 - 恢复备份前会先停止服务器并创建 `pre-restore` 备份。
+- 管理员可在总览中重置当前世界；任务会校验 `RESET WORLD` 与世界 ID、创建并验证 `pre-world-reset` 备份，只移走当前世界目录。新世界启动失败时不会覆盖旧数据，备份和暂存路径会写入任务错误。
+- 设置页支持 OpenAI-compatible AI 翻译配置。API Key 仅保存到 `data/secrets/ai-translation.key`（`0600`），Workshop 详情按需翻译 Steam 权威描述并按原文哈希与模型缓存。
+- PalServer 新进程统一启用 stdout 日志。Wine 模式同时写入 Docker 输出和 `data/logs/palserver.log`；文件与 Docker 日志均按 20 MiB、5 份轮转，总览运行时每 3 秒刷新，停服后仍保留最后日志。
 - 写操作会记录审计日志，可在 `/audit` 查看。
 - 玩家踢出等依赖运行时命令能力的功能，在未接入 PalDefender/RCON 后端时会返回明确 `unsupported`。

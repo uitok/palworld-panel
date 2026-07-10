@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,8 @@ func TestServerMetricsNormalizesPalworldRESTResponse(t *testing.T) {
 			"maxplayernum":     32,
 			"serverframetime":  17.2,
 			"uptime":           90,
+			"basecampnum":      7,
+			"days":             12,
 		})
 	}))
 	defer rest.Close()
@@ -66,6 +69,100 @@ func TestServerMetricsNormalizesPalworldRESTResponse(t *testing.T) {
 	}
 	if payload["server_fps"] != 58.5 || payload["frame_time"] != 17.2 {
 		t.Fatalf("unexpected performance payload: %#v", payload)
+	}
+	if payload["active_bases"] != float64(7) || payload["days"] != float64(12) {
+		t.Fatalf("unexpected 1.0 metrics payload: %#v", payload)
+	}
+}
+
+func TestOfficialOneDotZeroRESTReadContracts(t *testing.T) {
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		responses := map[string]any{
+			"/v1/api/info": map[string]any{
+				"version": "v1.0.0.81201", "servername": "PalPanel", "description": "test", "worldguid": "world-guid",
+			},
+			"/v1/api/players": map[string]any{"players": []any{map[string]any{
+				"name": "Player", "accountName": "account", "playerId": "player-id", "userId": "steam-id",
+				"ip": "127.0.0.1", "ping": 3.14, "location_x": 1.0, "location_y": 2.0, "level": 3, "building_count": 4,
+			}}},
+			"/v1/api/settings": map[string]any{"Difficulty": "None", "RESTAPIEnabled": true, "RESTAPIPort": 8212},
+			"/v1/api/game-data": map[string]any{
+				"Time": "2026-06-17 13:00:40", "FPS": 91.71, "AverageFPS": 33.78, "ActorData": []any{map[string]any{"id": "actor"}},
+			},
+		}
+		body, ok := responses[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer rest.Close()
+
+	router, cleanup := newMetricsTestRouter(t, palrest.New(rest.URL+"/v1/api", "admin", ""))
+	defer cleanup.Close()
+	for _, path := range []string{"info", "players", "settings"} {
+		rec := requestMetricsTestRoute(t, router, "/api/server/"+path)
+		var envelope struct {
+			OK   bool `json:"ok"`
+			Data struct {
+				Status int            `json:"status"`
+				Body   map[string]any `json:"body"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || !envelope.OK || envelope.Data.Status != http.StatusOK || envelope.Data.Body == nil {
+			t.Fatalf("%s contract response = %s, error = %v", path, rec.Body.String(), err)
+		}
+	}
+
+	rec := requestMetricsTestRoute(t, router, "/api/server/game-data")
+	payload := decodeMetricsResponse(t, rec)
+	if payload["Time"] != "2026-06-17 13:00:40" || payload["ActorData"] == nil {
+		t.Fatalf("unexpected game-data payload: %#v", payload)
+	}
+}
+
+func TestServerGameDataRejectsOversizedResponse(t *testing.T) {
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ActorData":"this response is larger than the configured test limit"}`))
+	}))
+	defer rest.Close()
+
+	router, cleanup := newMetricsTestRouterWithConfig(t, palrest.New(rest.URL+"/v1/api", "admin", ""), func(cfg *appconfig.Config) {
+		cfg.PalworldGameDataMaxBytes = 16
+		cfg.PalworldGameDataTimeoutMS = 500
+	})
+	defer cleanup.Close()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/server/game-data", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "palworld_game_data_too_large") {
+		t.Fatalf("expected bounded game-data failure, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServerGameDataUsesDedicatedShortTimeout(t *testing.T) {
+	rest := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer rest.Close()
+
+	router, cleanup := newMetricsTestRouterWithConfig(t, palrest.New(rest.URL+"/v1/api", "admin", ""), func(cfg *appconfig.Config) {
+		cfg.PalworldGameDataMaxBytes = 1024
+		cfg.PalworldGameDataTimeoutMS = 20
+	})
+	defer cleanup.Close()
+	started := time.Now()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/server/game-data", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "palworld_game_data_failed") {
+		t.Fatalf("expected timed out game-data failure, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("game-data request ignored dedicated timeout: %s", elapsed)
 	}
 }
 
@@ -120,6 +217,10 @@ func (c metricsTestCleanup) Close() {
 }
 
 func newMetricsTestRouter(t *testing.T, restClient palrest.Client) (*gin.Engine, metricsTestCleanup) {
+	return newMetricsTestRouterWithConfig(t, restClient, nil)
+}
+
+func newMetricsTestRouterWithConfig(t *testing.T, restClient palrest.Client, mutate func(*appconfig.Config)) (*gin.Engine, metricsTestCleanup) {
 	t.Helper()
 	root := t.TempDir()
 	cfg := appconfig.Config{
@@ -141,6 +242,9 @@ func newMetricsTestRouter(t *testing.T, restClient palrest.Client) (*gin.Engine,
 		QueryPort:       27015,
 		RESTPort:        8212,
 	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
 	if err := cfg.EnsureDirs(); err != nil {
 		t.Fatalf("EnsureDirs returned error: %v", err)
 	}
@@ -161,6 +265,18 @@ func newMetricsTestRouter(t *testing.T, restClient palrest.Client) (*gin.Engine,
 		monitorManager,
 		scheduler.New(store, serverManager, restClient),
 	), metricsTestCleanup{store: store, cfg: cfg}
+}
+
+func requestMetricsTestRoute(t *testing.T, router *gin.Engine, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%s expected 200, got %d: %s", path, rec.Code, rec.Body.String())
+	}
+	return rec
 }
 
 func decodeMetricsResponse(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {

@@ -246,6 +246,7 @@ const baseVersion = (): ServerVersionInfo => ({
   last_checked_at: '',
   source: '',
   manifest_path: '',
+  compatibility_warnings: [],
 });
 
 const baseStartup = (): StartupResponse => ({

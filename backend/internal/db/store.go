@@ -111,6 +111,16 @@ type Alert struct {
 	AckAt     string `json:"ack_at,omitempty"`
 }
 
+type AITranslation struct {
+	WorkshopID     string `json:"workshop_id"`
+	SourceSHA256   string `json:"source_sha256"`
+	TargetLanguage string `json:"target_language"`
+	Provider       string `json:"provider"`
+	Model          string `json:"model"`
+	Translation    string `json:"translation"`
+	CreatedAt      string `json:"created_at"`
+}
+
 func Open(path string) (*Store, error) {
 	d, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -228,6 +238,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			ack_at TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS ai_translations (
+			workshop_id TEXT NOT NULL,
+			source_sha256 TEXT NOT NULL,
+			target_language TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			model TEXT NOT NULL,
+			translation TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (workshop_id, source_sha256, target_language, provider, model)
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -262,6 +282,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_mods_workshop_id ON mods(workshop_id)`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ai_translations_workshop_id ON ai_translations(workshop_id)`); err != nil {
 		return err
 	}
 	return nil
@@ -729,6 +752,28 @@ func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error) {
 		return "", false, err
 	}
 	return v, true, nil
+}
+
+func (s *Store) GetAITranslation(ctx context.Context, workshopID, sourceSHA256, targetLanguage, provider, model string) (AITranslation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT workshop_id,source_sha256,target_language,provider,model,translation,created_at
+		FROM ai_translations WHERE workshop_id=? AND source_sha256=? AND target_language=? AND provider=? AND model=?`,
+		workshopID, sourceSHA256, targetLanguage, provider, model)
+	var item AITranslation
+	err := row.Scan(&item.WorkshopID, &item.SourceSHA256, &item.TargetLanguage, &item.Provider, &item.Model, &item.Translation, &item.CreatedAt)
+	return item, err
+}
+
+func (s *Store) UpsertAITranslation(ctx context.Context, item AITranslation) error {
+	if item.CreatedAt == "" {
+		item.CreatedAt = now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO ai_translations (
+		workshop_id,source_sha256,target_language,provider,model,translation,created_at
+	) VALUES (?,?,?,?,?,?,?)
+	ON CONFLICT(workshop_id,source_sha256,target_language,provider,model)
+	DO UPDATE SET translation=excluded.translation, created_at=excluded.created_at`,
+		item.WorkshopID, item.SourceSHA256, item.TargetLanguage, item.Provider, item.Model, item.Translation, item.CreatedAt)
+	return err
 }
 
 func boolInt(v bool) int {

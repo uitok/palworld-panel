@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"palpanel/internal/aitranslation"
 	"palpanel/internal/appconfig"
 )
 
@@ -21,6 +22,7 @@ const (
 	defaultSteamAPIBaseURL = "https://api.steampowered.com"
 	steamWorkshopPageURL   = "https://steamcommunity.com/sharedfiles/filedetails/?id="
 	workshopCacheTTL       = 90 * time.Second
+	workshopRequestTimeout = 15 * time.Second
 )
 
 var ErrSteamAPIKeyMissing = errors.New("Steam Web API key is not available")
@@ -57,20 +59,21 @@ type WorkshopSearchResult struct {
 }
 
 type WorkshopItem struct {
-	ID              string   `json:"id"`
-	Title           string   `json:"title"`
-	Summary         string   `json:"summary,omitempty"`
-	PreviewURL      string   `json:"preview_url,omitempty"`
-	SteamURL        string   `json:"steam_url"`
-	Tags            []string `json:"tags,omitempty"`
-	FileSize        int64    `json:"file_size,omitempty"`
-	Subscriptions   int64    `json:"subscriptions,omitempty"`
-	TimeCreated     int64    `json:"time_created,omitempty"`
-	TimeUpdated     int64    `json:"time_updated,omitempty"`
-	Installed       bool     `json:"installed"`
-	Enabled         bool     `json:"enabled"`
-	UpdateAvailable bool     `json:"update_available"`
-	ModID           string   `json:"mod_id,omitempty"`
+	ID              string                     `json:"id"`
+	Title           string                     `json:"title"`
+	Summary         string                     `json:"summary,omitempty"`
+	PreviewURL      string                     `json:"preview_url,omitempty"`
+	SteamURL        string                     `json:"steam_url"`
+	Tags            []string                   `json:"tags,omitempty"`
+	FileSize        int64                      `json:"file_size,omitempty"`
+	Subscriptions   int64                      `json:"subscriptions,omitempty"`
+	TimeCreated     int64                      `json:"time_created,omitempty"`
+	TimeUpdated     int64                      `json:"time_updated,omitempty"`
+	Installed       bool                       `json:"installed"`
+	Enabled         bool                       `json:"enabled"`
+	UpdateAvailable bool                       `json:"update_available"`
+	ModID           string                     `json:"mod_id,omitempty"`
+	Translation     *aitranslation.Translation `json:"translation,omitempty"`
 }
 
 type SteamClient struct {
@@ -86,7 +89,7 @@ func NewSteamClient(apiKey, appID string) *SteamClient {
 		appID:   strings.TrimSpace(appID),
 		baseURL: defaultSteamAPIBaseURL,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: workshopRequestTimeout,
 		},
 	}
 }
@@ -182,7 +185,7 @@ func (c *SteamClient) GetDetails(ctx context.Context, ids []string) ([]WorkshopI
 	if payload.Response.Result != 0 && payload.Response.Result != 1 {
 		return nil, SteamAPIError{Code: "steam_details_failed", Message: fmt.Sprintf("Steam GetDetails returned result %d", payload.Response.Result)}
 	}
-	items := mapSteamItems(payload.Response.Details)
+	items := mapSteamDetailItems(payload.Response.Details)
 	return items, nil
 }
 
@@ -261,7 +264,7 @@ func (s *WorkshopService) Search(ctx context.Context, params WorkshopSearchParam
 	}
 	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, workshopRequestTimeout)
 	defer cancel()
 	result, err := s.client.QueryFiles(ctx, params)
 	if err != nil {
@@ -274,7 +277,7 @@ func (s *WorkshopService) Search(ctx context.Context, params WorkshopSearchParam
 }
 
 func (s *WorkshopService) Detail(ctx context.Context, itemID string) (WorkshopItem, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, workshopRequestTimeout)
 	defer cancel()
 	items, err := s.client.GetDetails(ctx, []string{itemID})
 	if err != nil {
@@ -371,6 +374,14 @@ type steamFileDetail struct {
 }
 
 func mapSteamItems(details []steamFileDetail) []WorkshopItem {
+	return mapSteamItemsWithSummary(details, false)
+}
+
+func mapSteamDetailItems(details []steamFileDetail) []WorkshopItem {
+	return mapSteamItemsWithSummary(details, true)
+}
+
+func mapSteamItemsWithSummary(details []steamFileDetail, fullDescription bool) []WorkshopItem {
 	items := make([]WorkshopItem, 0, len(details))
 	for _, detail := range details {
 		if detail.Result != 0 && detail.Result != 1 {
@@ -387,7 +398,7 @@ func mapSteamItems(details []steamFileDetail) []WorkshopItem {
 		item := WorkshopItem{
 			ID:            id,
 			Title:         strings.TrimSpace(detail.Title),
-			Summary:       summaryFor(detail),
+			Summary:       summaryFor(detail, fullDescription),
 			PreviewURL:    strings.TrimSpace(detail.PreviewURL),
 			SteamURL:      steamWorkshopPageURL + id,
 			Tags:          tagsFor(detail),
@@ -404,7 +415,12 @@ func mapSteamItems(details []steamFileDetail) []WorkshopItem {
 	return items
 }
 
-func summaryFor(detail steamFileDetail) string {
+func summaryFor(detail steamFileDetail, fullDescription bool) string {
+	if fullDescription {
+		if text := strings.TrimSpace(detail.FileDescription); text != "" {
+			return text
+		}
+	}
 	if text := strings.TrimSpace(detail.ShortDescription); text != "" {
 		return text
 	}

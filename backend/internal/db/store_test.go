@@ -71,6 +71,17 @@ func TestStoreJobsModsAndKV(t *testing.T) {
 	if !ok || value != "true" {
 		t.Fatalf("unexpected kv: %v %q", ok, value)
 	}
+
+	translation := AITranslation{
+		WorkshopID: "123456", SourceSHA256: "hash", TargetLanguage: "zh-CN", Provider: "provider", Model: "model", Translation: "译文",
+	}
+	if err := store.UpsertAITranslation(ctx, translation); err != nil {
+		t.Fatalf("UpsertAITranslation returned error: %v", err)
+	}
+	gotTranslation, err := store.GetAITranslation(ctx, "123456", "hash", "zh-CN", "provider", "model")
+	if err != nil || gotTranslation.Translation != "译文" || gotTranslation.CreatedAt == "" {
+		t.Fatalf("unexpected AI translation: %#v, %v", gotTranslation, err)
+	}
 }
 
 func TestStoreMigratesLegacyModsTable(t *testing.T) {

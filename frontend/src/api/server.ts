@@ -1,5 +1,13 @@
 import { apiClient, handleRequest } from './client';
-import type { Job, ServerMetrics, ServerProcessStatus, ServerStatus, ServerVersionInfo } from '../types';
+import type {
+  Job,
+  ServerLogResponse,
+  ServerMetrics,
+  ServerProcessStatus,
+  ServerStatus,
+  ServerVersionInfo,
+  WorldInfo,
+} from '../types';
 import { mapJob } from './tasks';
 
 const stoppedStatus: ServerStatus = {
@@ -28,6 +36,7 @@ const emptyMetrics: ServerMetrics = {
   total_pals: 0,
   active_bases: 0,
   frame_time: 0,
+  days: 0,
 };
 
 const emptyVersionInfo: ServerVersionInfo = {
@@ -38,9 +47,17 @@ const emptyVersionInfo: ServerVersionInfo = {
   last_checked_at: '',
   source: '',
   manifest_path: '',
+  compatibility_warnings: [],
 };
 
 export const emptyLogs = '服务未启动，暂无日志。';
+
+const emptyLogResponse: ServerLogResponse = {
+  logs: '',
+  source: 'none',
+  available: false,
+  reason: 'not_started',
+};
 
 const toNumber = (value: unknown, fallback = 0) => {
   const next = Number(value);
@@ -132,21 +149,40 @@ export const mapServerMetrics = (raw: unknown): ServerMetrics => {
       body.frame_time ?? body.frameTime ?? body.frametime ?? body.server_frame_time ?? body.serverFrameTime ?? body.serverframetime,
       emptyMetrics.frame_time,
     ),
+    days: toNumber(body.days, emptyMetrics.days),
   };
 };
 
-export const mapLogs = (raw: unknown): { logs: string } => {
+export const mapLogs = (raw: unknown): ServerLogResponse => {
   if (typeof raw === 'string') {
-    return { logs: raw || emptyLogs };
+    return { logs: raw, source: 'none', available: Boolean(raw) };
   }
   if (Array.isArray(raw)) {
-    return { logs: raw.join('\n') || emptyLogs };
+    const logs = raw.join('\n');
+    return { logs, source: 'none', available: Boolean(logs) };
   }
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  if (Array.isArray(data.logs)) {
-    return { logs: data.logs.join('\n') || emptyLogs };
-  }
-  return { logs: typeof data.logs === 'string' && data.logs.trim() ? data.logs : emptyLogs };
+  const logs = Array.isArray(data.logs) ? data.logs.join('\n') : typeof data.logs === 'string' ? data.logs : '';
+  const source = ['file', 'docker', 'none'].includes(String(data.source)) ? String(data.source) : 'none';
+  return {
+    logs,
+    source: source as ServerLogResponse['source'],
+    available: typeof data.available === 'boolean' ? data.available : Boolean(logs),
+    reason: data.reason ? String(data.reason) : undefined,
+    updated_at: data.updated_at ? String(data.updated_at) : undefined,
+  };
+};
+
+const mapWorld = (raw: unknown): WorldInfo => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    active_world_id: String(data.active_world_id || ''),
+    save_exists: Boolean(data.save_exists),
+    last_modified: data.last_modified ? String(data.last_modified) : undefined,
+    server_running: Boolean(data.server_running),
+    reset_available: Boolean(data.reset_available),
+    reset_unavailable_reason: data.reset_unavailable_reason ? String(data.reset_unavailable_reason) : undefined,
+  };
 };
 
 export const mapServerVersion = (raw: unknown): ServerVersionInfo => {
@@ -159,6 +195,10 @@ export const mapServerVersion = (raw: unknown): ServerVersionInfo => {
     last_checked_at: String(data.last_checked_at || ''),
     source: String(data.source || ''),
     manifest_path: String(data.manifest_path || ''),
+    game_version: data.game_version ? String(data.game_version) : undefined,
+    compatibility_target: data.compatibility_target ? String(data.compatibility_target) : undefined,
+    compatible: typeof data.compatible === 'boolean' ? data.compatible : undefined,
+    compatibility_warnings: Array.isArray(data.compatibility_warnings) ? data.compatibility_warnings.map(String) : [],
     error: data.error ? String(data.error) : undefined,
   };
 };
@@ -187,12 +227,38 @@ export const serverApi = {
     if (search) params.set('search', search);
     if (level) params.set('level', level);
     if (since) params.set('since', since);
-    return handleRequest<unknown, { logs: string }>(
+    return handleRequest<unknown, ServerLogResponse>(
       () => apiClient.get(`/server/logs?${params.toString()}`),
-      { logs: emptyLogs },
+      emptyLogResponse,
       { map: mapLogs, quiet: true },
     );
   },
+
+  getWorld: () =>
+    handleRequest<unknown, WorldInfo>(
+      () => apiClient.get('/server/world'),
+      {
+        active_world_id: '',
+        save_exists: false,
+        server_running: false,
+        reset_available: false,
+        reset_unavailable_reason: 'world_not_found',
+      },
+      { map: mapWorld, quiet: true, fallbackOnError: false },
+    ),
+
+  resetWorld: (worldId: string, confirmation: string) =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post('/server/world/reset', { world_id: worldId, confirmation }),
+      {
+        id: '',
+        type: 'world_reset',
+        status: 'waiting',
+        progress: 0,
+        created_at: new Date().toISOString(),
+      },
+      { map: mapJob, quiet: true, fallbackOnError: false },
+    ),
 
   start: () =>
     handleRequest<{ status: string }>(

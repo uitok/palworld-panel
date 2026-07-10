@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bell, Clock, Cpu, Home, Play, RefreshCw, Square, Sword, Terminal, Users, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, Bell, Clock, Cpu, Home, Play, RefreshCw, Square, Sword, Terminal, Trash2, Users, X, Zap } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -14,11 +14,13 @@ import {
 } from 'recharts';
 import { getErrorMessage } from '../api/client';
 import { monitorApi } from '../api/monitor';
-import { emptyLogs, serverApi } from '../api/server';
+import { serverApi } from '../api/server';
+import { tasksApi } from '../api/tasks';
 import { useServerStore } from '../store/useServerStore';
 import { StatCard } from '../components/ui/StatCard';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import type { Job } from '../types';
 
 type ChartPoint = {
   time: string;
@@ -67,11 +69,16 @@ const chartTooltipFormatter = (value: unknown, name: unknown) => {
 };
 
 export const Dashboard: React.FC = () => {
-  const { status: cachedStatus, setStatus, metrics: cachedMetrics, setMetrics, autoRefresh, refreshKey, triggerRefresh } = useServerStore();
+  const { status: cachedStatus, setStatus, metrics: cachedMetrics, setMetrics, autoRefresh, refreshKey, triggerRefresh, session } = useServerStore();
   const [logSearch, setLogSearch] = useState('');
   const [logLevel, setLogLevel] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetConfirmation, setResetConfirmation] = useState('');
+  const [resetJob, setResetJob] = useState<Job | null>(null);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
   const debouncedLogSearch = useDebouncedValue(logSearch, 300);
+  const canResetWorld = Boolean(session?.permissions.includes('world:reset'));
 
   const statusQuery = useQuery({
     queryKey: ['dashboard-status', refreshKey],
@@ -96,9 +103,17 @@ export const Dashboard: React.FC = () => {
   });
 
   const logsQuery = useQuery({
-    queryKey: ['dashboard-logs', 80, debouncedLogSearch, logLevel, refreshKey],
+    queryKey: ['dashboard-logs', 80, debouncedLogSearch, logLevel, status?.status, refreshKey],
     queryFn: () => serverApi.getLogs(80, debouncedLogSearch, logLevel),
-    enabled: status?.status === 'running',
+    enabled: Boolean(status),
+    refetchInterval: autoRefresh && status?.status === 'running' ? 3000 : false,
+    placeholderData: (previous) => previous,
+  });
+
+  const worldQuery = useQuery({
+    queryKey: ['dashboard-world', status?.status, refreshKey],
+    queryFn: serverApi.getWorld,
+    enabled: canResetWorld,
     placeholderData: (previous) => previous,
   });
 
@@ -128,7 +143,8 @@ export const Dashboard: React.FC = () => {
   }, [historyQuery.data]);
 
   const metrics = status?.status === 'running' ? (metricsQuery.data ?? cachedMetrics) : stoppedMetrics;
-  const logs = status?.status === 'running' ? (logsQuery.data?.logs ?? '') : emptyLogs;
+  const logResponse = logsQuery.data;
+  const logs = logResponse?.logs ?? '';
   const loading = statusQuery.isLoading && !status;
   const queryNotice =
     notice ||
@@ -141,7 +157,13 @@ export const Dashboard: React.FC = () => {
           : null);
 
   const refreshDashboard = async () => {
-    await Promise.all([statusQuery.refetch(), metricsQuery.refetch(), historyQuery.refetch(), logsQuery.refetch()]);
+    await Promise.all([
+      statusQuery.refetch(),
+      metricsQuery.refetch(),
+      historyQuery.refetch(),
+      logsQuery.refetch(),
+      ...(canResetWorld ? [worldQuery.refetch()] : []),
+    ]);
   };
 
   const control = async (action: 'start' | 'stop' | 'forceStop') => {
@@ -162,6 +184,47 @@ export const Dashboard: React.FC = () => {
       setNotice(getErrorMessage(error));
     }
   };
+
+  const openWorldReset = async () => {
+    setResetConfirmation('');
+    setResetJob(null);
+    setResetOpen(true);
+    await worldQuery.refetch();
+  };
+
+  const resetWorld = async () => {
+    const world = worldQuery.data;
+    if (!world?.active_world_id || resetConfirmation !== 'RESET WORLD') return;
+    setResetSubmitting(true);
+    try {
+      const job = await serverApi.resetWorld(world.active_world_id, resetConfirmation);
+      setResetJob(job);
+      const done = await tasksApi.waitForJob(job.id, setResetJob);
+      setNotice(done.status === 'success' ? '世界重置已完成，验证备份已保留' : done.error || '世界重置失败');
+      await Promise.all([statusQuery.refetch(), worldQuery.refetch(), logsQuery.refetch()]);
+      triggerRefresh();
+    } catch (error) {
+      setNotice(getErrorMessage(error));
+    } finally {
+      setResetSubmitting(false);
+    }
+  };
+
+  const logEmptyText = (() => {
+    if (logs) return logs;
+    switch (logResponse?.reason) {
+      case 'waiting_for_output':
+        return '等待服务输出...';
+      case 'not_started':
+        return '服务尚未启动，暂无历史日志。';
+      case 'no_available_output':
+        return '当前采集源没有可用输出。';
+      case 'no_collection_source':
+        return '没有可用的日志采集源。';
+      default:
+        return '暂无日志。';
+    }
+  })();
 
   const formatUptime = (seconds?: number) => {
     if (!seconds) return '离线';
@@ -307,16 +370,31 @@ export const Dashboard: React.FC = () => {
               强停
             </button>
           </div>
+          {canResetWorld && (
+            <button
+              type="button"
+              onClick={() => void openWorldReset()}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 py-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100"
+            >
+              <Trash2 size={14} />
+              重置世界
+            </button>
+          )}
         </section>
       </div>
 
       <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <div className="rounded-lg bg-slate-100 p-1.5 text-slate-500">
               <Terminal size={15} />
             </div>
             <h3 className="text-[14px] font-bold text-slate-800">实时日志</h3>
+            {logResponse && (
+              <span className="truncate rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                {logResponse.source === 'file' ? '持久日志' : logResponse.source === 'docker' ? 'Docker 输出' : '无采集源'}
+              </span>
+            )}
           </div>
           <button
             type="button"
@@ -347,9 +425,85 @@ export const Dashboard: React.FC = () => {
           </select>
         </div>
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] leading-relaxed text-emerald-300">
-          {logs || (queryNotice ? '后端不可用或接口未实现' : '暂无日志')}
+          {logEmptyText}
         </pre>
       </section>
+
+      {resetOpen && canResetWorld && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="world-reset-title">
+          <div className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-lg bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="rounded-lg bg-rose-50 p-2 text-rose-600"><AlertTriangle size={18} /></div>
+                <div className="min-w-0">
+                  <h2 id="world-reset-title" className="text-base font-bold text-slate-900">重置当前世界</h2>
+                  <p className="truncate font-mono text-[11px] text-slate-400">{worldQuery.data?.active_world_id || '正在读取...'}</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setResetOpen(false)} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50" aria-label="关闭">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-5 p-5">
+              {worldQuery.isLoading ? (
+                <div className="py-8 text-center text-xs font-semibold text-slate-400"><RefreshCw className="mr-2 inline animate-spin" size={14} />正在读取世界信息...</div>
+              ) : (
+                <>
+                  <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3"><dt className="text-[10px] font-bold text-slate-400">世界 ID</dt><dd className="mt-1 break-all font-mono text-xs font-bold text-slate-700">{worldQuery.data?.active_world_id || '-'}</dd></div>
+                    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3"><dt className="text-[10px] font-bold text-slate-400">存档更新时间</dt><dd className="mt-1 text-xs font-bold text-slate-700">{worldQuery.data?.last_modified ? new Date(worldQuery.data.last_modified).toLocaleString('zh-CN') : '-'}</dd></div>
+                    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3"><dt className="text-[10px] font-bold text-slate-400">运行状态</dt><dd className="mt-1 text-xs font-bold text-slate-700">{worldQuery.data?.server_running ? '运行中，将自动重启' : '已停止'}</dd></div>
+                  </dl>
+
+                  <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-4">
+                    <p className="text-xs font-bold text-emerald-800">将保留</p>
+                    <p className="mt-2 text-[11px] font-semibold leading-6 text-emerald-700">服务端程序、INI 配置、Workshop Mod、PalDefender、面板数据和验证备份</p>
+                  </div>
+
+                  {!worldQuery.data?.reset_available && (
+                    <div className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-700">
+                      当前世界不可重置：{worldQuery.data?.reset_unavailable_reason || '世界信息不可用'}
+                    </div>
+                  )}
+
+                  <label className="block text-xs font-semibold text-slate-600">
+                    输入 <span className="font-mono font-bold text-rose-600">RESET WORLD</span> 确认
+                    <input
+                      type="text"
+                      value={resetConfirmation}
+                      onChange={(event) => setResetConfirmation(event.target.value)}
+                      autoComplete="off"
+                      className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-800 focus:border-rose-400 focus:outline-none"
+                    />
+                  </label>
+                </>
+              )}
+
+              {resetJob && (
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-600"><span>{resetJob.message || '世界重置任务'}</span><span>{resetJob.progress}%</span></div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-rose-500 transition-all" style={{ width: `${resetJob.progress}%` }} /></div>
+                  {resetJob.error && <p className="mt-3 break-words text-[11px] font-semibold leading-5 text-rose-700">{resetJob.error}</p>}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+                <button type="button" onClick={() => setResetOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">关闭</button>
+                <button
+                  type="button"
+                  onClick={() => void resetWorld()}
+                  disabled={!worldQuery.data?.reset_available || resetConfirmation !== 'RESET WORLD' || resetSubmitting}
+                  className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {resetSubmitting ? <RefreshCw className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                  执行重置
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -53,7 +53,7 @@ const mapFieldSchema = (raw: unknown): FieldSchema => {
     label: data.label ? String(data.label) : undefined,
     group: String(data.group || ''),
     type: String(data.type || 'string') as FieldSchema['type'],
-    default: String(data.default ?? ''),
+    default: data.default == null ? undefined : String(data.default),
     enum: Array.isArray(data.enum) ? data.enum.map(String) : undefined,
     enum_labels: mapEnumLabels(data.enum_labels),
     min: typeof data.min === 'number' ? data.min : undefined,
@@ -69,7 +69,7 @@ export const mapSchema = (raw: unknown): PalworldSchemaResponse => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const fields = Array.isArray(data.fields) ? data.fields.map(mapFieldSchema) : [];
   return {
-    version: String(data.version || '0.7.2'),
+    version: String(data.version || '1.0.0'),
     fields,
   };
 };
@@ -91,7 +91,7 @@ export const settingsApi = {
   getSchema: () =>
     handleRequest<unknown, PalworldSchemaResponse>(
       () => apiClient.get('/config/palworld/schema'),
-      { version: '0.7.2', fields: [] },
+      { version: '1.0.0', fields: [] },
       { map: mapSchema, quiet: true },
     ),
 

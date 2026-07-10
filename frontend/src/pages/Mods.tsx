@@ -5,6 +5,7 @@ import {
   ExternalLink,
   FileArchive,
   Info,
+  Languages,
   PackageCheck,
   Power,
   RefreshCw,
@@ -21,6 +22,7 @@ import { tasksApi } from '../api/tasks';
 import type { Job, ModItem, WorkshopItem } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { useServerStore } from '../store/useServerStore';
 
 type ModsTab = 'store' | 'installed' | 'manual';
 
@@ -38,6 +40,7 @@ const sortOptions = [
 ];
 
 export const Mods: React.FC = () => {
+  const { session } = useServerStore();
   const [activeTab, setActiveTab] = useState<ModsTab>('store');
   const [mods, setMods] = useState<ModItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +64,8 @@ export const Mods: React.FC = () => {
   const [statusLoading, setStatusLoading] = useState(true);
   const [selectedWorkshop, setSelectedWorkshop] = useState<WorkshopItem | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [translationLoading, setTranslationLoading] = useState(false);
+  const [translationError, setTranslationError] = useState<string | null>(null);
   const initialLoadRef = useRef(false);
 
   const loadInstalled = useCallback(async () => {
@@ -211,6 +216,7 @@ export const Mods: React.FC = () => {
 
   const openWorkshopDetail = async (item: WorkshopItem) => {
     setSelectedWorkshop(item);
+    setTranslationError(null);
     setDetailLoading(true);
     try {
       setSelectedWorkshop(await modsApi.getWorkshopItem(item.id));
@@ -218,6 +224,23 @@ export const Mods: React.FC = () => {
       setMessage(getErrorMessage(error));
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const translateSelectedWorkshop = async (force: boolean) => {
+    if (!selectedWorkshop) return;
+    const workshopID = selectedWorkshop.id;
+    setTranslationLoading(true);
+    setTranslationError(null);
+    try {
+      const translation = await modsApi.translateWorkshop(workshopID, force);
+      setSelectedWorkshop((current) => current?.id === workshopID ? { ...current, translation } : current);
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      setTranslationError(errorMessage);
+      setMessage(errorMessage);
+    } finally {
+      setTranslationLoading(false);
     }
   };
 
@@ -521,7 +544,11 @@ export const Mods: React.FC = () => {
         <WorkshopDrawer
           item={selectedWorkshop}
           loading={detailLoading}
+          translationLoading={translationLoading}
+          translationError={translationError}
+          canTranslate={Boolean(session?.permissions.includes('mods:write'))}
           onClose={() => setSelectedWorkshop(null)}
+          onTranslate={translateSelectedWorkshop}
           onInstall={() => installWorkshop(selectedWorkshop.id, false)}
           onInstallEnabled={() => installWorkshop(selectedWorkshop.id, true)}
         />
@@ -639,11 +666,22 @@ const JobProgress: React.FC<{ job: Job }> = ({ job }) => (
 const WorkshopDrawer: React.FC<{
   item: WorkshopItem;
   loading: boolean;
+  translationLoading: boolean;
+  translationError: string | null;
+  canTranslate: boolean;
   onClose: () => void;
+  onTranslate: (force: boolean) => Promise<void>;
   onInstall: () => void;
   onInstallEnabled: () => void;
-}> = ({ item, loading, onClose, onInstall, onInstallEnabled }) => (
-  <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
+}> = ({ item, loading, translationLoading, translationError, canTranslate, onClose, onTranslate, onInstall, onInstallEnabled }) => {
+  const [descriptionView, setDescriptionView] = useState<'original' | 'zh-CN'>(item.translation ? 'zh-CN' : 'original');
+
+  useEffect(() => {
+    if (item.translation) setDescriptionView('zh-CN');
+  }, [item.translation]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
     <aside className="flex h-full w-full max-w-xl flex-col overflow-y-auto bg-white shadow-xl">
       <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
         <div className="min-w-0">
@@ -667,7 +705,36 @@ const WorkshopDrawer: React.FC<{
           {item.enabled && <StatusBadge status="enabled" />}
           {item.update_available && <StatusBadge status="updating" customText="可更新" />}
         </div>
-        <p className="whitespace-pre-line text-sm leading-6 text-slate-600">{item.summary || '-'}</p>
+        <div>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            {item.translation ? (
+              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                <button type="button" onClick={() => setDescriptionView('original')} className={`rounded-md px-3 py-1.5 text-[11px] font-bold ${descriptionView === 'original' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400'}`}>原文</button>
+                <button type="button" onClick={() => setDescriptionView('zh-CN')} className={`rounded-md px-3 py-1.5 text-[11px] font-bold ${descriptionView === 'zh-CN' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400'}`}>中文</button>
+              </div>
+            ) : <span />}
+            {canTranslate && (
+              <button
+                type="button"
+                onClick={() => void onTranslate(Boolean(item.translation))}
+                disabled={translationLoading || loading}
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
+              >
+                {translationLoading ? <RefreshCw className="animate-spin" size={14} /> : <Languages size={14} />}
+                {item.translation ? '重新翻译' : '翻译为中文'}
+              </button>
+            )}
+          </div>
+          <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">
+            {descriptionView === 'zh-CN' && item.translation ? item.translation.text : item.summary || '-'}
+          </p>
+          {item.translation && descriptionView === 'zh-CN' && (
+            <p className="mt-3 text-[10px] font-semibold text-slate-400">
+              {item.translation.model || '未知模型'} · {item.translation.generated_at ? new Date(item.translation.generated_at).toLocaleString('zh-CN') : '-'}{item.translation.cached ? ' · 缓存' : ''}
+            </p>
+          )}
+          {translationError && <p className="mt-3 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">{translationError}</p>}
+        </div>
         <TagList tags={item.tags} />
         <div className="grid grid-cols-2 gap-3 text-xs font-semibold text-slate-500">
           <InfoTile label="大小" value={formatBytes(item.file_size)} />
@@ -697,7 +764,8 @@ const WorkshopDrawer: React.FC<{
       </div>
     </aside>
   </div>
-);
+  );
+};
 
 const TagList: React.FC<{ tags: string[] }> = ({ tags }) => {
   if (tags.length === 0) {

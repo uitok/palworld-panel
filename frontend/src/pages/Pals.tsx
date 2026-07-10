@@ -26,6 +26,11 @@ const suitabilityText: Record<string, string> = {
 };
 
 const pageSize = 50;
+const rarityText: Record<Pal['rarity'], string> = {
+  Common: '普通',
+  Rare: '稀有',
+  Boss: '首领',
+};
 const statusFilterByTab: Record<string, string | undefined> = {
   all: undefined,
   working: 'Working',
@@ -241,14 +246,15 @@ const Summary: React.FC<{ label: string; value: number; tone: 'emerald' | 'sky' 
 };
 
 const PalIdentity: React.FC<{ pal: Pal }> = ({ pal }) => (
-  <div className="flex min-w-0 items-center gap-3">
+  <div className="flex min-w-0 items-center gap-3" title={pal.character_id}>
     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200/50 bg-slate-100 text-xs font-semibold text-slate-600">
       {pal.name.charAt(0)}
     </div>
     <div className="min-w-0">
       <p className="truncate text-xs font-bold text-slate-700">{pal.name}</p>
       <span className="mt-1 inline-flex rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">
-        {pal.rarity}
+        {pal.nickname && pal.species_name ? `${pal.species_name} · ` : ''}
+        {pal.rarity_name || rarityText[pal.rarity]}
       </span>
     </div>
   </div>

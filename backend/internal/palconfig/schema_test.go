@@ -75,13 +75,86 @@ func TestValidateRejectsFractionalFloatForIntFields(t *testing.T) {
 func TestValidateReturnsLocalizedMessages(t *testing.T) {
 	issues := Validate(Settings{
 		"RCONEnabled":        "yes",
-		"ServerPlayerMaxNum": "0",
+		"ServerPlayerMaxNum": "many",
 		"DeathPenalty":       "Everything",
 	})
 
 	assertIssueMessage(t, issues, "RCONEnabled", "必须是 True 或 False")
-	assertIssueMessage(t, issues, "ServerPlayerMaxNum", "数值必须大于等于 1")
+	assertIssueMessage(t, issues, "ServerPlayerMaxNum", "必须是整数")
 	assertIssueMessage(t, issues, "DeathPenalty", "必须是以下值之一：None, Item, ItemAndEquipment, All")
+}
+
+func TestSchemaCoversOfficialOneDotZeroFields(t *testing.T) {
+	fields := schemaByKey()
+	for _, key := range []string{
+		"BaseCampMaxNum",
+		"BuildObjectDamageRate",
+		"BuildObjectDeteriorationDamageRate",
+		"CollectionObjectHpRate",
+		"CollectionObjectRespawnSpeedRate",
+		"EquipmentDurabilityDamageRate",
+		"GuildPlayerMaxNum",
+		"GuildRejoinCooldownMinutes",
+		"ItemCorruptionMultiplier",
+		"ItemWeightRate",
+		"MonsterFarmActionSpeedRate",
+		"PalAutoHPRegeneRate",
+		"PalAutoHpRegeneRateInSleep",
+		"PhysicsActiveDropItemMaxNum",
+		"PlayerAutoHPRegeneRate",
+		"PlayerAutoHpRegeneRateInSleep",
+		"RespawnPenaltyDurationThreshold",
+		"RespawnPenaltyTimeScale",
+		"VoiceChatMaxVolumeDistance",
+		"VoiceChatZeroVolumeDistance",
+		"bCharacterRecreateInHardcore",
+		"bEnableAimAssistPad",
+		"bEnableBuildingPlayerUIdDisplay",
+		"bEnableInvaderEnemy",
+		"bEnableVoiceChat",
+		"bInvisibleOtherGuildBaseCampAreaFX",
+		"bIsRandomizerPalLevelRandom",
+		"bPalLost",
+	} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("schema is missing official 1.0.0 field %s", key)
+		}
+	}
+	if _, ok := fields["AllowConnectPlatform"]; ok {
+		t.Fatal("schema must exclude unavailable AllowConnectPlatform")
+	}
+}
+
+func TestSchemaUsesUpdatedDedicatedServerDefaults(t *testing.T) {
+	fields := schemaByKey()
+	want := map[string]string{
+		"PhysicsActiveDropItemMaxNum":     "-1",
+		"MonsterFarmActionSpeedRate":      "1.0",
+		"bEnableVoiceChat":                "False",
+		"VoiceChatMaxVolumeDistance":      "3000.0",
+		"VoiceChatZeroVolumeDistance":     "15000.0",
+		"bEnableBuildingPlayerUIdDisplay": "False",
+		"DeathPenalty":                    "Item",
+		"PalEggDefaultHatchingTime":       "1.0",
+	}
+	for key, expected := range want {
+		if fields[key].Default == nil || *fields[key].Default != expected {
+			t.Errorf("%s default = %#v, want %q", key, fields[key].Default, expected)
+		}
+	}
+}
+
+func TestSchemaOnlyPublishesSupportedNumericRanges(t *testing.T) {
+	fields := schemaByKey()
+	if fields["ServerPlayerMaxNum"].Min != nil || fields["ServerPlayerMaxNum"].Max != nil {
+		t.Fatal("ServerPlayerMaxNum must not publish an undocumented range")
+	}
+	if fields["BaseCampMaxNumInGuild"].Max == nil || *fields["BaseCampMaxNumInGuild"].Max != 10 {
+		t.Fatal("BaseCampMaxNumInGuild must publish the official maximum of 10")
+	}
+	if fields["ServerReplicatePawnCullDistance"].Min == nil || *fields["ServerReplicatePawnCullDistance"].Min != 5000 {
+		t.Fatal("ServerReplicatePawnCullDistance must publish the official minimum")
+	}
 }
 
 func TestSerializeKeepsEnumAndListBare(t *testing.T) {

@@ -1,6 +1,7 @@
 import { apiClient, handleRequest } from './client';
-import type { Job, ModItem, WorkshopItem, WorkshopSearchResponse, WorkshopStatus } from '../types';
+import type { AITranslation, Job, ModItem, WorkshopItem, WorkshopSearchResponse, WorkshopStatus } from '../types';
 import { mapJob } from './tasks';
+import { AI_OPERATION_TIMEOUT_MS } from './requestTimeouts';
 
 const stringArray = (raw: unknown): string[] => {
   if (!Array.isArray(raw)) return [];
@@ -58,6 +59,18 @@ export const mapWorkshopItem = (raw: unknown): WorkshopItem => {
     enabled: Boolean(data.enabled),
     update_available: Boolean(data.update_available),
     mod_id: data.mod_id ? String(data.mod_id) : undefined,
+    translation: data.translation ? mapTranslation(data.translation) : undefined,
+  };
+};
+
+const mapTranslation = (raw: unknown): AITranslation => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    text: String(data.text || ''),
+    target_language: String(data.target_language || 'zh-CN'),
+    model: String(data.model || ''),
+    generated_at: String(data.generated_at || ''),
+    cached: Boolean(data.cached),
   };
 };
 
@@ -147,6 +160,13 @@ export const modsApi = {
       () => apiClient.get(`/mods/workshop/${itemId}`),
       mapWorkshopItem({ id: itemId }),
       { map: mapWorkshopItem, quiet: true, fallbackOnError: false },
+    ),
+
+  translateWorkshop: (itemId: string, force = false) =>
+    handleRequest<unknown, AITranslation>(
+      () => apiClient.post(`/mods/workshop/${itemId}/translate`, { force }, { timeout: AI_OPERATION_TIMEOUT_MS }),
+      { text: '', target_language: 'zh-CN', model: '', generated_at: '', cached: false },
+      { map: mapTranslation, quiet: true, fallbackOnError: false },
     ),
 
   downloadWorkshop: (itemId: string, enable = false) =>

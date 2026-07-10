@@ -67,6 +67,7 @@ func (s StartupConfig) Args(cfg appconfig.Config) []string {
 	args := []string{
 		"-port=" + strconv.Itoa(s.Port),
 		"-players=" + strconv.Itoa(s.Players),
+		"-enable-gamedata-api",
 	}
 	if s.PublicLobby {
 		args = append(args, "-publiclobby")
@@ -98,7 +99,21 @@ func (s StartupConfig) Args(cfg appconfig.Config) []string {
 	if s.NoMods {
 		args = append(args, "-NoMods")
 	}
-	return args
+	return appendUniqueArgs(args, "-log", "-stdout", "-FullStdOutLogOutput")
+}
+
+func appendUniqueArgs(args []string, required ...string) []string {
+	seen := make(map[string]bool, len(args)+len(required))
+	out := make([]string, 0, len(args)+len(required))
+	for _, arg := range append(append([]string{}, args...), required...) {
+		key := strings.ToLower(strings.TrimSpace(arg))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, arg)
+	}
+	return out
 }
 
 func (s StartupConfig) Validate() []ValidationIssue {

@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -36,12 +37,15 @@ const (
 	PermPlayersWrite  Permission = "players:write"
 	PermSecurityWrite Permission = "security:write"
 	PermAuditRead     Permission = "audit:read"
+	PermWorldReset    Permission = "world:reset"
+	PermAIConfig      Permission = "ai:config"
 )
 
 var rolePermissions = map[Role]map[Permission]bool{
 	RoleAdmin: {
 		PermRead: true, PermServerControl: true, PermConfigWrite: true, PermBackupWrite: true,
 		PermModsWrite: true, PermPlayersWrite: true, PermSecurityWrite: true, PermAuditRead: true,
+		PermWorldReset: true, PermAIConfig: true,
 	},
 	RoleOperator: {
 		PermRead: true, PermServerControl: true, PermConfigWrite: true, PermBackupWrite: true,
@@ -50,6 +54,26 @@ var rolePermissions = map[Role]map[Permission]bool{
 	RoleViewer: {
 		PermRead: true,
 	},
+}
+
+func PermissionsForRole(role Role) []Permission {
+	permissions := make([]Permission, 0, len(rolePermissions[role]))
+	for permission, allowed := range rolePermissions[role] {
+		if allowed {
+			permissions = append(permissions, permission)
+		}
+	}
+	sort.Slice(permissions, func(i, j int) bool { return permissions[i] < permissions[j] })
+	return permissions
+}
+
+func authMe(c *gin.Context) {
+	principal := CurrentPrincipal(c)
+	ok(c, gin.H{
+		"name":        principal.Name,
+		"role":        principal.Role,
+		"permissions": PermissionsForRole(principal.Role),
+	})
 }
 
 func Auth(cfg appconfig.Config) gin.HandlerFunc {

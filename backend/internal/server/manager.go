@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"palpanel/internal/appconfig"
@@ -39,6 +40,9 @@ type Manager struct {
 	runner              docker.Runner
 	remoteBuildIDFunc   func(context.Context) (string, string, error)
 	installOrUpdateFunc func(context.Context, string) error
+	lifecycleMu         *sync.Mutex
+	worldResetTimeout   time.Duration
+	worldResetPoll      time.Duration
 }
 
 type Status struct {
@@ -99,10 +103,23 @@ type LogQuery struct {
 	Since  string
 }
 
+type LogResult struct {
+	Logs      string `json:"logs"`
+	Source    string `json:"source"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
 type RestartNotifier func(ctx context.Context, wait int, message string) error
 
 func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner) Manager {
-	return Manager{cfg: cfg, store: store, runner: runner}
+	return Manager{
+		cfg: cfg, store: store, runner: runner,
+		lifecycleMu:       &sync.Mutex{},
+		worldResetTimeout: 180 * time.Second,
+		worldResetPoll:    time.Second,
+	}
 }
 
 func (m Manager) RuntimeMode(ctx context.Context) (string, error) {
@@ -186,7 +203,7 @@ func (m Manager) Prerequisites(ctx context.Context) ([]Prerequisite, error) {
 }
 
 func (m Manager) Install(ctx context.Context) (db.Job, error) {
-	return m.startJob(ctx, "install", "queued install", func(jobID string) {
+	return m.startLifecycleJob(ctx, "install", "queued install", func(jobID string) {
 		if m.runInstallOrUpdateJob(jobID, false, false, nil) {
 			m.update(jobID, "completed", 100, "install completed", "")
 		}
@@ -198,15 +215,16 @@ func (m Manager) Update(ctx context.Context) (db.Job, error) {
 }
 
 func (m Manager) UpdateWithPreUpdate(ctx context.Context, preUpdate func(context.Context) error) (db.Job, error) {
-	return m.startJob(ctx, "update", "queued update", func(jobID string) {
+	return m.startLifecycleJob(ctx, "update", "queued update", func(jobID string) {
 		if m.runInstallOrUpdateJob(jobID, true, true, preUpdate) {
-			m.update(jobID, "completed", 100, "update completed", "")
+			info, _ := m.VersionInfo(context.Background())
+			m.update(jobID, "completed", 100, "update completed; current build "+info.CurrentBuildID, "")
 		}
 	})
 }
 
 func (m Manager) Bootstrap(ctx context.Context) (db.Job, error) {
-	return m.startJob(ctx, "bootstrap", "queued bootstrap", func(jobID string) {
+	return m.startLifecycleJob(ctx, "bootstrap", "queued bootstrap", func(jobID string) {
 		if !m.runInstallOrUpdateJob(jobID, false, false, nil) {
 			return
 		}
@@ -246,16 +264,37 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 				}
 			}
 			m.update(jobID, "running", 10, "stopping server before update", "")
-			if err := m.Stop(context.Background()); err != nil {
+			if err := m.stopUnlocked(context.Background()); err != nil {
 				m.update(jobID, "failed", 10, "stop before update failed", err.Error())
 				return false
 			}
 		}
 	}
+	var backup BackupInfo
 	if backupFirst {
 		m.update(jobID, "running", 15, "creating backup before update", "")
-		if _, err := m.createBackupArchive("pre-update"); err != nil {
+		backup, err = m.createBackupArchive("pre-update")
+		if err != nil {
 			m.update(jobID, "failed", 15, "backup failed", err.Error())
+			return false
+		}
+		verified, err := verifyBackupArchive(backup.Path, backup.Name)
+		if err != nil || !verified.Valid {
+			message := "backup verification failed"
+			if err != nil {
+				message += ": " + err.Error()
+			} else if len(verified.Errors) > 0 {
+				message += ": " + strings.Join(verified.Errors, "; ")
+			}
+			m.update(jobID, "failed", 15, "backup verification failed", message+"; retained at "+backup.Path)
+			return false
+		}
+	}
+	protected := map[string]string{}
+	if update {
+		protected, err = m.snapshotUpdateProtectedFiles()
+		if err != nil {
+			m.update(jobID, "failed", 20, "protected file snapshot failed", err.Error()+retainedBackupMessage(backup))
 			return false
 		}
 	}
@@ -269,7 +308,7 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 		}
 		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
 		if err := m.installOrUpdateRuntime(context.Background(), mode); err != nil {
-			m.update(jobID, "failed", 60, action+" failed", err.Error())
+			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
 			return false
 		}
 	} else {
@@ -282,14 +321,34 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 		}
 		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
 		if err := m.installOrUpdateRuntime(context.Background(), mode); err != nil {
-			m.update(jobID, "failed", 60, action+" failed", err.Error())
+			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
+			return false
+		}
+	}
+	if !fileExists(m.cfg.PalServerExePath()) {
+		m.update(jobID, "failed", 70, action+" verification failed", "PalServer.exe is missing after SteamCMD completed"+retainedBackupMessage(backup))
+		return false
+	}
+	if update {
+		if err := m.verifyUpdateProtectedFiles(protected); err != nil {
+			m.update(jobID, "failed", 70, "protected server data changed during update", err.Error()+retainedBackupMessage(backup)+"; no automatic restore was attempted")
+			return false
+		}
+		m.update(jobID, "running", 75, "verifying installed build against Steam public branch", "")
+		version, err := m.refreshVersion(context.Background(), false)
+		if err != nil {
+			m.update(jobID, "failed", 75, "post-update version verification failed", err.Error()+retainedBackupMessage(backup))
+			return false
+		}
+		if version.CurrentBuildID == "" || version.LatestBuildID == "" || version.UpdateAvailable {
+			m.update(jobID, "failed", 75, "post-update build mismatch", fmt.Sprintf("installed Build %q does not match Steam public Build %q%s", version.CurrentBuildID, version.LatestBuildID, retainedBackupMessage(backup)))
 			return false
 		}
 	}
 	_ = m.store.SetKV(context.Background(), kvInstalled, "true")
 	if update && wasRunning {
 		m.update(jobID, "running", 85, "starting server after update", "")
-		if err := m.Start(context.Background()); err != nil {
+		if err := m.startUnlocked(context.Background()); err != nil {
 			m.update(jobID, "failed", 85, "restart after update failed", err.Error())
 			return false
 		}
@@ -350,6 +409,12 @@ func (m Manager) ValidateStartup(ctx context.Context) []ValidationIssue {
 }
 
 func (m Manager) Start(ctx context.Context) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	return m.startUnlocked(ctx)
+}
+
+func (m Manager) startUnlocked(ctx context.Context) error {
 	if issues := m.ValidateStartup(ctx); hasErrors(issues) {
 		return fmt.Errorf("startup validation failed: %s", validationIssueSummary(issues))
 	}
@@ -391,6 +456,12 @@ func validationIssueSummary(issues []ValidationIssue) string {
 }
 
 func (m Manager) Stop(ctx context.Context) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	return m.stopUnlocked(ctx)
+}
+
+func (m Manager) stopUnlocked(ctx context.Context) error {
 	mode, err := m.RuntimeMode(ctx)
 	if err != nil {
 		return err
@@ -402,6 +473,12 @@ func (m Manager) Stop(ctx context.Context) error {
 }
 
 func (m Manager) Restart(ctx context.Context) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	return m.restartUnlocked(ctx)
+}
+
+func (m Manager) restartUnlocked(ctx context.Context) error {
 	mode, err := m.RuntimeMode(ctx)
 	if err != nil {
 		return err
@@ -429,7 +506,7 @@ func (m Manager) SafeRestart(ctx context.Context, waitSeconds int, message strin
 	if strings.TrimSpace(message) == "" {
 		message = "Server maintenance restart"
 	}
-	return m.startJob(ctx, "safe_restart", "queued safe restart", func(jobID string) {
+	return m.startLifecycleJob(ctx, "safe_restart", "queued safe restart", func(jobID string) {
 		m.update(jobID, "running", 10, "saving world and notifying players", "")
 		if notify != nil {
 			if err := notify(context.Background(), waitSeconds, message); err != nil {
@@ -439,12 +516,12 @@ func (m Manager) SafeRestart(ctx context.Context, waitSeconds int, message strin
 		m.update(jobID, "running", 35, "waiting for player countdown", "")
 		time.Sleep(time.Duration(waitSeconds) * time.Second)
 		m.update(jobID, "running", 55, "stopping server", "")
-		if err := m.Stop(context.Background()); err != nil {
+		if err := m.stopUnlocked(context.Background()); err != nil {
 			m.update(jobID, "failed", 55, "stop failed", err.Error())
 			return
 		}
 		m.update(jobID, "running", 75, "starting server", "")
-		if err := m.Start(context.Background()); err != nil {
+		if err := m.startUnlocked(context.Background()); err != nil {
 			m.update(jobID, "failed", 75, "start failed", err.Error())
 			return
 		}
@@ -452,24 +529,55 @@ func (m Manager) SafeRestart(ctx context.Context, waitSeconds int, message strin
 	})
 }
 
-func (m Manager) Logs(ctx context.Context, query LogQuery) (string, error) {
+func (m Manager) Logs(ctx context.Context, query LogQuery) (LogResult, error) {
 	mode, err := m.RuntimeMode(ctx)
 	if err != nil {
-		return "", err
+		return LogResult{}, err
 	}
 	tail := query.Tail
-	if mode == RuntimeWindowsSteamCMD {
-		logs, err := tailFile(m.cfg.ServerLogPath(), tail)
-		if err != nil {
-			return "", err
+	logs, fileInfo, fileErr := tailFileInfo(m.cfg.ServerLogPath(), tail)
+	if fileErr == nil && fileInfo != nil {
+		result := LogResult{
+			Logs:      filterLogs(logs, query),
+			Source:    "file",
+			Available: true,
+			UpdatedAt: fileInfo.ModTime().UTC().Format(time.RFC3339Nano),
 		}
-		return filterLogs(logs, query), nil
+		if strings.TrimSpace(logs) == "" {
+			result.Reason = m.emptyLogReason(ctx)
+		}
+		return result, nil
 	}
-	logs, err := m.runner.Logs(ctx, tail)
+	if mode == RuntimeWineDocker {
+		dockerLogs, dockerErr := m.runner.Logs(ctx, tail)
+		if dockerErr == nil {
+			result := LogResult{Logs: filterLogs(dockerLogs, query), Source: "docker", Available: true}
+			if strings.TrimSpace(dockerLogs) == "" {
+				result.Reason = m.emptyLogReason(ctx)
+			}
+			return result, nil
+		}
+	}
+	reason := "no_collection_source"
+	status, statusErr := m.Status(ctx)
+	if statusErr == nil && !status.Container.Exists {
+		reason = "not_started"
+	}
+	return LogResult{Source: "none", Available: false, Reason: reason}, nil
+}
+
+func (m Manager) emptyLogReason(ctx context.Context) string {
+	status, err := m.Status(ctx)
 	if err != nil {
-		return "", err
+		return "no_available_output"
 	}
-	return filterLogs(logs, query), nil
+	if status.Container.Status == "running" || status.Container.Status == "starting" || status.Container.Status == "restarting" {
+		return "waiting_for_output"
+	}
+	if !status.Container.Exists {
+		return "not_started"
+	}
+	return "no_available_output"
 }
 
 func (m Manager) Status(ctx context.Context) (Status, error) {
@@ -541,7 +649,7 @@ func (m Manager) MarkPendingRestart(ctx context.Context) error {
 }
 
 func (m Manager) Backup(ctx context.Context) (db.Job, error) {
-	return m.startJob(ctx, "backup", "queued backup", func(jobID string) {
+	return m.startLifecycleJob(ctx, "backup", "queued backup", func(jobID string) {
 		m.update(jobID, "running", 20, "creating backup archive", "")
 		backup, err := m.createBackupArchive("manual")
 		if err != nil {
@@ -587,7 +695,7 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 	if !fileExists(pathAbs) {
 		return db.Job{}, fmt.Errorf("backup not found")
 	}
-	return m.startJob(ctx, "restore", "queued backup restore", func(jobID string) {
+	return m.startLifecycleJob(ctx, "restore", "queued backup restore", func(jobID string) {
 		m.update(jobID, "running", 5, "verifying backup archive", "")
 		result, err := verifyBackupArchive(pathAbs, name)
 		if err != nil {
@@ -599,7 +707,7 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 			return
 		}
 		m.update(jobID, "running", 10, "stopping server before restore", "")
-		if err := m.Stop(context.Background()); err != nil {
+		if err := m.stopUnlocked(context.Background()); err != nil {
 			m.update(jobID, "failed", 10, "stop failed", err.Error())
 			return
 		}
@@ -658,6 +766,14 @@ func (m Manager) startJob(ctx context.Context, typ, message string, fn func(jobI
 	}
 	go fn(j.ID)
 	return j, nil
+}
+
+func (m Manager) startLifecycleJob(ctx context.Context, typ, message string, fn func(jobID string)) (db.Job, error) {
+	return m.startJob(ctx, typ, message, func(jobID string) {
+		m.lifecycleMu.Lock()
+		defer m.lifecycleMu.Unlock()
+		fn(jobID)
+	})
 }
 
 func (m Manager) update(jobID, status string, progress int, message, errText string) {
@@ -737,7 +853,7 @@ func (m Manager) startWindows(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(filepath.Dir(m.cfg.ServerLogPath()), 0o755); err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(m.cfg.ServerLogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := newRollingLogWriter(m.cfg.ServerLogPath(), 20*1024*1024, 5)
 	if err != nil {
 		return err
 	}
@@ -816,6 +932,12 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 	if err != nil {
 		return BackupInfo{}, err
 	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.Remove(path)
+		}
+	}()
 	zw := zip.NewWriter(out)
 	var files []BackupManifestFile
 	for _, root := range []string{
@@ -823,6 +945,9 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 		m.cfg.ModsDir(),
 		m.cfg.PalWorldSettingsPath(),
 		m.cfg.PalModSettingsPath(),
+		m.cfg.PalDefenderDir(),
+		filepath.Join(m.cfg.Win64Dir(), "PalDefender.dll"),
+		filepath.Join(m.cfg.Win64Dir(), "d3d9.dll"),
 	} {
 		added, err := addPathToZip(zw, m.cfg.ServerDir, root)
 		if err != nil {
@@ -857,11 +982,102 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 	if err := out.Close(); err != nil {
 		return BackupInfo{}, err
 	}
+	complete = true
 	info, err := os.Stat(path)
 	if err != nil {
 		return BackupInfo{}, err
 	}
 	return BackupInfo{Name: name, Path: path, SizeBytes: info.Size(), CreatedAt: info.ModTime().UTC().Format(time.RFC3339Nano), Reason: reason, Status: "available"}, nil
+}
+
+func (m Manager) snapshotUpdateProtectedFiles() (map[string]string, error) {
+	return snapshotFiles(m.cfg.ServerDir, []string{
+		filepath.Join(m.cfg.ServerDir, "Pal", "Saved"),
+		m.cfg.ModsDir(),
+		m.cfg.PalDefenderDir(),
+		filepath.Join(m.cfg.Win64Dir(), "PalDefender.dll"),
+		filepath.Join(m.cfg.Win64Dir(), "d3d9.dll"),
+	})
+}
+
+func (m Manager) verifyUpdateProtectedFiles(before map[string]string) error {
+	after, err := m.snapshotUpdateProtectedFiles()
+	if err != nil {
+		return err
+	}
+	changes := []string{}
+	for path, hash := range before {
+		current, ok := after[path]
+		if !ok {
+			changes = append(changes, "removed "+path)
+		} else if current != hash {
+			changes = append(changes, "modified "+path)
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			changes = append(changes, "added "+path)
+		}
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	sort.Strings(changes)
+	if len(changes) > 10 {
+		changes = append(changes[:10], fmt.Sprintf("and %d more", len(changes)-10))
+	}
+	return fmt.Errorf("%s", strings.Join(changes, "; "))
+}
+
+func snapshotFiles(base string, roots []string) (map[string]string, error) {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, root := range roots {
+		if !fileExists(root) && !dirExists(root) {
+			continue
+		}
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(baseAbs, path)
+			if err != nil {
+				return err
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			hasher := sha256.New()
+			_, copyErr := io.Copy(hasher, file)
+			closeErr := file.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			out[filepath.ToSlash(rel)] = hex.EncodeToString(hasher.Sum(nil))
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func retainedBackupMessage(backup BackupInfo) string {
+	if strings.TrimSpace(backup.Path) == "" {
+		return ""
+	}
+	return "; verified backup retained at " + backup.Path
 }
 
 func addPathToZip(zw *zip.Writer, base, path string) ([]BackupManifestFile, error) {
@@ -979,21 +1195,33 @@ func setupStep(installed, configExists bool, processState string) string {
 }
 
 func tailFile(path string, tail int) (string, error) {
+	logs, _, err := tailFileInfo(path, tail)
+	return logs, err
+}
+
+func tailFileInfo(path string, tail int) (string, os.FileInfo, error) {
 	if tail <= 0 || tail > 5000 {
 		tail = 200
 	}
-	b, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
-		return "", nil
+		return "", nil, nil
 	}
 	if err != nil {
-		return "", err
+		return "", nil, err
+	}
+	if info.IsDir() {
+		return "", nil, fmt.Errorf("log path is a directory")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil, err
 	}
 	lines := strings.Split(string(b), "\n")
 	if len(lines) > tail {
 		lines = lines[len(lines)-tail:]
 	}
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n"), info, nil
 }
 
 func filterLogs(logs string, query LogQuery) string {

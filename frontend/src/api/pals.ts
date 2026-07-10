@@ -3,17 +3,19 @@ import { emptySummary, entityListQuery, mapSummary } from './entityList';
 import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
 import type { EntityListParams, EntityListResponse, Pal, UnsupportedActionResult } from '../types';
 
-const mapPal = (raw: unknown): Pal => {
+export const mapPal = (raw: unknown): Pal => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const location = data.location && typeof data.location === 'object' ? (data.location as Record<string, unknown>) : {};
   return {
     id: String(data.id || data.instance_id || ''),
     instance_id: String(data.instance_id || data.id || ''),
     character_id: String(data.character_id || ''),
+    species_name: data.species_name ? String(data.species_name) : undefined,
     name: String(data.name || data.character_id || 'Unknown Pal'),
     nickname: data.nickname ? String(data.nickname) : undefined,
     level: Number(data.level || 1),
     rarity: data.rarity === 'Boss' || data.rarity === 'Rare' ? data.rarity : 'Common',
+    rarity_name: data.rarity_name ? String(data.rarity_name) : undefined,
     owner_player_uid: data.owner_player_uid ? String(data.owner_player_uid) : undefined,
     owner_nickname: String(data.owner_nickname || data.owner || ''),
     owner_steam_id: String(data.owner_steam_id || ''),
@@ -21,6 +23,7 @@ const mapPal = (raw: unknown): Pal => {
     container_id: data.container_id ? String(data.container_id) : undefined,
     skills: Array.isArray(data.skills) ? (data.skills as Pal['skills']) : [],
     passives: Array.isArray(data.passives) ? data.passives.map(String) : [],
+    raw_passives: Array.isArray(data.raw_passives) ? data.raw_passives.map(String) : [],
     raw_skills: Array.isArray(data.raw_skills) ? data.raw_skills.map(String) : [],
     work_suitability: Array.isArray(data.work_suitability) ? (data.work_suitability as Pal['work_suitability']) : [],
     health: Number(data.health || 0),

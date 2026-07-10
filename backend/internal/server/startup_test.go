@@ -26,6 +26,7 @@ func TestStartupArgsForBothRuntimes(t *testing.T) {
 	for _, want := range []string{
 		"-port=8000",
 		"-players=24",
+		"-enable-gamedata-api",
 		"-publiclobby",
 		"-publicip=203.0.113.10",
 		"-publicport=9000",
@@ -35,10 +36,24 @@ func TestStartupArgsForBothRuntimes(t *testing.T) {
 		"-UseMultithreadForDS",
 		"-NumberOfWorkerThreadsServer=8",
 		`-workshopdir=D:\PalServer\Mods\Workshop`,
+		"-log",
+		"-stdout",
+		"-FullStdOutLogOutput",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %s in %s", want, args)
 		}
+	}
+}
+
+func TestAppendUniqueArgsDeduplicatesCaseInsensitivelyWithoutRemovingLogFormat(t *testing.T) {
+	args := appendUniqueArgs([]string{"-LOG", "-stdout", "-logformat=json"}, "-log", "-STDOUT", "-FullStdOutLogOutput")
+	joined := strings.Join(args, " ")
+	if strings.Count(strings.ToLower(joined), "-log ") != 1 || strings.Count(strings.ToLower(joined), "-stdout") != 1 {
+		t.Fatalf("flags were not deduplicated: %s", joined)
+	}
+	if !strings.Contains(joined, "-logformat=json") || !strings.Contains(joined, "-FullStdOutLogOutput") {
+		t.Fatalf("required logging args missing: %s", joined)
 	}
 }
 

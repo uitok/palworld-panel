@@ -8,7 +8,15 @@ export type Permission =
   | 'mods:write'
   | 'players:write'
   | 'security:write'
-  | 'audit:read';
+  | 'audit:read'
+  | 'world:reset'
+  | 'ai:config';
+
+export interface SessionInfo {
+  name: string;
+  role: Role;
+  permissions: Permission[];
+}
 
 export type ServerProcessStatus = 'running' | 'stopped' | 'starting' | 'stopping' | 'updating' | 'error';
 
@@ -45,6 +53,10 @@ export interface ServerVersionInfo {
   last_checked_at: string;
   source: string;
   manifest_path: string;
+  game_version?: string;
+  compatibility_target?: string;
+  compatible?: boolean;
+  compatibility_warnings: string[];
   error?: string;
 }
 
@@ -56,6 +68,24 @@ export interface ServerMetrics {
   total_pals?: number;
   active_bases?: number;
   frame_time?: number;
+  days?: number;
+}
+
+export interface ServerLogResponse {
+  logs: string;
+  source: 'file' | 'docker' | 'none';
+  available: boolean;
+  reason?: string;
+  updated_at?: string;
+}
+
+export interface WorldInfo {
+  active_world_id: string;
+  save_exists: boolean;
+  last_modified?: string;
+  server_running: boolean;
+  reset_available: boolean;
+  reset_unavailable_reason?: string;
 }
 
 export interface MonitorSample {
@@ -241,7 +271,7 @@ export interface FieldSchema {
   label?: string;
   group: string;
   type: FieldType;
-  default: string;
+  default?: string;
   enum?: string[];
   enum_labels?: Record<string, string>;
   min?: number;
@@ -251,7 +281,7 @@ export interface FieldSchema {
   description: string;
 }
 
-export type PalworldSettings = Record<string, string | number | boolean>;
+export type PalworldSettings = Record<string, string | number | boolean | undefined>;
 
 export interface PalworldConfigResponse {
   settings: PalworldSettings;
@@ -334,6 +364,36 @@ export interface WorkshopItem {
   enabled: boolean;
   update_available: boolean;
   mod_id?: string;
+  translation?: AITranslation;
+}
+
+export interface AITranslation {
+  text: string;
+  target_language: string;
+  model: string;
+  generated_at: string;
+  cached: boolean;
+}
+
+export interface AITranslationConfig {
+  configured: boolean;
+  base_url: string;
+  model: string;
+  api_key_present: boolean;
+}
+
+export interface AITranslationConfigUpdate {
+  base_url?: string;
+  model?: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+}
+
+export interface AITranslationTestResult {
+  ok: boolean;
+  base_url: string;
+  model: string;
+  message: string;
 }
 
 export interface WorkshopSearchResponse {
@@ -509,10 +569,12 @@ export interface Pal {
   id: string;
   instance_id?: string;
   character_id?: string;
+  species_name?: string;
   name: string;
   nickname?: string;
   level: number;
   rarity: 'Common' | 'Rare' | 'Boss';
+  rarity_name?: string;
   owner_player_uid?: string;
   owner_nickname: string;
   owner_steam_id: string;
@@ -520,6 +582,7 @@ export interface Pal {
   container_id?: string;
   skills: PalSkill[];
   passives?: string[];
+  raw_passives?: string[];
   raw_skills?: string[];
   work_suitability: WorkSuitability[];
   health: number;
@@ -542,7 +605,14 @@ export interface Base {
   pals_count: number;
   status: 'Safe' | 'Raid';
   online_members: string[];
-  workers?: Array<{ instance_id: string; character_id: string; nickname?: string; level?: number }>;
+  workers?: Array<{
+    instance_id: string;
+    character_id: string;
+    species_name?: string;
+    name?: string;
+    nickname?: string;
+    level?: number;
+  }>;
   containers?: string[];
 }
 

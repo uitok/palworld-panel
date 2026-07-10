@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"palpanel/internal/pallocalize"
 	"palpanel/internal/saveindex"
 )
 
@@ -76,7 +77,7 @@ func (s Server) getSavePlayerInventory(c *gin.Context) {
 			items = append(items, container)
 		}
 	}
-	ok(c, gin.H{"containers": items, "status": status})
+	ok(c, gin.H{"containers": flattenContainers(items), "status": status})
 }
 
 func (s Server) listSaveGuilds(c *gin.Context) {
@@ -89,6 +90,7 @@ func (s Server) listSaveGuilds(c *gin.Context) {
 	guilds := append([]saveindex.Guild(nil), index.Guilds...)
 	applyGuildOnlineCounts(guilds, online.Players)
 	guilds = filterGuilds(guilds, c)
+	guilds = localizeGuilds(guilds)
 	limit, offset := limitOffset(c)
 	paged, summary := paginate(guilds, limit, offset)
 	ok(c, gin.H{"guilds": paged, "status": status, "summary": summary})
@@ -104,8 +106,8 @@ func (s Server) getSaveGuild(c *gin.Context) {
 	applyGuildOnlineCounts(guilds, s.onlinePlayers(c).Players)
 	id := c.Param("id")
 	for _, guild := range guilds {
-		if matchesID(id, guild.ID, guild.OwnerPlayerUID, guild.Name) {
-			ok(c, gin.H{"guild": guild, "status": status})
+		if matchesID(id, guild.ID, guild.OwnerPlayerUID, guild.Name, pallocalize.GuildName(guild.Name)) {
+			ok(c, gin.H{"guild": localizeGuild(guild), "status": status})
 			return
 		}
 	}
@@ -131,7 +133,7 @@ func (s Server) getSaveBase(c *gin.Context) {
 	}
 	id := c.Param("id")
 	for _, base := range index.Bases {
-		if matchesID(id, base.ID, base.Name) {
+		if matchesID(id, base.ID, base.Name, pallocalize.BaseName(base.Name)) {
 			ok(c, gin.H{"base": flattenBase(base), "status": status})
 			return
 		}
@@ -152,7 +154,7 @@ func (s Server) getSaveBaseStorage(c *gin.Context) {
 			items = append(items, container)
 		}
 	}
-	ok(c, gin.H{"containers": items, "status": status})
+	ok(c, gin.H{"containers": flattenContainers(items), "status": status})
 }
 
 func (s Server) listSavePals(c *gin.Context) {
@@ -174,7 +176,7 @@ func (s Server) getSavePal(c *gin.Context) {
 	}
 	id := c.Param("id")
 	for _, pal := range index.Pals {
-		if matchesID(id, pal.InstanceID, pal.CharacterID, pal.Nickname) {
+		if matchesID(id, pal.InstanceID, pal.CharacterID, pal.Nickname, pallocalize.PalName(pal.CharacterID)) {
 			ok(c, gin.H{"pal": flattenPal(pal, playerLookup(index.Players)), "status": status})
 			return
 		}
@@ -189,7 +191,7 @@ func (s Server) listMapEntities(c *gin.Context) {
 	}
 	limit, offset := limitOffset(c)
 	paged, summary := paginate(index.MapEntities, limit, offset)
-	ok(c, gin.H{"entities": paged, "status": status, "summary": summary})
+	ok(c, gin.H{"entities": flattenMapEntities(paged), "status": status, "summary": summary})
 }
 
 func (s Server) currentSaveIndex(c *gin.Context) (saveindex.Index, saveindex.Status, error) {
@@ -222,7 +224,7 @@ func flattenPlayer(player saveindex.Player) gin.H {
 		"nickname":          player.Nickname,
 		"level":             player.Level,
 		"guild_id":          player.GuildID,
-		"guild_name":        player.GuildName,
+		"guild_name":        pallocalize.GuildName(player.GuildName),
 		"is_online":         player.IsOnline,
 		"last_online_time":  player.LastOnlineTime,
 		"location":          player.Location,
@@ -251,15 +253,16 @@ func flattenBase(base saveindex.Base) gin.H {
 	palsCount := len(base.Workers)
 	return gin.H{
 		"id":               base.ID,
-		"name":             base.Name,
+		"name":             pallocalize.BaseName(base.Name),
+		"raw_name":         base.Name,
 		"guild_id":         base.GuildID,
-		"guild_name":       base.GuildName,
+		"guild_name":       pallocalize.GuildName(base.GuildName),
 		"location":         base.Location,
 		"x":                base.Location.X,
 		"y":                base.Location.Y,
 		"z":                base.Location.Z,
 		"structures_count": base.StructuresCount,
-		"workers":          base.Workers,
+		"workers":          flattenWorkers(base.Workers),
 		"containers":       base.Containers,
 		"pals_count":       palsCount,
 		"status":           firstNonEmpty(base.Status, "Safe"),
@@ -280,14 +283,17 @@ func flattenPals(pals []saveindex.Pal, players []saveindex.Player) []gin.H {
 func flattenPal(pal saveindex.Pal, lookup map[string]saveindex.Player) gin.H {
 	owner := lookup[pal.OwnerPlayerUID]
 	status := firstNonEmpty(pal.Status, "Healthy")
+	speciesName := pallocalize.PalName(pal.CharacterID)
 	return gin.H{
 		"id":               pal.InstanceID,
 		"instance_id":      pal.InstanceID,
 		"character_id":     pal.CharacterID,
-		"name":             firstNonEmpty(pal.Nickname, pal.CharacterID, pal.InstanceID),
+		"species_name":     speciesName,
+		"name":             firstNonEmpty(pal.Nickname, speciesName, pal.CharacterID, pal.InstanceID),
 		"nickname":         pal.Nickname,
 		"level":            pal.Level,
 		"rarity":           "Common",
+		"rarity_name":      "普通",
 		"owner_player_uid": pal.OwnerPlayerUID,
 		"owner_nickname":   owner.Nickname,
 		"owner_steam_id":   owner.SteamID,
@@ -298,7 +304,8 @@ func flattenPal(pal saveindex.Pal, lookup map[string]saveindex.Player) gin.H {
 		"y":                pal.Location.Y,
 		"z":                pal.Location.Z,
 		"skills":           []gin.H{},
-		"passives":         pal.Passives,
+		"passives":         localizeStrings(pal.Passives, pallocalize.PassiveName),
+		"raw_passives":     pal.Passives,
 		"raw_skills":       pal.Skills,
 		"work_suitability": []gin.H{},
 		"health":           0,
@@ -306,6 +313,89 @@ func flattenPal(pal saveindex.Pal, lookup map[string]saveindex.Player) gin.H {
 		"status":           status,
 		"raw":              pal.Raw,
 	}
+}
+
+func flattenWorkers(workers []saveindex.Worker) []gin.H {
+	out := make([]gin.H, 0, len(workers))
+	for _, worker := range workers {
+		speciesName := pallocalize.PalName(worker.CharacterID)
+		out = append(out, gin.H{
+			"instance_id":  worker.InstanceID,
+			"character_id": worker.CharacterID,
+			"species_name": speciesName,
+			"name":         firstNonEmpty(worker.Nickname, speciesName, worker.CharacterID),
+			"nickname":     worker.Nickname,
+			"level":        worker.Level,
+		})
+	}
+	return out
+}
+
+func localizeStrings(values []string, translate func(string) string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, translate(value))
+	}
+	return out
+}
+
+func localizeGuilds(guilds []saveindex.Guild) []saveindex.Guild {
+	out := append([]saveindex.Guild(nil), guilds...)
+	for i := range out {
+		out[i] = localizeGuild(out[i])
+	}
+	return out
+}
+
+func localizeGuild(guild saveindex.Guild) saveindex.Guild {
+	guild.Name = pallocalize.GuildName(guild.Name)
+	return guild
+}
+
+func flattenContainers(containers []saveindex.Container) []gin.H {
+	out := make([]gin.H, 0, len(containers))
+	for _, container := range containers {
+		slots := make([]gin.H, 0, len(container.Slots))
+		for _, slot := range container.Slots {
+			slots = append(slots, gin.H{
+				"slot":       slot.Slot,
+				"item_id":    slot.ItemID,
+				"item_name":  pallocalize.ItemName(slot.ItemID),
+				"count":      slot.Count,
+				"durability": slot.Durability,
+			})
+		}
+		out = append(out, gin.H{
+			"container_id": container.ContainerID,
+			"owner_type":   container.OwnerType,
+			"owner_id":     container.OwnerID,
+			"slots":        slots,
+		})
+	}
+	return out
+}
+
+func flattenMapEntities(entities []saveindex.MapEntity) []gin.H {
+	out := make([]gin.H, 0, len(entities))
+	for _, entity := range entities {
+		label := entity.Label
+		switch entity.Type {
+		case "pal":
+			label = pallocalize.PalName(label)
+		case "base":
+			label = pallocalize.BaseName(label)
+		case "map_object":
+			label = pallocalize.MapObjectName(label)
+		}
+		out = append(out, gin.H{
+			"type":      entity.Type,
+			"id":        entity.ID,
+			"label":     label,
+			"raw_label": entity.Label,
+			"location":  entity.Location,
+		})
+	}
+	return out
 }
 
 func playerLookup(players []saveindex.Player) map[string]saveindex.Player {
@@ -598,7 +688,7 @@ func filterGuilds(guilds []saveindex.Guild, c *gin.Context) []saveindex.Guild {
 	}
 	out := make([]saveindex.Guild, 0, len(guilds))
 	for _, guild := range guilds {
-		if containsAny(q, guild.ID, guild.Name, guild.OwnerPlayerUID) {
+		if containsAny(q, guild.ID, guild.Name, pallocalize.GuildName(guild.Name), guild.OwnerPlayerUID) {
 			out = append(out, guild)
 		}
 	}
@@ -613,7 +703,7 @@ func filterBases(bases []saveindex.Base, c *gin.Context) []saveindex.Base {
 		if guildID != "" && normalizeQuery(base.GuildID) != guildID {
 			continue
 		}
-		if q != "" && !containsAny(q, base.ID, base.Name, base.GuildName, base.GuildID) {
+		if q != "" && !containsAny(q, base.ID, base.Name, pallocalize.BaseName(base.Name), base.GuildName, pallocalize.GuildName(base.GuildName), base.GuildID) {
 			continue
 		}
 		out = append(out, base)
@@ -644,7 +734,7 @@ func filterPals(pals []saveindex.Pal, players []saveindex.Player, c *gin.Context
 		if containerID != "" && normalizeQuery(pal.ContainerID) != containerID {
 			continue
 		}
-		if q != "" && !containsAny(q, pal.InstanceID, pal.CharacterID, pal.Nickname, owner.Nickname, owner.SteamID) {
+		if q != "" && !containsAny(q, pal.InstanceID, pal.CharacterID, pallocalize.PalName(pal.CharacterID), pal.Nickname, owner.Nickname, owner.SteamID) {
 			continue
 		}
 		out = append(out, pal)

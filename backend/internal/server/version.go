@@ -18,6 +18,9 @@ import (
 
 const (
 	palworldServerAppID = "2394010"
+	// CompatibilityTarget is the Palworld release covered by the panel's
+	// configuration schema, REST contracts, and save parser regression suite.
+	CompatibilityTarget = "1.0.0"
 
 	kvLatestBuildID      = "server_version_latest_build_id"
 	kvVersionLastChecked = "server_version_last_checked_at"
@@ -31,20 +34,25 @@ const (
 var appManifestBuildPattern = regexp.MustCompile(`(?i)"buildid"\s+"([^"]+)"`)
 
 type VersionInfo struct {
-	Installed       bool   `json:"installed"`
-	CurrentBuildID  string `json:"current_build_id"`
-	LatestBuildID   string `json:"latest_build_id"`
-	UpdateAvailable bool   `json:"update_available"`
-	LastCheckedAt   string `json:"last_checked_at"`
-	Source          string `json:"source"`
-	ManifestPath    string `json:"manifest_path"`
-	Error           string `json:"error,omitempty"`
+	Installed             bool     `json:"installed"`
+	CurrentBuildID        string   `json:"current_build_id"`
+	LatestBuildID         string   `json:"latest_build_id"`
+	UpdateAvailable       bool     `json:"update_available"`
+	LastCheckedAt         string   `json:"last_checked_at"`
+	Source                string   `json:"source"`
+	ManifestPath          string   `json:"manifest_path"`
+	GameVersion           string   `json:"game_version,omitempty"`
+	CompatibilityTarget   string   `json:"compatibility_target,omitempty"`
+	Compatible            *bool    `json:"compatible,omitempty"`
+	CompatibilityWarnings []string `json:"compatibility_warnings,omitempty"`
+	Error                 string   `json:"error,omitempty"`
 }
 
 func (m Manager) VersionInfo(ctx context.Context) (VersionInfo, error) {
 	info := VersionInfo{
-		Installed:    m.isInstalled(ctx),
-		ManifestPath: m.appManifestPath(),
+		Installed:           m.isInstalled(ctx),
+		ManifestPath:        m.appManifestPath(),
+		CompatibilityTarget: CompatibilityTarget,
 	}
 	if !info.Installed {
 		info.Error = "server is not installed"
@@ -75,7 +83,94 @@ func (m Manager) VersionInfo(ctx context.Context) (VersionInfo, error) {
 		info.Error = lastError
 	}
 	info.UpdateAvailable = buildIDsDiffer(info.CurrentBuildID, info.LatestBuildID)
+	info.CompatibilityWarnings = m.compatibilityWarnings(ctx)
 	return info, nil
+}
+
+// WithGameVersion adds the semantic version reported by the running official
+// /info endpoint. Build IDs remain authoritative while the server is offline.
+func (m Manager) WithGameVersion(ctx context.Context, info VersionInfo, gameVersion string) VersionInfo {
+	gameVersion = strings.TrimSpace(gameVersion)
+	if gameVersion == "" {
+		return info
+	}
+	info.GameVersion = gameVersion
+	compatible := semanticVersionMatches(gameVersion, CompatibilityTarget)
+	info.Compatible = &compatible
+	if !compatible {
+		info.CompatibilityWarnings = appendUniqueString(
+			info.CompatibilityWarnings,
+			fmt.Sprintf("运行中的服务端版本 %s 与面板兼容目标 %s 不一致", gameVersion, CompatibilityTarget),
+		)
+	}
+	return info
+}
+
+func (m Manager) compatibilityWarnings(ctx context.Context) []string {
+	warnings := []string{}
+	if installedMods, err := m.store.ListMods(ctx); err == nil {
+		enabledWorkshop := 0
+		for _, mod := range installedMods {
+			if mod.Enabled && (mod.Source == "workshop" || strings.TrimSpace(mod.WorkshopID) != "") {
+				enabledWorkshop++
+			}
+		}
+		if enabledWorkshop > 0 {
+			warnings = append(warnings, fmt.Sprintf("已启用 %d 个 Workshop Mod；Build 变化后请确认作者已适配", enabledWorkshop))
+		}
+	}
+	if fileExists(filepath.Join(m.cfg.Win64Dir(), "PalDefender.dll")) || dirExists(m.cfg.PalDefenderDir()) {
+		warnings = append(warnings, "已安装 PalDefender；Build 变化后请确认其版本兼容")
+	}
+	if hasLevelSave(filepath.Join(m.cfg.ServerDir, "Pal", "Saved", "SaveGames")) {
+		warnings = append(warnings, "存档解析器兼容目标为 1.0.0；非空 1.0 存档实体尚无合规公开样本验证，更新后请重建索引确认存档结构")
+	}
+	return warnings
+}
+
+func semanticVersionMatches(version, target string) bool {
+	normalize := func(value string) []string {
+		value = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(value), "v"))
+		if index := strings.IndexAny(value, "+-"); index >= 0 {
+			value = value[:index]
+		}
+		return strings.Split(value, ".")
+	}
+	actualParts := normalize(version)
+	targetParts := normalize(target)
+	if len(actualParts) < 3 || len(targetParts) < 3 {
+		return false
+	}
+	for index := 0; index < 3; index++ {
+		if actualParts[index] != targetParts[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func hasLevelSave(root string) bool {
+	found := false
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !entry.IsDir() && strings.EqualFold(entry.Name(), "Level.sav") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func (m Manager) CheckVersion(ctx context.Context) (db.Job, error) {
@@ -95,7 +190,7 @@ func (m Manager) CheckVersion(ctx context.Context) (db.Job, error) {
 }
 
 func (m Manager) UpdateIfNeeded(ctx context.Context, preUpdate func(context.Context) error) (db.Job, error) {
-	return m.startJob(ctx, smartUpdateJobType, "queued smart update", func(jobID string) {
+	return m.startLifecycleJob(ctx, smartUpdateJobType, "queued smart update", func(jobID string) {
 		m.update(jobID, "running", 5, "checking whether update is needed", "")
 		info, err := m.refreshVersion(context.Background(), false)
 		if err != nil {
@@ -110,9 +205,9 @@ func (m Manager) UpdateIfNeeded(ctx context.Context, preUpdate func(context.Cont
 		if !m.runInstallOrUpdateJob(jobID, true, true, preUpdate) {
 			return
 		}
-		refreshed, err := m.refreshVersion(context.Background(), false)
+		refreshed, err := m.VersionInfo(context.Background())
 		if err != nil {
-			m.update(jobID, "completed", 100, "smart update completed; version refresh failed: "+err.Error(), "")
+			m.update(jobID, "completed", 100, "smart update completed; version read failed: "+err.Error(), "")
 			return
 		}
 		m.update(jobID, "completed", 100, "smart update completed; current build "+refreshed.CurrentBuildID, "")
