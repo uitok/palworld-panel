@@ -195,6 +195,9 @@ start_server() {
     echo "PalServer.exe not found. Run install first." >&2
     exit 3
   fi
+  # Prefer a game-local proxy DLL (used by UE4SS) while retaining Wine's
+  # builtin fallback for installations that do not provide one.
+  export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-dwmapi=n,b}"
   export HOME="${HOME:-/data/wineprefix}"
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/palpanel-runtime-$(id -u)}"
   mkdir -p "$XDG_RUNTIME_DIR"
