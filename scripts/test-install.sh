@@ -35,6 +35,7 @@ export PALPANEL_SKIP_SYSTEMD=1
 [[ "$(stat -c '%a' "$PALPANEL_ETC_DIR")" == "750" ]]
 [[ "$(stat -c '%a' "$PALPANEL_ETC_DIR/palpanel.env")" == "600" ]]
 installed_dir="$(readlink -f "$PALPANEL_INSTALL_ROOT/current")"
+[[ -f "$installed_dir/LICENSE" ]]
 [[ -f "$installed_dir/licenses/GPL-3.0.txt" ]]
 [[ -f "$installed_dir/licenses/sav-cli-LICENSE.txt" ]]
 [[ -f "$installed_dir/THIRD_PARTY_LICENSES.txt" ]]

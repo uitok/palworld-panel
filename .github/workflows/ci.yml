@@ -55,13 +55,14 @@ jobs:
           systemd-analyze verify "$tmp/palpanel.service" "$tmp/palpanel-sav-cli.service"
       - name: Build and smoke Linux package
         run: |
-          scripts/package.sh --version v1.0.1 --targets linux-amd64 --skip-tests --clean
+          scripts/package.sh --version v1.0.2 --targets linux-amd64 --skip-tests --clean
           scripts/verify-release-contents.sh \
-            dist/packages/palpanel_v1.0.1_linux_amd64.tar.gz \
-            dist/packages/palpanel-sav-cli_v1.0.1_source.tar.gz
-          scripts/smoke-linux.sh dist/packages/palpanel_v1.0.1_linux_amd64.tar.gz
-          sudo scripts/test-install.sh dist/packages/palpanel_v1.0.1_linux_amd64.tar.gz
-          sudo scripts/test-bootstrap-install.sh dist/packages/palpanel_v1.0.1_linux_amd64.tar.gz
+            dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz \
+            dist/packages/palpanel-sav-cli_v1.0.2_source.tar.gz \
+            dist/packages/palpanel_v1.0.2_source.tar.gz
+          scripts/smoke-linux.sh dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz
+          sudo scripts/test-install.sh dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz
+          sudo scripts/test-bootstrap-install.sh dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz
 
   windows:
     runs-on: windows-2025
@@ -99,21 +100,20 @@ jobs:
           npm.cmd ci
           npm.cmd run check
           Pop-Location
-          ./scripts/package.ps1 -Version v1.0.1 -SkipTests -Clean -MingwGcc $gcc
+          ./scripts/package.ps1 -Version v1.0.2 -SkipTests -Clean -MingwGcc $gcc
       - name: Launcher and process smoke test
         shell: pwsh
         run: |
-          $package = Resolve-Path "dist\packages\palpanel_v1.0.1_windows_amd64"
-          (& "$package\palpanel-server.exe" --version | Out-String) | Select-String "v1.0.1"
-          (& "$package\sav-cli.exe" --version | Out-String) | Select-String "v1.0.1"
-          (& "$package\PalPanel.exe" --version | Out-String) | Select-String "v1.0.1"
-          $process = Start-Process -FilePath "$package\PalPanel.exe" -ArgumentList "--no-browser", "--no-prompt", "--exit-after-health" -PassThru -Wait
-          if ($process.ExitCode -ne 0) { throw "Launcher smoke failed with exit code $($process.ExitCode)" }
-          if (-not (Test-Path "$package\config\palpanel.env")) { throw "Launcher did not initialize config" }
-          Start-Sleep -Seconds 2
-          $prefix = $package.Path.ToLowerInvariant()
-          $remaining = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant().StartsWith($prefix) }
-          if ($remaining) { throw "Launcher left child processes running: $($remaining.Name -join ', ')" }
+          $objdump = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\objdump.exe"
+          ./scripts/verify-windows-package.ps1 -Archive "dist\packages\palpanel_v1.0.2_windows_amd64.zip" -ObjdumpPath $objdump
+          ./scripts/smoke-windows.ps1 -PackageDir "dist\packages\palpanel_v1.0.2_windows_amd64" -Version v1.0.2
+      - name: Upload Windows CI package
+        uses: actions/upload-artifact@v4
+        with:
+          name: palpanel-windows-amd64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: dist/packages/palpanel_v1.0.2_windows_amd64.zip
 
   vulnerability:
     runs-on: ubuntu-24.04

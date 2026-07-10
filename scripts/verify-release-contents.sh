@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-archive="${1:?usage: verify-release-contents.sh <linux-archive> [source-archive]}"
+archive="${1:?usage: verify-release-contents.sh <linux-archive> [sav-source-archive] [project-source-archive]}"
 source_archive="${2:-}"
+project_source_archive="${3:-}"
 [[ -f "$archive" ]] || { printf 'archive not found: %s\n' "$archive" >&2; exit 1; }
 
 listing="$(tar -tzf "$archive")"
@@ -18,6 +19,7 @@ required=(
   '/config/palpanel.env.example'
   '/systemd/palpanel.service'
   '/systemd/palpanel-sav-cli.service'
+  '/LICENSE'
   '/THIRD_PARTY_LICENSES.txt'
   '/licenses/GPL-3.0.txt'
   '/checksums.txt'
@@ -43,6 +45,8 @@ if [[ -n "$source_archive" ]]; then
     printf 'source archive contains runtime data, secrets, database, logs, or build artifacts\n' >&2
     exit 1
   fi
+  grep -Fq '/LICENSE' <<<"$source_listing" || { printf 'source archive is missing project LICENSE\n' >&2; exit 1; }
+  grep -Fq '/THIRD_PARTY_LICENSES.txt' <<<"$source_listing" || { printf 'source archive is missing third-party inventory\n' >&2; exit 1; }
   grep -Fq '/sav-cli/LICENSE' <<<"$source_listing" || { printf 'source archive is missing sav-cli/LICENSE\n' >&2; exit 1; }
   grep -Fq '/sav-cli/vendor/github.com/oriath-net/gooz/COPYING' <<<"$source_listing" || {
     printf 'source archive is missing vendored gooz license\n' >&2
@@ -52,5 +56,17 @@ if [[ -n "$source_archive" ]]; then
     printf 'source archive is missing vendored gooz source\n' >&2
     exit 1
   }
+fi
+
+if [[ -n "$project_source_archive" ]]; then
+  [[ -f "$project_source_archive" ]] || { printf 'project source archive not found: %s\n' "$project_source_archive" >&2; exit 1; }
+  project_listing="$(tar -tzf "$project_source_archive")"
+  if grep -E '/(data|logs|run|dist|node_modules)/|/\.env$|/\.env\..*\.local$|\.(db|sqlite|log|sav|zip|exe|dll|o|a)$' <<<"$project_listing"; then
+    printf 'project source archive contains runtime data, secrets, dependencies, or build artifacts\n' >&2
+    exit 1
+  fi
+  for item in '/LICENSE' '/backend/go.mod' '/frontend/package.json' '/sav-cli/go.mod' '/scripts/package.ps1' '/sav-cli/vendor/github.com/oriath-net/gooz/kraken.cpp'; do
+    grep -Fq "$item" <<<"$project_listing" || { printf 'project source archive is missing %s\n' "$item" >&2; exit 1; }
+  done
 fi
 printf 'release content verification passed\n'

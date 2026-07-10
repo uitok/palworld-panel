@@ -6,10 +6,10 @@ on:
       - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release-linux:
+  build-linux:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -44,30 +44,112 @@ jobs:
           format: spdx-json
           output-file: dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.spdx.json
           upload-artifact: false
-      - name: Finalize and verify assets
+      - name: Verify Linux assets
         run: |
-          cd dist/packages
+          scripts/verify-release-contents.sh \
+            "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
+            "dist/packages/palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz" \
+            "dist/packages/palpanel_${GITHUB_REF_NAME}_source.tar.gz"
+          scripts/smoke-linux.sh "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz"
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.tar.gz
+            dist/packages/palpanel-sav-cli_${{ github.ref_name }}_source.tar.gz
+            dist/packages/palpanel_${{ github.ref_name }}_source.tar.gz
+            dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.spdx.json
+            dist/packages/THIRD_PARTY_LICENSES.txt
+
+  build-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.sum
+            sav-cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "invalid release tag" }
+          if ((git rev-parse HEAD).Trim() -ne (git rev-list -n 1 $env:GITHUB_REF_NAME).Trim()) { throw "tag does not point at HEAD" }
+      - name: Build Windows release package
+        shell: pwsh
+        run: |
+          $gcc = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\gcc.exe"
+          if (-not (Test-Path $gcc)) { throw "MinGW gcc not found: $gcc" }
+          ./scripts/package.ps1 -Version $env:GITHUB_REF_NAME -Clean -MingwGcc $gcc
+      - name: Verify Windows package and Launcher
+        shell: pwsh
+        run: |
+          $archive = "dist\packages\palpanel_$($env:GITHUB_REF_NAME)_windows_amd64.zip"
+          $package = "dist\packages\palpanel_$($env:GITHUB_REF_NAME)_windows_amd64"
+          $objdump = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\objdump.exe"
+          ./scripts/verify-windows-package.ps1 -Archive $archive -ObjdumpPath $objdump
+          ./scripts/smoke-windows.ps1 -PackageDir $package -Version $env:GITHUB_REF_NAME
+      - name: Upload Windows release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          if-no-files-found: error
+          retention-days: 1
+          path: dist/packages/palpanel_${{ github.ref_name }}_windows_amd64.zip
+
+  publish:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux
+          path: dist/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: dist/release
+      - name: Create release checksums
+        run: |
+          cd dist/release
           sha256sum \
             "palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
+            "palpanel_${GITHUB_REF_NAME}_windows_amd64.zip" \
+            "palpanel_${GITHUB_REF_NAME}_source.tar.gz" \
             "palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz" \
             "palpanel_${GITHUB_REF_NAME}_linux_amd64.spdx.json" \
             THIRD_PARTY_LICENSES.txt > SHA256SUMS
-          cd ../..
-          scripts/verify-release-contents.sh \
-            "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
-            "dist/packages/palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz"
-          scripts/smoke-linux.sh "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz"
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: PalPanel ${{ github.ref_name }}
-          body_path: docs/release-v1.0.1.md
+          body_path: docs/release-v1.0.2.md
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
           files: |
-            dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.tar.gz
-            dist/packages/palpanel-sav-cli_${{ github.ref_name }}_source.tar.gz
-            dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.spdx.json
-            dist/packages/THIRD_PARTY_LICENSES.txt
-            dist/packages/SHA256SUMS
+            dist/release/palpanel_${{ github.ref_name }}_linux_amd64.tar.gz
+            dist/release/palpanel_${{ github.ref_name }}_windows_amd64.zip
+            dist/release/palpanel_${{ github.ref_name }}_source.tar.gz
+            dist/release/palpanel-sav-cli_${{ github.ref_name }}_source.tar.gz
+            dist/release/palpanel_${{ github.ref_name }}_linux_amd64.spdx.json
+            dist/release/THIRD_PARTY_LICENSES.txt
+            dist/release/SHA256SUMS

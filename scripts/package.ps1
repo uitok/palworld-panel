@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "v1.0.1",
+  [string]$Version = "v1.0.2",
   [switch]$SkipTests,
   [switch]$Clean,
   [string]$MingwGcc = "C:\msys64\mingw64\bin\gcc.exe"
@@ -61,11 +61,15 @@ if (-not $SkipTests) {
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "frontend") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "backend\deployments") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "config") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "licenses") | Out-Null
 Copy-Item -Recurse -Force (Join-Path $RootDir "frontend\dist") (Join-Path $PackageDir "frontend\dist")
 Copy-Item -Recurse -Force (Join-Path $RootDir "backend\deployments\wine-runner") (Join-Path $PackageDir "backend\deployments\wine-runner")
 Copy-Item -Force (Join-Path $RootDir "scripts\palpanel.env.example") (Join-Path $PackageDir "config\palpanel.env.example")
-Copy-Item -Force (Join-Path $RootDir "scripts\package-README.md") (Join-Path $PackageDir "README.md")
+Copy-Item -Force (Join-Path $RootDir "scripts\package-README-windows.md") (Join-Path $PackageDir "README.md")
+Copy-Item -Force (Join-Path $RootDir "LICENSE") (Join-Path $PackageDir "LICENSE")
 Copy-Item -Force (Join-Path $RootDir "THIRD_PARTY_LICENSES.txt") (Join-Path $PackageDir "THIRD_PARTY_LICENSES.txt")
+Copy-Item -Force (Join-Path $RootDir "sav-cli\LICENSE") (Join-Path $PackageDir "licenses\sav-cli-LICENSE.txt")
+Copy-Item -Force (Join-Path $RootDir "backend\internal\pallocalize\LICENSE.apache-2.0") (Join-Path $PackageDir "licenses\pallocalize-Apache-2.0.txt")
 
 $backendLdflags = "-s -w -X palpanel/internal/buildinfo.Version=$Version -X palpanel/internal/buildinfo.Commit=$Commit -X palpanel/internal/buildinfo.BuildTime=$BuildTime"
 $savLdflags = "-s -w -X palpanel/sav-cli/internal/buildinfo.Version=$Version -X palpanel/sav-cli/internal/buildinfo.Commit=$Commit -X palpanel/sav-cli/internal/buildinfo.BuildTime=$BuildTime"
@@ -103,4 +107,4 @@ $checksumLines = Get-ChildItem -LiteralPath $PackageDir -Recurse -File |
   }
 Set-Content -LiteralPath (Join-Path $PackageDir "checksums.txt") -Value $checksumLines -Encoding ASCII
 Compress-Archive -Path $PackageDir -DestinationPath $Archive -Force
-Write-Host "[palpanel] Wrote unsigned CI package $Archive"
+Write-Host "[palpanel] Wrote unsigned Windows release package $Archive"

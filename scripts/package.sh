@@ -73,6 +73,7 @@ copy_common_files() {
   cp "$root_dir/scripts/palpanelctl" "$package_dir/palpanelctl"
   cp "$root_dir/scripts/systemd/palpanel.service" "$package_dir/systemd/palpanel.service"
   cp "$root_dir/scripts/systemd/palpanel-sav-cli.service" "$package_dir/systemd/palpanel-sav-cli.service"
+  cp "$root_dir/LICENSE" "$package_dir/LICENSE"
   cp "$root_dir/THIRD_PARTY_LICENSES.txt" "$package_dir/THIRD_PARTY_LICENSES.txt"
   cp "$root_dir/sav-cli/LICENSE" "$package_dir/licenses/sav-cli-LICENSE.txt"
   cp "$gooz_dir/COPYING" "$package_dir/licenses/GPL-3.0.txt"
@@ -120,6 +121,25 @@ build_source_archive() {
       cp -a --parents "$path" "$source_root/"
     done < <(git ls-files --cached --others --exclude-standard -z -- sav-cli)
   )
+  cp "$root_dir/LICENSE" "$source_root/LICENSE"
+  cp "$root_dir/THIRD_PARTY_LICENSES.txt" "$source_root/THIRD_PARTY_LICENSES.txt"
+  (cd "$source_root/sav-cli" && go mod vendor)
+  tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive" -C "$staging_dir" "$source_name"
+  printf '[palpanel] Wrote %s\n' "$archive"
+}
+
+build_project_source_archive() {
+  local source_name="palpanel_${version}_source"
+  local source_root="$staging_dir/$source_name"
+  local archive="$packages_dir/$source_name.tar.gz"
+  rm -rf "$source_root" "$archive"
+  mkdir -p "$source_root"
+  (
+    cd "$root_dir"
+    while IFS= read -r -d '' path; do
+      cp -a --parents "$path" "$source_root/"
+    done < <(git ls-files --cached --others --exclude-standard -z)
+  )
   (cd "$source_root/sav-cli" && go mod vendor)
   tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive" -C "$staging_dir" "$source_name"
   printf '[palpanel] Wrote %s\n' "$archive"
@@ -135,6 +155,7 @@ for target in "${target_list[@]}"; do
   esac
 done
 build_source_archive
+build_project_source_archive
 rm -rf "$staging_dir"
 
 cp "$root_dir/THIRD_PARTY_LICENSES.txt" "$packages_dir/THIRD_PARTY_LICENSES.txt"

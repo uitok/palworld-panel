@@ -64,3 +64,6 @@ it when using the Windows SteamCMD runtime without Docker.
 The native `sav-cli` includes the GPL-licensed vendored `gooz` decompressor and
 supports PlM1/Oodle save containers. Its corresponding source is distributed
 as a separate release asset.
+
+PalPanel is licensed under GPL-3.0-or-later; see `LICENSE`. Third-party
+components retain their own licenses as listed in `THIRD_PARTY_LICENSES.txt`.

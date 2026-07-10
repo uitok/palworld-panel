@@ -382,7 +382,7 @@ install_system() {
   chmod 755 "$opt_root"
   chmod 750 "$etc_dir" "$system_data_dir"
   local item
-  for item in bin frontend backend systemd config licenses README.md THIRD_PARTY_LICENSES.txt palpanelctl; do
+  for item in bin frontend backend systemd config licenses LICENSE README.md THIRD_PARTY_LICENSES.txt palpanelctl; do
     [[ -e "$package_dir/$item" ]] && cp -a "$package_dir/$item" "$staging/"
   done
   rm -f "$staging/config/palpanel.env"

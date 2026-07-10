@@ -1,9 +1,9 @@
-PalPanel v1.0.0 third-party license inventory
-================================================
+PalPanel third-party license inventory
+======================================
 
-This inventory applies to the distributed Linux package. PalPanel's backend
-and frontend retain their existing repository license status. The sav-cli
-component is distributed under GPL-3.0-or-later; see sav-cli/LICENSE.
+Except for the third-party materials listed below, the complete PalPanel
+project is distributed under GPL-3.0-or-later; see the repository LICENSE.
+This inventory applies to the Linux and Windows packages.
 
 sav-cli native parser
 ---------------------

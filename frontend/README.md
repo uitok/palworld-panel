@@ -21,7 +21,7 @@ VITE_DEV_API_PROXY_TARGET=http://127.0.0.1:64217
 VITE_DEV_PORT=63107
 ```
 
-前端开发端口来自 `VITE_DEV_PORT`，默认 `63107`。开发模式默认后端地址由 `VITE_DEFAULT_BACKEND_URL` 或 `VITE_DEFAULT_BACKEND_PORT` 生成；生产构建默认使用同源 `/api`，适合由后端直接托管 `frontend/dist`。
+前端开发端口来自 `VITE_DEV_PORT`，默认 `63107`。开发环境通过 Vite 的 `VITE_DEV_API_PROXY_TARGET` 代理 `/api`；生产构建固定使用同源 `/api`，适合由后端直接托管 `frontend/dist`。界面不提供后端地址输入。
 
 品牌名来自 `VITE_APP_BRAND`，默认 `PalPanel`。本地存储 key 使用 `VITE_STORAGE_PREFIX` 生成，例如默认 token key 是 `localStorage.palpanel_token`；旧版 key 会在读取时迁移一次。生产和开发构建均不接受构建期面板 Token，Token 只能由用户在运行时输入并保存在浏览器本地存储中。
 
@@ -65,6 +65,10 @@ localStorage.setItem('palpanel_token', '<your-panel-token>')
 - `/settings` 服务器设置
 
 `/setup` 会显示本地/最新 Steam Build ID，并提供“检查更新”和“检查后更新”。`/tasks` 可创建“检查更新”计划任务；该计划只产生提醒，不会自动安装更新。
+
+## 许可证
+
+前端与 PalPanel 其余自有代码统一按 GPL-3.0-or-later 分发，完整条款见仓库根目录 `LICENSE`。
 
 ## 移动端验证
 

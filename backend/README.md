@@ -19,7 +19,7 @@ Proxy environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`
 
 ## Production Package
 
-The repository-level `scripts/package.sh` builds the supported Linux amd64 release. It includes native cgo/Oodle support in sav-cli, `palpanelctl`, and systemd units. `scripts/package.ps1` builds an unsigned Windows package for native CI and development verification only; v1.0.0 does not publish it.
+The repository-level `scripts/package.sh` builds the supported Linux amd64 release. It includes native cgo/Oodle support in sav-cli, `palpanelctl`, and systemd units. `scripts/package.ps1` builds the unsigned Windows amd64 ZIP that is verified on a native runner and published from v1.0.2 onward.
 
 In the Linux package the backend binary serves `frontend/dist` directly and `palpanelctl` sets package-local defaults:
 

@@ -1,5 +1,6 @@
-PalPanel sav-cli is licensed under the GNU General Public License,
-version 3 or (at your option) any later version (GPL-3.0-or-later).
+PalPanel, including sav-cli, is licensed under the GNU General Public License,
+version 3 or (at your option) any later version (GPL-3.0-or-later), except for
+third-party materials identified in THIRD_PARTY_LICENSES.txt.
 
 Copyright (C) 2026 PalPanel contributors
 
@@ -13,6 +14,5 @@ WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
 Public License for more details.
 
-The complete GPL-3.0 text is distributed in release source archives as
-`sav-cli/vendor/github.com/oriath-net/gooz/COPYING` and is available at
-https://www.gnu.org/licenses/gpl-3.0.txt.
+The complete GPL-3.0 text is available in the repository-level `LICENSE` and
+is distributed in every binary and project source package.

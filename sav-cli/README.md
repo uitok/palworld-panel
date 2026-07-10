@@ -2,8 +2,9 @@
 
 Read-only Palworld `.sav` indexer sidecar written in Go.
 
-This component is licensed under GPL-3.0-or-later. Release source archives
-include the corresponding sav-cli source and vendored gooz source/license.
+The complete PalPanel project is licensed under GPL-3.0-or-later. Release
+source archives include the corresponding sav-cli source and vendored gooz
+source/license.
 
 ```bash
 cd sav-cli

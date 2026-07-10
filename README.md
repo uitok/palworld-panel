@@ -4,7 +4,7 @@ PalPanel 是一个面向 Palworld Dedicated Server 的自托管管理面板。
 
 开一台服并不难，麻烦的是后面的日常维护：更新、备份、看日志、改配置、处理 Mod，以及在出问题时弄清楚到底是哪一层没有正常工作。PalPanel 把这些操作放进一个中文 Web 界面里，同时保留可审计的任务记录和清晰的数据目录。
 
-当前稳定版是 `v1.0.1`，正式发布目标为 Linux amd64。Windows Launcher 和原生 MinGW CI 已在仓库中，但暂不发布未签名的 Windows 安装包。
+当前稳定版是 `v1.0.2`，正式发布目标为 Linux amd64 和 Windows amd64。Windows 包包含可双击启动的 Launcher，但目前没有 Authenticode 签名。
 
 ![PalPanel 系统总览](docs/images/system-overview.png)
 
@@ -56,11 +56,11 @@ curl -fsSL https://raw.githubusercontent.com/uitok/palworld-panel/main/install.s
 
 ### 手动安装
 
-从 [v1.0.1 Release](https://github.com/uitok/palworld-panel/releases/tag/v1.0.1) 下载 `palpanel_v1.0.1_linux_amd64.tar.gz`，然后执行：
+从 [v1.0.2 Release](https://github.com/uitok/palworld-panel/releases/tag/v1.0.2) 下载 `palpanel_v1.0.2_linux_amd64.tar.gz`，然后执行：
 
 ```bash
-tar -xzf palpanel_v1.0.1_linux_amd64.tar.gz
-cd palpanel_v1.0.1_linux_amd64
+tar -xzf palpanel_v1.0.2_linux_amd64.tar.gz
+cd palpanel_v1.0.2_linux_amd64
 sudo ./palpanelctl install --listen 127.0.0.1:8080
 ```
 
@@ -93,6 +93,12 @@ sudo systemctl restart palpanel.service
 ```
 
 便携模式把配置、数据、PID 和有界日志放在包内，适合试用或单用户环境。正式长期运行更推荐 systemd 安装。
+
+### Windows
+
+从 [v1.0.2 Release](https://github.com/uitok/palworld-panel/releases/tag/v1.0.2) 下载 `palpanel_v1.0.2_windows_amd64.zip`，校验 `SHA256SUMS` 后完整解压，双击 `PalPanel.exe`。Launcher 会初始化配置、启动后端与 `sav-cli`、等待健康检查并打开浏览器；浏览器只需要输入首次启动显示的管理员 Token。
+
+三个 EXE 暂未使用 Authenticode 证书签名，Windows SmartScreen 可能显示“未知发布者”。不要直接在 ZIP 内运行，也不要从非 Release 页面下载二次打包文件。
 
 ## 文件放在哪里
 
@@ -190,16 +196,16 @@ npm run check
 
 # Linux 正式包
 cd ..
-scripts/package.sh --version v1.0.1 --targets linux-amd64 --clean
+scripts/package.sh --version v1.0.2 --targets linux-amd64 --clean
 ```
 
-产物会写入 `dist/packages/`，其中包括 Linux 包、sav-cli 对应源码、第三方许可清单和 SHA-256 校验文件。
+产物会写入 `dist/packages/`。正式 Release 包括 Linux tar.gz、Windows ZIP、完整项目源码、sav-cli vendored 源码、第三方许可清单、SBOM 和 SHA-256 校验文件。
 
 ## Windows 状态
 
 仓库包含可双击运行的 `PalPanel.exe` Launcher，它负责初始化配置、启动后端与 sav-cli、等待健康检查并打开浏览器。Windows CI 使用原生 runner 和 MinGW CGO 做构建与进程清理测试。
 
-目前没有 Authenticode 证书，因此 `v1.0.1` Release 不上传未签名的 EXE 或 ZIP。源码和 CI 可以继续演进，正式 Windows 资产会在签名链路准备好后发布。
+从 `v1.0.2` 开始，GitHub Release 会发布经过 Windows 原生 runner、MinGW CGO 和 Launcher 进程清理测试的 ZIP。当前 ZIP 未签名，获取 Authenticode 证书后会在后续版本补充签名与发布者身份验证。
 
 ## 群交流
 <p align="center">
@@ -208,4 +214,4 @@ scripts/package.sh --version v1.0.1 --targets linux-amd64 --clean
 
 ## 许可证
 
-`sav-cli` 及其 vendored gooz 源码按 GPL-3.0-or-later 分发，对应源码包随 Release 提供。后端和前端维持仓库现有的许可状态，完整第三方清单见 [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt)。
+除 [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt) 中单独标识的第三方材料外，PalPanel 的后端、前端、Windows Launcher、安装脚本和 `sav-cli` 均按 [GPL-3.0-or-later](LICENSE) 分发。完整项目源码包和包含 vendored gooz 的 `sav-cli` 源码包随 Release 提供。
