@@ -1,106 +1,192 @@
-# PalPanel / Palworld 开服管理面板
+# PalPanel
 
-这是一个面向 Palworld Windows Dedicated Server 的本地/私有化运维面板，包含 Go 后端和 React 前端。
+PalPanel 是一个面向 Palworld Dedicated Server 的自托管管理面板。
 
-## v1.0.0 推荐运行方式：Linux 正式包
+开一台服并不难，麻烦的是后面的日常维护：更新、备份、看日志、改配置、处理 Mod，以及在出问题时弄清楚到底是哪一层没有正常工作。PalPanel 把这些操作放进一个中文 Web 界面里，同时保留可审计的任务记录和清晰的数据目录。
 
-生成 Linux amd64 正式包与 sav-cli 对应源码包：
+当前稳定版是 `v1.0.0`，正式发布目标为 Linux amd64。Windows Launcher 和原生 MinGW CI 已在仓库中，但暂不发布未签名的 Windows 安装包。
+
+![PalPanel 系统总览](docs/images/system-overview.png)
+
+## 能做什么
+
+- 安装、启动、停止、重启和更新 Palworld Dedicated Server。
+- 管理启动参数与 `PalWorldSettings.ini`，保存前会做字段校验。
+- 查看在线人数、CPU、内存、FPS、端口和世界运行时间。
+- 实时查看 PalServer 日志，文件和 Docker 日志都会做大小限制与轮转。
+- 创建、校验、下载和恢复备份；世界重置前会自动生成保护性备份。
+- 解析存档中的玩家、公会、基地、帕鲁和容器信息，包括 PlM1/Oodle 存档。
+- 搜索、安装、启停和更新 Workshop Mod，也支持手动上传 Mod 包。
+- 配置 OpenAI-compatible 翻译服务，在面板内翻译 Workshop 描述。
+- 使用管理员、操作员和只读 Token 分离权限，并记录写操作审计日志。
+
+## 界面
+
+<p align="center">
+  <img src="docs/images/setup-guide.png" width="49%" alt="开服向导">
+  <img src="docs/images/mod-management.png" width="49%" alt="Mod 管理">
+</p>
+
+<p align="center">
+  <img src="docs/images/server-settings.png" width="49%" alt="服务器设置">
+  <img src="docs/images/base-list.png" width="49%" alt="基地与存档索引">
+</p>
+
+## 快速开始
+
+### Linux systemd 安装
+
+准备一台 Linux amd64 主机。使用 Wine Docker 模式运行游戏时，需要先安装并启动 Docker。
+
+从 [v1.0.0 Release](https://github.com/uitok/palworld-panel/releases/tag/v1.0.0) 下载 `palpanel_v1.0.0_linux_amd64.tar.gz`，然后执行：
 
 ```bash
-scripts/package.sh --version v1.0.0 --targets linux-amd64
+tar -xzf palpanel_v1.0.0_linux_amd64.tar.gz
+cd palpanel_v1.0.0_linux_amd64
+sudo ./palpanelctl install --docker
 ```
 
-产物位于 `dist/packages/`：
+`--docker` 会把独立的 `palpanel` 服务账号加入 Docker 组。Docker socket 基本等同于宿主机 root 权限，只应在确实使用 Wine Docker 模式时启用。
 
-- `palpanel_<version>_linux_amd64.tar.gz`
-- `palpanel-sav-cli_<version>_source.tar.gz`
-- `SHA256SUMS`
+安装完成后获取管理员 Token：
 
-解压后的便携模式：
+```bash
+sudo /opt/palpanel/current/palpanelctl token
+```
+
+面板默认监听 `127.0.0.1:8080`，不会直接暴露到局域网或公网。需要从其他机器访问时，编辑 `/etc/palpanel/palpanel.env`：
+
+```ini
+PALPANEL_LISTEN_ADDR=0.0.0.0:8080
+```
+
+然后重启面板：
+
+```bash
+sudo systemctl restart palpanel.service
+```
+
+公网环境建议仍然通过 HTTPS 反向代理访问，并只开放实际需要的面板和游戏端口。
+
+### 便携模式
+
+不安装 systemd 也可以直接在解压目录运行：
 
 ```bash
 ./palpanelctl init
 ./palpanelctl start
 ./palpanelctl status
-./palpanelctl logs -f
 ```
 
-systemd 安装模式：
+便携模式把配置、数据、PID 和有界日志放在包内，适合试用或单用户环境。正式长期运行更推荐 systemd 安装。
+
+## 文件放在哪里
+
+systemd 模式使用三个互相独立的位置：
+
+| 内容 | 路径 |
+| --- | --- |
+| 版本化程序 | `/opt/palpanel/<version>` |
+| 当前版本链接 | `/opt/palpanel/current` |
+| 配置与 Token | `/etc/palpanel/palpanel.env` |
+| 游戏、存档、备份和数据库 | `/var/lib/palpanel` |
+| systemd 服务 | `palpanel.service`、`palpanel-sav-cli.service` |
+
+升级只切换程序版本，不会覆盖 `/etc/palpanel` 和 `/var/lib/palpanel`。普通卸载也会保留配置与数据，只有 `uninstall --purge` 会一并删除。
+
+## 常用命令
 
 ```bash
-sudo ./palpanelctl install
+# 服务状态
+sudo /opt/palpanel/current/palpanelctl status
+
+# 查看或持续跟踪日志
+sudo /opt/palpanel/current/palpanelctl logs
+sudo /opt/palpanel/current/palpanelctl logs -f
+
+# 重启面板与 sav-cli
+sudo /opt/palpanel/current/palpanelctl restart
+
+# 再次读取管理员 Token
+sudo /opt/palpanel/current/palpanelctl token
+
+# 卸载程序但保留配置和数据
+sudo /opt/palpanel/current/palpanelctl uninstall
 ```
 
-首次初始化会生成权限为 `0600` 的 `config/palpanel.env` 和强随机 `PANEL_TOKEN`。Token 仅在创建时显示，之后可用 `./palpanelctl token` 读取。生产默认启用鉴权并监听 `127.0.0.1:8080`。
+安装面板不会自动启动 PalServer。游戏安装、首次启动和世界初始化由开服向导或面板中的服务器控制完成。
 
-systemd 模式将版本化程序安装到 `/opt/palpanel/<version>`，配置放在 `/etc/palpanel`，数据放在 `/var/lib/palpanel`，通过 `/opt/palpanel/current` 切换版本。普通卸载保留配置和数据，`uninstall --purge` 才会删除。
+## Workshop 与 Steam
 
-正式包包含 `bin/palpanel`、`bin/sav-cli`、`palpanelctl`、前端静态资源、Wine runner、systemd 单元、第三方许可清单和内部校验和。
+`STEAM_WEB_API_KEY` 只用于 Workshop 搜索和元数据读取，源码、前端和发布包都不包含默认 Key。未配置时，面板会明确显示 Workshop 搜索不可用，但不会影响手动安装或游戏本身启动。
 
-仓库包含 Windows `PalPanel.exe` Launcher 和原生 MinGW CGO CI 验证，但 v1.0.0 不发布未签名 Windows 资产。取得 Authenticode 证书后再补充 Windows Release。
+需要注意，能搜索到 Mod 不代表 Steam 允许匿名下载其内容。是否支持 `steamcmd +login anonymous` 由具体游戏的 Workshop 分发策略决定；某些 Palworld Mod 需要拥有游戏的 Steam 账号，或者只能从作者提供的 GitHub/Nexus 发布页手动获取。
 
-## 本地开发
+## 安全默认值
 
-```powershell
-cd frontend
+- 首次初始化生成随机的 64 个十六进制字符管理员 Token。
+- 配置文件权限固定为 `0600`，进程环境变量优先于配置文件。
+- `palpanel.env` 按数据解析，不会执行 shell、变量替换或命令替换。
+- 默认启用鉴权并只监听本机回环地址。
+- 前端生产构建使用同源 `/api`，不注入面板 Token。
+- Steam Key、Authorization 和上游完整请求不会写入正常日志。
+
+配置示例见 [scripts/palpanel.env.example](scripts/palpanel.env.example)。常用变量包括：
+
+| 变量 | 用途 |
+| --- | --- |
+| `PANEL_TOKEN` | 管理员 Token |
+| `PANEL_OPERATOR_TOKEN` | 可选的操作员 Token |
+| `PANEL_VIEWER_TOKEN` | 可选的只读 Token |
+| `PALPANEL_LISTEN_ADDR` | 面板监听地址，默认 `127.0.0.1:8080` |
+| `PALPANEL_DATA_DIR` | 数据根目录 |
+| `STEAM_WEB_API_KEY` | Workshop 搜索 Key |
+| `PALPANEL_STEAM_API_TIMEOUT_SECONDS` | Steam API 超时，默认 15 秒 |
+| `PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS` | AI 翻译超时，默认 90 秒 |
+| `PALPANEL_LOG_LEVEL` | `debug`、`info`、`warn` 或 `error` |
+
+## 项目结构
+
+```text
+frontend/   React + TypeScript 管理界面
+backend/    Go API、SQLite、服务器与任务管理
+sav-cli/    存档解析 sidecar
+scripts/    打包、安装、冒烟和发布检查
+```
+
+浏览器只连接 Go 后端。后端负责鉴权、SQLite、Docker/Wine、Palworld REST 和 Steam API；sav-cli 作为独立 sidecar 解析存档，避免把原生 Oodle 解析器耦合进主进程。
+
+## 从源码运行
+
+需要 Go `1.25.12`、Node.js 22 和 npm。Linux 下构建 sav-cli 正式包还需要可用的 C/C++ 工具链。
+
+```bash
+# 后端
+cd backend
+go test ./...
+
+# 存档解析器
+cd ../sav-cli
+CGO_ENABLED=1 go test ./...
+
+# 前端
+cd ../frontend
 npm ci
-npm run build
+npm run check
 
-cd ..\backend
-$env:PANEL_TOKEN="replace-with-a-random-32-byte-token"
-$env:PALPANEL_FRONTEND_DIST="..\frontend\dist"
-go run ./cmd/palpanel
+# Linux 正式包
+cd ..
+scripts/package.sh --version v1.0.0 --targets linux-amd64 --clean
 ```
 
-## 关键环境变量
+产物会写入 `dist/packages/`，其中包括 Linux 包、sav-cli 对应源码、第三方许可清单和 SHA-256 校验文件。
 
-- `PANEL_TOKEN`: admin token，默认必填，不能使用 `change-me`。
-- `PANEL_OPERATOR_TOKEN`: operator token，可执行服务器、配置、Mod、玩家操作。
-- `PANEL_VIEWER_TOKEN`: viewer token，只读。
-- `PALPANEL_REQUIRE_AUTH`: 默认 `true`。只在隔离开发环境设为 `false`。
-- `PALPANEL_CORS_ORIGINS`: 允许的前端来源，逗号分隔。
-- `PALPANEL_FRONTEND_DIST`: 前端构建产物目录。
-- `PALPANEL_MAX_UPLOAD_MB`: Mod zip 上传大小限制，默认 `256`。
-- `PALPANEL_DATA_DIR`: 运行数据根目录。离线包默认是包内 `data/`。
-- `PALPANEL_BACKEND_DIR`: 后端资源目录。离线包默认是包内 `backend/`。
-- `PALPANEL_PALDEFENDER_REST_BASE_URL`: PalDefender REST 地址，默认 `http://127.0.0.1:17993`。
-- `PALPANEL_PALDEFENDER_REST_PORT`: 写入 PalDefender RESTConfig 的端口，默认 `17993`。
-- `PALPANEL_GAME_DATA_TIMEOUT_MS`: 官方 `/game-data` 代理超时，默认 `3000` 毫秒。
-- `PALPANEL_GAME_DATA_MAX_MB`: 官方 `/game-data` 响应上限，默认 `16` MiB。
-- `PALPANEL_STEAM_API_BASE_URL`: Steam Web API 地址，默认官方 HTTPS 地址。
-- `PALPANEL_STEAM_API_TIMEOUT_SECONDS`: Steam 请求超时，默认 `15` 秒。
-- `PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS`: AI Provider 请求超时，默认 `90` 秒。
-- `PALPANEL_LOG_LEVEL`: `debug`、`info`、`warn` 或 `error`，默认 `info`。
-- `STEAM_WEB_API_KEY`: 可选的 Workshop 搜索 Key；源码和二进制不包含默认 Key。
+## Windows 状态
 
-## 配置优先级
+仓库包含可双击运行的 `PalPanel.exe` Launcher，它负责初始化配置、启动后端与 sav-cli、等待健康检查并打开浏览器。Windows CI 使用原生 runner 和 MinGW CGO 做构建与进程清理测试。
 
-后端支持 `--config <path>`，使用严格的 `KEY=VALUE` 解析器读取配置文件，不执行 shell、变量替换或命令替换。进程环境变量始终高于文件值。`--init-config` 安全生成首次配置，`--version` 输出版本、Git commit 与构建时间。
+目前没有 Authenticode 证书，因此 `v1.0.0` Release 不上传未签名的 EXE 或 ZIP。源码和 CI 可以继续演进，正式 Windows 资产会在签名链路准备好后发布。
 
-离线包的 `palpanelctl` 为运行路径补齐包内默认值：
+## 许可证
 
-- `PALPANEL_FRONTEND_DIST=<package>/frontend/dist`
-- `PALPANEL_BACKEND_DIR=<package>/backend`
-- `PALPANEL_DATA_DIR=<package>/data`
-- `PALPANEL_RUNNER_DIR=<package>/backend/deployments/wine-runner`
-
-前端生产包默认使用同源 `/api`，开发模式才默认连接 `127.0.0.1:<VITE_DEFAULT_BACKEND_PORT>`。
-
-## 部署建议
-
-- 推荐使用 HTTPS 反向代理暴露公网，只转发 `/api/*` 到后端，或让后端通过 `PALPANEL_FRONTEND_DIST` 托管前端。
-- 不要把 `PALPANEL_REQUIRE_AUTH=false` 用于公网。
-- 离线包运行数据默认都在包内 `data/`；`data/server`、`data/backups`、`data/logs`、`data/palpanel.db` 都是需要备份的运行数据。
-- 项目当前只提供 Wine runner Dockerfile；完整后端 Docker/Compose 仍建议按部署环境单独编写，确保 Palworld 存档目录使用稳定宿主机卷。
-
-## 运维功能
-
-- 安全重启会创建后端任务：保存/通知、等待倒计时、停止、启动。
-- 更新判断使用 Steam Build ID：读取本地 `appmanifest_2394010.acf`，再通过 SteamCMD 查询 public 分支最新 Build。服务器运行时另从官方 `/info` 展示语义版本，并按 `1.0.0` 兼容目标提示 Mod、PalDefender 和存档解析风险；配置规范版本不会被当作游戏版本。
-- “检查后更新”会先比对 Build ID，只有发现新版本才执行备份、停服、更新和必要的重启。
-- 恢复备份前会先停止服务器并创建 `pre-restore` 备份。
-- 管理员可在总览中重置当前世界；任务会校验 `RESET WORLD` 与世界 ID、创建并验证 `pre-world-reset` 备份，只移走当前世界目录。新世界启动失败时不会覆盖旧数据，备份和暂存路径会写入任务错误。
-- 设置页支持 OpenAI-compatible AI 翻译配置。API Key 仅保存到 `data/secrets/ai-translation.key`（`0600`），Workshop 详情按需翻译 Steam 权威描述并按原文哈希与模型缓存。
-- PalServer 新进程统一启用 stdout 日志。Wine 模式同时写入 Docker 输出和 `data/logs/palserver.log`；文件与 Docker 日志均按 20 MiB、5 份轮转，总览运行时每 3 秒刷新，停服后仍保留最后日志。
-- 写操作会记录审计日志，可在 `/audit` 查看。
-- 玩家踢出等依赖运行时命令能力的功能，在未接入 PalDefender/RCON 后端时会返回明确 `unsupported`。
+`sav-cli` 及其 vendored gooz 源码按 GPL-3.0-or-later 分发，对应源码包随 Release 提供。后端和前端维持仓库现有的许可状态，完整第三方清单见 [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt)。
