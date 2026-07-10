@@ -57,7 +57,7 @@ jobs:
             "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
             "dist/packages/palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz"
           scripts/smoke-linux.sh "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz"
-      - name: Publish private repository release
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: PalPanel ${{ github.ref_name }}
