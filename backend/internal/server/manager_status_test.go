@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +13,9 @@ import (
 )
 
 func TestStatusReportsDockerErrorAsWarning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("missing executable status differs from the Linux Docker runtime")
+	}
 	root := t.TempDir()
 	cfg := appconfig.Config{
 		DataDir:         root,

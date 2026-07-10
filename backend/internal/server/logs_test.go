@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -34,6 +35,9 @@ esac`)
 }
 
 func TestLogsFallBackToDocker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises Docker log fallback")
+	}
 	m, cleanup := newLogTestManager(t, `
 case "$1" in
   logs) echo "docker fallback output" ;;
@@ -51,6 +55,9 @@ esac`)
 }
 
 func TestLogsReturnMetadataInsteadOfErrorWithoutCollectionSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises Docker log fallback")
+	}
 	m, cleanup := newLogTestManager(t, `
 echo "No such object" >&2
 exit 1`)

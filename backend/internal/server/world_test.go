@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -102,6 +103,9 @@ func TestWorldResetRechecksDedicatedServerNameAfterQueue(t *testing.T) {
 }
 
 func TestRunningWorldResetGeneratesNewWorldAndInvalidatesCaches(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Wine Docker runtime")
+	}
 	m, cleanup := newRunningWorldTestManager(t, true)
 	defer cleanup()
 	var prepared atomic.Int32
@@ -133,6 +137,9 @@ func TestRunningWorldResetGeneratesNewWorldAndInvalidatesCaches(t *testing.T) {
 }
 
 func TestWorldResetStartFailureRetainsBackupAndStagedWorld(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Wine Docker runtime")
+	}
 	m, cleanup := newRunningWorldTestManager(t, false)
 	defer cleanup()
 	job, err := m.ResetWorld(t.Context(), "running-world", worldResetConfirmation, WorldResetHooks{Prepare: func(context.Context) error { return nil }})

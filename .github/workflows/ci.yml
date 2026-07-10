@@ -88,19 +88,7 @@ jobs:
         run: |
           $gcc = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\gcc.exe"
           if (-not (Test-Path $gcc)) { throw "MinGW gcc not found: $gcc" }
-          Push-Location backend
-          go test ./...
-          Pop-Location
-          $env:CGO_ENABLED = "1"
-          $env:CC = $gcc
-          Push-Location sav-cli
-          go test ./...
-          Pop-Location
-          Push-Location frontend
-          npm.cmd ci
-          npm.cmd run check
-          Pop-Location
-          ./scripts/package.ps1 -Version v1.0.2 -SkipTests -Clean -MingwGcc $gcc
+          ./scripts/package.ps1 -Version v1.0.2 -Clean -MingwGcc $gcc
       - name: Launcher and process smoke test
         shell: pwsh
         run: |

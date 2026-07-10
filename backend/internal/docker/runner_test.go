@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -101,6 +102,9 @@ func TestRunnerBaseImageCandidatesUsesMirrorPrefixes(t *testing.T) {
 }
 
 func TestBuildImageRetriesMirrorCandidateOnDockerHubTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Wine runner")
+	}
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "docker.log")
 	fakeDocker := filepath.Join(dir, "docker")
@@ -142,6 +146,9 @@ func TestBuildImageRetriesMirrorCandidateOnDockerHubTimeout(t *testing.T) {
 }
 
 func TestBuildImageDoesNotRetryDockerfileSyntaxError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Wine runner")
+	}
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "docker.log")
 	fakeDocker := filepath.Join(dir, "docker")
@@ -176,6 +183,9 @@ func TestBuildImageDoesNotRetryDockerfileSyntaxError(t *testing.T) {
 }
 
 func TestStartMountsPersistentLogsAndBoundsDockerLogs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Wine runner")
+	}
 	root := t.TempDir()
 	commandLog := filepath.Join(root, "commands.log")
 	fakeDocker := filepath.Join(root, "docker")
