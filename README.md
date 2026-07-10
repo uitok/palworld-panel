@@ -4,7 +4,7 @@ PalPanel 是一个面向 Palworld Dedicated Server 的自托管管理面板。
 
 开一台服并不难，麻烦的是后面的日常维护：更新、备份、看日志、改配置、处理 Mod，以及在出问题时弄清楚到底是哪一层没有正常工作。PalPanel 把这些操作放进一个中文 Web 界面里，同时保留可审计的任务记录和清晰的数据目录。
 
-当前稳定版是 `v1.0.0`，正式发布目标为 Linux amd64。Windows Launcher 和原生 MinGW CI 已在仓库中，但暂不发布未签名的 Windows 安装包。
+当前稳定版是 `v1.0.1`，正式发布目标为 Linux amd64。Windows Launcher 和原生 MinGW CI 已在仓库中，但暂不发布未签名的 Windows 安装包。
 
 ![PalPanel 系统总览](docs/images/system-overview.png)
 
@@ -34,19 +34,35 @@ PalPanel 是一个面向 Palworld Dedicated Server 的自托管管理面板。
 
 ## 快速开始
 
-### Linux systemd 安装
+### Linux 一键安装
 
-准备一台 Linux amd64 主机。使用 Wine Docker 模式运行游戏时，需要先安装并启动 Docker。
-
-从 [v1.0.0 Release](https://github.com/uitok/palworld-panel/releases/tag/v1.0.0) 下载 `palpanel_v1.0.0_linux_amd64.tar.gz`，然后执行：
+准备一台 Linux amd64 主机，执行：
 
 ```bash
-tar -xzf palpanel_v1.0.0_linux_amd64.tar.gz
-cd palpanel_v1.0.0_linux_amd64
-sudo ./palpanelctl install --docker
+curl -fsSL https://raw.githubusercontent.com/uitok/palworld-panel/main/install.sh | sudo bash
 ```
 
-`--docker` 会把独立的 `palpanel` 服务账号加入 Docker 组。Docker socket 基本等同于宿主机 root 权限，只应在确实使用 Wine Docker 模式时启用。
+脚本会从 GitHub 获取最新正式版，校验 SHA-256，然后一次安装前端、后端和 `sav-cli`。默认监听 `127.0.0.1:8080`；安装完成会直接显示面板地址和随机生成的管理员 Token。打开面板后只需要输入 Token，不需要填写后端地址。
+
+需要从局域网或公网访问时，安装时显式指定监听地址：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/uitok/palworld-panel/main/install.sh | sudo bash -s -- --listen 0.0.0.0:8080
+```
+
+如果 Docker 已安装、Docker socket 可用且存在 `docker` 组，脚本会自动给独立的 `palpanel` 服务账号启用 Docker 访问。也可以用 `--docker` 强制启用，或用 `--no-docker` 禁用自动检测。Docker socket 基本等同于宿主机 root 权限，只应在使用 Wine Docker 模式时启用。
+
+公网环境建议通过 HTTPS 反向代理访问，并在防火墙中只开放实际需要的面板和游戏端口。
+
+### 手动安装
+
+从 [v1.0.1 Release](https://github.com/uitok/palworld-panel/releases/tag/v1.0.1) 下载 `palpanel_v1.0.1_linux_amd64.tar.gz`，然后执行：
+
+```bash
+tar -xzf palpanel_v1.0.1_linux_amd64.tar.gz
+cd palpanel_v1.0.1_linux_amd64
+sudo ./palpanelctl install --listen 127.0.0.1:8080
+```
 
 安装完成后获取管理员 Token：
 
@@ -54,7 +70,7 @@ sudo ./palpanelctl install --docker
 sudo /opt/palpanel/current/palpanelctl token
 ```
 
-面板默认监听 `127.0.0.1:8080`，不会直接暴露到局域网或公网。需要从其他机器访问时，编辑 `/etc/palpanel/palpanel.env`：
+面板默认不会直接暴露到局域网或公网。也可以在安装后编辑 `/etc/palpanel/palpanel.env`：
 
 ```ini
 PALPANEL_LISTEN_ADDR=0.0.0.0:8080
@@ -65,8 +81,6 @@ PALPANEL_LISTEN_ADDR=0.0.0.0:8080
 ```bash
 sudo systemctl restart palpanel.service
 ```
-
-公网环境建议仍然通过 HTTPS 反向代理访问，并只开放实际需要的面板和游戏端口。
 
 ### 便携模式
 
@@ -176,7 +190,7 @@ npm run check
 
 # Linux 正式包
 cd ..
-scripts/package.sh --version v1.0.0 --targets linux-amd64 --clean
+scripts/package.sh --version v1.0.1 --targets linux-amd64 --clean
 ```
 
 产物会写入 `dist/packages/`，其中包括 Linux 包、sav-cli 对应源码、第三方许可清单和 SHA-256 校验文件。
@@ -185,7 +199,7 @@ scripts/package.sh --version v1.0.0 --targets linux-amd64 --clean
 
 仓库包含可双击运行的 `PalPanel.exe` Launcher，它负责初始化配置、启动后端与 sav-cli、等待健康检查并打开浏览器。Windows CI 使用原生 runner 和 MinGW CGO 做构建与进程清理测试。
 
-目前没有 Authenticode 证书，因此 `v1.0.0` Release 不上传未签名的 EXE 或 ZIP。源码和 CI 可以继续演进，正式 Windows 资产会在签名链路准备好后发布。
+目前没有 Authenticode 证书，因此 `v1.0.1` Release 不上传未签名的 EXE 或 ZIP。源码和 CI 可以继续演进，正式 Windows 资产会在签名链路准备好后发布。
 
 ## 群交流
 <p align="center">

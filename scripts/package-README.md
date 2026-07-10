@@ -1,4 +1,4 @@
-# PalPanel v1.0.0 Linux Package
+# PalPanel Linux Package
 
 This package contains the PalPanel backend and frontend, the native cgo
 `sav-cli` sidecar, the Wine runner resources, systemd units, and
@@ -24,6 +24,10 @@ bounded logs remain inside the extracted package directory.
 ```bash
 sudo ./palpanelctl install
 ```
+
+Use `--listen HOST:PORT` to set the panel listener non-interactively. The
+frontend and API share the same origin, so the browser only asks for the admin
+token.
 
 Programs are installed under `/opt/palpanel/<version>`, with
 `/opt/palpanel/current` selecting the active version. Configuration is stored

@@ -16,11 +16,10 @@ import {
   Terminal,
   Wand2,
 } from 'lucide-react';
-import { getErrorMessage, readBackendUrl, writeBackendUrl } from '../api/client';
+import { getErrorMessage } from '../api/client';
 import { setupApi } from '../api/setup';
 import { serverApi } from '../api/server';
 import { isJobDone, tasksApi } from '../api/tasks';
-import { DEFAULT_BACKEND_PORT } from '../config/defaults';
 import type {
   DockerInstallPlan,
   DockerMirrorID,
@@ -120,7 +119,6 @@ export const Setup: React.FC = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [backendUrl, setBackendUrl] = useState(() => readBackendUrl());
   const mountedRef = useRef(true);
   const trackedJobIdRef = useRef<string | null>(null);
 
@@ -442,12 +440,6 @@ export const Setup: React.FC = () => {
   const downloadMirrorScript = () => downloadScript('configure-docker-mirrors.sh', dockerMirrorPlan?.script);
   const criticalStatusMissing = !loading && (!host || !status);
 
-  const saveBackendUrlAndRefresh = async () => {
-    writeBackendUrl(backendUrl);
-    setMessage(null);
-    await refresh();
-  };
-
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <SetupHero
@@ -481,10 +473,8 @@ export const Setup: React.FC = () => {
 
       {criticalStatusMissing && (
         <ConnectionIssuePanel
-          backendUrl={backendUrl}
           message={message}
-          onBackendUrlChange={setBackendUrl}
-          onRetry={saveBackendUrlAndRefresh}
+          onRetry={refresh}
         />
       )}
 
@@ -690,11 +680,9 @@ const SimpleStatusStrip: React.FC<{ items: SimpleStatus[] }> = ({ items }) => (
 );
 
 const ConnectionIssuePanel: React.FC<{
-  backendUrl: string;
   message: string | null;
-  onBackendUrlChange: (value: string) => void;
   onRetry: () => void;
-}> = ({ backendUrl, message, onBackendUrlChange, onRetry }) => (
+}> = ({ message, onRetry }) => (
   <section className="rounded-3xl border border-rose-100 bg-rose-50 p-5 text-rose-900 shadow-sm">
     <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="min-w-0 flex-1">
@@ -703,19 +691,9 @@ const ConnectionIssuePanel: React.FC<{
           检测失败
         </h4>
         <p className="mt-2 text-xs font-semibold leading-5 opacity-85">
-          无法读取后端关键状态。请确认后端地址可从当前浏览器访问，再重新检测。
+          无法读取当前面板后端的关键状态。请确认 PalPanel 服务正在运行，再重新检测。
         </p>
         {message && <p className="mt-2 break-words text-[11px] font-semibold opacity-80">{message}</p>}
-        <label className="mt-4 flex max-w-xl flex-col gap-1.5 text-xs font-semibold">
-          后端地址
-          <input
-            type="text"
-            value={backendUrl}
-            onChange={(event) => onBackendUrlChange(event.target.value)}
-            placeholder={`http://127.0.0.1:${DEFAULT_BACKEND_PORT}`}
-            className="rounded-xl border border-rose-200 bg-white p-3 font-mono text-xs font-semibold text-slate-700 focus:border-rose-400 focus:outline-none"
-          />
-        </label>
       </div>
       <button
         type="button"
@@ -723,7 +701,7 @@ const ConnectionIssuePanel: React.FC<{
         className="flex shrink-0 items-center justify-center gap-2 rounded-xl border border-rose-200 bg-white px-4 py-3 text-xs font-bold text-rose-700 hover:bg-rose-50"
       >
         <RefreshCw size={14} />
-        保存并重新检测
+        重新检测
       </button>
     </div>
   </section>

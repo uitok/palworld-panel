@@ -32,4 +32,12 @@ describe('app routing', () => {
     renderRoute('/does-not-exist');
     expect(await screen.findByText('总览路由内容')).toBeInTheDocument();
   });
+
+  it('asks only for the panel token on first visit', () => {
+    localStorage.removeItem(storageKeys.token);
+    renderRoute('/dashboard');
+
+    expect(screen.getByLabelText('管理 Token')).toBeInTheDocument();
+    expect(screen.queryByLabelText('后端地址')).not.toBeInTheDocument();
+  });
 });

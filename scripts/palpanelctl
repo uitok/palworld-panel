@@ -314,18 +314,64 @@ service_control_enabled() {
   [[ "${PALPANEL_SKIP_SYSTEMD:-0}" != "1" ]]
 }
 
+validate_listen_addr() {
+  local address="$1"
+  local host="${address%:*}"
+  local port="${address##*:}"
+  local port_number
+  [[ "$address" =~ ^[^[:space:]#=]+:[0-9]+$ ]] || fail "invalid listen address: $address"
+  [[ -n "$host" && "$host" != *'/'* ]] || fail "invalid listen host: $host"
+  (( ${#port} <= 5 )) || fail "listen port must be between 1 and 65535"
+  port_number=$((10#$port))
+  (( port_number >= 1 && port_number <= 65535 )) || fail "listen port must be between 1 and 65535"
+}
+
+set_config_value() {
+  local name="$1"
+  local value="$2"
+  local path="$3"
+  local temporary="${path}.tmp.$BASHPID"
+  awk -v wanted="$name" -v replacement="$name=$value" '
+    BEGIN { replaced = 0 }
+    {
+      equals = index($0, "=")
+      key = equals > 0 ? substr($0, 1, equals - 1) : ""
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key == wanted) {
+        if (!replaced) print replacement
+        replaced = 1
+        next
+      }
+      print
+    }
+    END { if (!replaced) print replacement }
+  ' "$path" >"$temporary"
+  chmod 600 "$temporary"
+  mv -f "$temporary" "$path"
+}
+
 install_system() {
   require_root
   require_binary "$backend_bin"
   require_binary "$sav_bin"
   local docker_access=0
+  local listen_addr=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --docker) docker_access=1 ;;
+      --listen)
+        [[ $# -ge 2 ]] || fail "--listen requires a host:port value"
+        listen_addr="$2"
+        shift
+        ;;
+      --listen=*) listen_addr="${1#*=}" ;;
       *) fail "unknown install option: $1" ;;
     esac
     shift
   done
+  if [[ -n "$listen_addr" ]]; then
+    validate_listen_addr "$listen_addr"
+  fi
   local version
   version="$($backend_bin --version | awk 'NR == 1 { print $2 }')"
   [[ "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || fail "invalid build version: $version"
@@ -364,6 +410,9 @@ install_system() {
   if [[ ! -f "$etc_dir/palpanel.env" ]]; then
     "$version_dir/bin/palpanel" --config "$etc_dir/palpanel.env" --init-config
   fi
+  if [[ -n "$listen_addr" ]]; then
+    set_config_value PALPANEL_LISTEN_ADDR "$listen_addr" "$etc_dir/palpanel.env"
+  fi
   chmod 600 "$etc_dir/palpanel.env"
   if [[ "$test_mode" != "1" ]]; then
     chown "$service_user:$service_user" "$etc_dir/palpanel.env"
@@ -379,7 +428,9 @@ install_system() {
   chmod 644 "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service"
   if service_control_enabled; then
     systemctl daemon-reload
-    systemctl enable --now palpanel.service
+    systemctl enable palpanel.service
+    systemctl restart palpanel-sav-cli.service
+    systemctl restart palpanel.service
   fi
   printf 'installed PalPanel %s in %s\n' "$version" "$version_dir"
 }
@@ -422,7 +473,8 @@ Commands:
   logs [-f]            show or follow bounded logs
   config [edit]        print or edit the active config path
   token                print the configured admin token
-  install [--docker]   install under /opt and enable systemd services
+  install [--docker] [--listen HOST:PORT]
+                       install under /opt and enable systemd services
   uninstall [--purge]  remove programs; preserve config/data unless purged
 EOF
 }

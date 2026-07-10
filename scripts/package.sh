@@ -82,7 +82,7 @@ copy_common_files() {
 
 build_linux() {
   local arch="$1"
-  [[ "$arch" == "amd64" ]] || { printf 'Only linux-amd64 is supported for v1.0.0\n' >&2; exit 64; }
+  [[ "$arch" == "amd64" ]] || { printf 'Only linux-amd64 is supported\n' >&2; exit 64; }
   [[ "$(go env GOOS)" == "linux" && "$(go env GOARCH)" == "$arch" ]] || {
     printf 'The cgo sav-cli release must be built natively on linux-%s\n' "$arch" >&2
     exit 69

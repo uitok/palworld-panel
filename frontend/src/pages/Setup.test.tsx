@@ -138,6 +138,18 @@ describe('Setup', () => {
     expect(screen.queryByRole('button', { name: '正在检查环境' })).not.toBeInTheDocument();
   });
 
+  it('retries the same-origin backend without asking for an address', async () => {
+    serverApiMock.getStatus.mockRejectedValue(new Error('backend unavailable'));
+    setupApiMock.getHost.mockRejectedValue(new Error('backend unavailable'));
+
+    render(<Setup />);
+
+    expect(await screen.findByText('检测失败')).toBeInTheDocument();
+    expect(screen.queryByLabelText('后端地址')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新检测' }));
+    await waitFor(() => expect(serverApiMock.getStatus).toHaveBeenCalledTimes(2));
+  });
+
   it('restores a running setup job after returning to the wizard', async () => {
     const runningJob: Job = {
       id: 'job_running_bootstrap',

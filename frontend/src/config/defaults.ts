@@ -1,4 +1,4 @@
-type StorageKeyName = 'token' | 'backendUrl' | 'sidebarCollapsed';
+type StorageKeyName = 'token' | 'sidebarCollapsed';
 
 const envString = (value: unknown, fallback: string) => {
   const trimmed = String(value || '').trim();
@@ -10,24 +10,18 @@ const storagePrefix = envString(import.meta.env.VITE_STORAGE_PREFIX, 'palpanel')
 export const appConfig = {
   brand: envString(import.meta.env.VITE_APP_BRAND, 'PalPanel'),
   storagePrefix,
-  configuredBackendUrl: String(import.meta.env.VITE_DEFAULT_BACKEND_URL || '').trim(),
-  defaultBackendPort: envString(import.meta.env.VITE_DEFAULT_BACKEND_PORT, '64217'),
   devPort: envString(import.meta.env.VITE_DEV_PORT, '63107'),
 } as const;
 
-export const CONFIGURED_BACKEND_URL = appConfig.configuredBackendUrl;
-export const DEFAULT_BACKEND_PORT = appConfig.defaultBackendPort;
 export const DEV_PORT = appConfig.devPort;
 
 export const storageKeys: Record<StorageKeyName, string> = {
   token: `${appConfig.storagePrefix}_token`,
-  backendUrl: `${appConfig.storagePrefix}_backend_url`,
   sidebarCollapsed: `${appConfig.storagePrefix}_sidebar_collapsed`,
 };
 
 export const legacyStorageKeys: Record<StorageKeyName, string> = {
   token: 'palsphere_token',
-  backendUrl: 'palsphere_backend_url',
   sidebarCollapsed: 'palsphere_sidebar_collapsed',
 };
 

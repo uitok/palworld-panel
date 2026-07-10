@@ -2,12 +2,11 @@ import React, { Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ServerStoreProvider } from './store/ServerStoreProvider';
 import { useServerStore } from './store/useServerStore';
-import { readBackendUrl, writeBackendUrl } from './api/client';
 import { AppLayout } from './components/layout/AppLayout';
 import { ErrorBoundary } from './components/layout/ErrorBoundary';
 import { QueryProvider } from './queryClient';
 import { appRoutes } from './routes';
-import { DEFAULT_BACKEND_PORT, appConfig } from './config/defaults';
+import { appConfig } from './config/defaults';
 
 export const AppContent: React.FC = () => {
   const location = useLocation();
@@ -17,8 +16,7 @@ export const AppContent: React.FC = () => {
     return (
       <TokenGate
         authError={authError}
-        onSubmit={(token, backendUrl) => {
-          writeBackendUrl(backendUrl);
+        onSubmit={(token) => {
           setPanelToken(token);
           clearAuthError();
         }}
@@ -51,40 +49,34 @@ export const AppContent: React.FC = () => {
   );
 };
 
-const TokenGate: React.FC<{ authError: boolean; onSubmit: (token: string, backendUrl: string) => void }> = ({ authError, onSubmit }) => {
+const TokenGate: React.FC<{ authError: boolean; onSubmit: (token: string) => void }> = ({ authError, onSubmit }) => {
   const [token, setToken] = React.useState('');
-  const [backendUrl, setBackendUrl] = React.useState(() => readBackendUrl());
   return (
     <div className="flex min-h-dvh items-center justify-center bg-slate-100 p-4">
       <form
         className="w-full max-w-md rounded-3xl border border-slate-100 bg-white p-6 shadow-[0_24px_70px_rgba(15,23,42,0.08)]"
         onSubmit={(event) => {
           event.preventDefault();
-          if (token.trim()) onSubmit(token.trim(), backendUrl.trim());
+          if (token.trim()) onSubmit(token.trim());
         }}
       >
         <p className="text-[11px] font-bold uppercase text-sky-500">{appConfig.brand} Admin</p>
         <h1 className="mt-2 text-xl font-bold text-slate-900">输入面板访问 Token</h1>
         <p className="mt-2 text-xs font-medium leading-6 text-slate-500">
-          {authError ? '当前 token 已失效或权限不足，请重新输入后继续。' : '后端已启用鉴权，请输入 PANEL_TOKEN。'}
+          {authError ? '当前 Token 已失效或权限不足，请重新输入后继续。' : '请输入安装完成时显示的管理员 Token。'}
         </p>
         <label className="mt-5 flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
-          后端地址
+          管理 Token
           <input
-            type="text"
-            value={backendUrl}
-            onChange={(event) => setBackendUrl(event.target.value)}
-            placeholder={`http://127.0.0.1:${DEFAULT_BACKEND_PORT}`}
+            type="password"
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            autoComplete="current-password"
+            autoFocus
+            placeholder="PANEL_TOKEN"
             className="rounded-xl border border-slate-200 p-3 font-mono text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
           />
         </label>
-        <input
-          type="password"
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-          placeholder="PANEL_TOKEN"
-          className="mt-3 w-full rounded-xl border border-slate-200 p-3 font-mono text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
-        />
         <button type="submit" className="mt-4 w-full rounded-xl bg-sky-500 px-4 py-3 text-xs font-bold text-white hover:bg-sky-600">
           进入管理面板
         </button>

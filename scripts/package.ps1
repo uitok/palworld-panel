@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "v1.0.0",
+  [string]$Version = "v1.0.1",
   [switch]$SkipTests,
   [switch]$Clean,
   [string]$MingwGcc = "C:\msys64\mingw64\bin\gcc.exe"
