@@ -19,10 +19,9 @@ import (
 )
 
 const (
-	defaultSteamAPIBaseURL = "https://api.steampowered.com"
 	steamWorkshopPageURL   = "https://steamcommunity.com/sharedfiles/filedetails/?id="
 	workshopCacheTTL       = 90 * time.Second
-	workshopRequestTimeout = 15 * time.Second
+	workshopRequestTimeout = time.Duration(appconfig.DefaultSteamAPITimeoutSeconds) * time.Second
 )
 
 var ErrSteamAPIKeyMissing = errors.New("Steam Web API key is not available")
@@ -87,7 +86,7 @@ func NewSteamClient(apiKey, appID string) *SteamClient {
 	return &SteamClient{
 		apiKey:  strings.TrimSpace(apiKey),
 		appID:   strings.TrimSpace(appID),
-		baseURL: defaultSteamAPIBaseURL,
+		baseURL: appconfig.DefaultSteamAPIBaseURL,
 		httpClient: &http.Client{
 			Timeout: workshopRequestTimeout,
 		},
@@ -236,9 +235,10 @@ func (c *SteamClient) doJSON(ctx context.Context, method, path string, query url
 }
 
 type WorkshopService struct {
-	client *SteamClient
-	mu     sync.Mutex
-	cache  map[string]cachedWorkshopSearch
+	client         *SteamClient
+	requestTimeout time.Duration
+	mu             sync.Mutex
+	cache          map[string]cachedWorkshopSearch
 }
 
 type cachedWorkshopSearch struct {
@@ -247,9 +247,19 @@ type cachedWorkshopSearch struct {
 }
 
 func NewWorkshopService(cfg appconfig.Config) *WorkshopService {
+	timeout := time.Duration(cfg.SteamAPITimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = workshopRequestTimeout
+	}
+	client := NewSteamClient(cfg.EffectiveSteamWebAPIKey(), cfg.WorkshopAppID)
+	if baseURL := strings.TrimRight(strings.TrimSpace(cfg.SteamAPIBaseURL), "/"); baseURL != "" {
+		client.baseURL = baseURL
+	}
+	client.httpClient.Timeout = timeout
 	return &WorkshopService{
-		client: NewSteamClient(cfg.EffectiveSteamWebAPIKey(), cfg.WorkshopAppID),
-		cache:  map[string]cachedWorkshopSearch{},
+		client:         client,
+		requestTimeout: timeout,
+		cache:          map[string]cachedWorkshopSearch{},
 	}
 }
 
@@ -264,7 +274,7 @@ func (s *WorkshopService) Search(ctx context.Context, params WorkshopSearchParam
 	}
 	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(ctx, workshopRequestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.requestTimeout)
 	defer cancel()
 	result, err := s.client.QueryFiles(ctx, params)
 	if err != nil {
@@ -277,7 +287,7 @@ func (s *WorkshopService) Search(ctx context.Context, params WorkshopSearchParam
 }
 
 func (s *WorkshopService) Detail(ctx context.Context, itemID string) (WorkshopItem, error) {
-	ctx, cancel := context.WithTimeout(ctx, workshopRequestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.requestTimeout)
 	defer cancel()
 	items, err := s.client.GetDetails(ctx, []string{itemID})
 	if err != nil {

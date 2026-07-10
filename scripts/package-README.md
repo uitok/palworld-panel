@@ -1,42 +1,62 @@
-# PalPanel Offline Package
+# PalPanel v1.0.0 Linux Package
 
-This package contains a self-contained PalPanel backend binary, built frontend assets, the `sav-cli` sidecar binary, and the Wine runner Dockerfile used by the backend.
+This package contains the PalPanel backend and frontend, the native cgo
+`sav-cli` sidecar, the Wine runner resources, systemd units, and
+`palpanelctl`.
 
-## Start
-
-Linux:
+## Portable mode
 
 ```bash
-./scripts/start.sh
+./palpanelctl init
+./palpanelctl start
+./palpanelctl status
+./palpanelctl logs -f
+./palpanelctl stop
 ```
 
-Windows PowerShell:
+The first `init` creates `config/palpanel.env` with a cryptographically random
+admin token and mode `0600`. The token is printed only when the file is first
+created; `./palpanelctl token` reads it again. Portable data, PID files, and
+bounded logs remain inside the extracted package directory.
 
-```powershell
-.\scripts\start.ps1
+## systemd installation
+
+```bash
+sudo ./palpanelctl install
 ```
 
-On first run the start script copies `config/palpanel.env.example` to `config/palpanel.env`, generates a random `PANEL_TOKEN`, and prints the local dashboard URL and token. Runtime data is stored in the package-local `data/` directory unless you override `PALPANEL_DATA_DIR`.
+Programs are installed under `/opt/palpanel/<version>`, with
+`/opt/palpanel/current` selecting the active version. Configuration is stored
+in `/etc/palpanel`, and state is stored in `/var/lib/palpanel`. Reinstalling a
+new version preserves both locations.
 
-## Layout
+Default uninstall preserves configuration and data:
 
-- `bin/palpanel[.exe]`: backend API and frontend static file server.
-- `bin/sav-cli[.exe]`: read-only save indexer sidecar.
-- `frontend/dist/`: built React frontend served by the backend.
-- `backend/deployments/wine-runner/`: Docker + Wine runner resources.
-- `config/palpanel.env.example`: editable environment template.
-- `scripts/start.*`: package start entrypoints.
-- `checksums.txt`: SHA-256 checksums for package files.
+```bash
+sudo /opt/palpanel/current/palpanelctl uninstall
+```
 
-`sav-cli` in the default offline packages is built with `CGO_ENABLED=0`. It handles zlib-based save containers and reports `parser_incompatible` for `PlM1` Oodle containers that require a cgo-enabled `gooz` build.
+Use `uninstall --purge` only when configuration and all PalPanel-managed data
+should also be removed.
 
-## Configuration
+Wine Docker mode requires explicit Docker socket access:
 
-Edit `config/palpanel.env` after the first run. The start scripts set these package-local defaults when they are not present in the env file:
+```bash
+sudo ./palpanelctl install --docker
+```
 
-- `PALPANEL_FRONTEND_DIST=<package>/frontend/dist`
-- `PALPANEL_BACKEND_DIR=<package>/backend`
-- `PALPANEL_DATA_DIR=<package>/data`
-- `PALPANEL_RUNNER_DIR=<package>/backend/deployments/wine-runner`
+Membership in the Docker group is effectively root-equivalent. Do not enable
+it when using the Windows SteamCMD runtime without Docker.
 
-Official Palworld ports remain at their upstream defaults unless changed: game `8211`, query `27015`, and REST `8212`.
+## Security defaults
+
+- Authentication is enabled.
+- The web server binds to `127.0.0.1:8080`.
+- Frontend API traffic uses same-origin `/api`.
+- Steam Workshop search remains disabled until `STEAM_WEB_API_KEY` is added to
+  `palpanel.env`.
+- The env file is parsed as data and is never executed by a shell.
+
+The native `sav-cli` includes the GPL-licensed vendored `gooz` decompressor and
+supports PlM1/Oodle save containers. Its corresponding source is distributed
+as a separate release asset.

@@ -2,12 +2,16 @@
 
 Read-only Palworld `.sav` indexer sidecar written in Go.
 
+This component is licensed under GPL-3.0-or-later. Release source archives
+include the corresponding sav-cli source and vendored gooz source/license.
+
 ```bash
 cd sav-cli
 go test ./...
 go run ./cmd/sav_cli inspect --file ../data/server/Pal/Saved/SaveGames/0/<world>/Level.sav
 go run ./cmd/sav_cli index --save-dir ../data/server/Pal/Saved/SaveGames
 go run ./cmd/sav_cli serve --host 127.0.0.1 --port 8090
+go run ./cmd/sav_cli --version
 ```
 
 The sidecar exposes the same HTTP contract used by PalPanel:

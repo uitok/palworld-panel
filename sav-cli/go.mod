@@ -1,5 +1,5 @@
 module palpanel/sav-cli
 
-go 1.25.4
+go 1.25.12
 
-require github.com/oriath-net/gooz v1.0.1 // indirect
+require github.com/oriath-net/gooz v1.0.1

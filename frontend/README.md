@@ -19,12 +19,11 @@ VITE_DEFAULT_BACKEND_URL=
 VITE_DEFAULT_BACKEND_PORT=64217
 VITE_DEV_API_PROXY_TARGET=http://127.0.0.1:64217
 VITE_DEV_PORT=63107
-VITE_PANEL_TOKEN=
 ```
 
 前端开发端口来自 `VITE_DEV_PORT`，默认 `63107`。开发模式默认后端地址由 `VITE_DEFAULT_BACKEND_URL` 或 `VITE_DEFAULT_BACKEND_PORT` 生成；生产构建默认使用同源 `/api`，适合由后端直接托管 `frontend/dist`。
 
-品牌名来自 `VITE_APP_BRAND`，默认 `PalPanel`。本地存储 key 使用 `VITE_STORAGE_PREFIX` 生成，例如默认 token key 是 `localStorage.palpanel_token`；旧版 key 会在读取时迁移一次。`VITE_PANEL_TOKEN` 只适合本地开发预填 token。
+品牌名来自 `VITE_APP_BRAND`，默认 `PalPanel`。本地存储 key 使用 `VITE_STORAGE_PREFIX` 生成，例如默认 token key 是 `localStorage.palpanel_token`；旧版 key 会在读取时迁移一次。生产和开发构建均不接受构建期面板 Token，Token 只能由用户在运行时输入并保存在浏览器本地存储中。
 
 ## 常用命令
 

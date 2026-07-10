@@ -1,160 +1,145 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-root_dir="$(cd -- "$script_dir/.." && pwd)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+root_dir="$(cd -- "$script_dir/.." && pwd -P)"
 packages_dir="$root_dir/dist/packages"
 staging_dir="$packages_dir/staging"
 
 version=""
-targets="linux-amd64,windows-amd64"
+targets="linux-amd64"
 skip_tests=0
 clean=0
 
 usage() {
-  printf 'Usage: scripts/package.sh [--version VERSION] [--targets linux-amd64,windows-amd64] [--skip-tests] [--clean]\n'
+  printf 'Usage: scripts/package.sh [--version VERSION] [--targets linux-amd64] [--skip-tests] [--clean]\n'
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version|-Version)
+    --version)
       version="${2:?--version requires a value}"
       shift 2
       ;;
-    --version=*)
-      version="${1#*=}"
-      shift
-      ;;
-    --targets|-Targets)
+    --version=*) version="${1#*=}"; shift ;;
+    --targets)
       targets="${2:?--targets requires a value}"
       shift 2
       ;;
-    --targets=*)
-      targets="${1#*=}"
-      shift
-      ;;
-    --skip-tests|-SkipTests)
-      skip_tests=1
-      shift
-      ;;
-    --clean|-Clean)
-      clean=1
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      printf 'Unknown argument: %s\n' "$1" >&2
-      usage >&2
-      exit 64
-      ;;
+    --targets=*) targets="${1#*=}"; shift ;;
+    --skip-tests) skip_tests=1; shift ;;
+    --clean) clean=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 64 ;;
   esac
 done
 
-if [[ "$clean" -eq 1 ]]; then
+if [[ -z "$version" ]]; then
+  version="$(git -C "$root_dir" describe --tags --always --dirty 2>/dev/null || date -u +%Y%m%d%H%M%S)"
+fi
+version="${version//\//-}"
+version="${version// /-}"
+commit="$(git -C "$root_dir" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+if (( clean )); then
   rm -rf "$packages_dir"
 fi
 mkdir -p "$packages_dir" "$staging_dir"
 
-if [[ -z "$version" ]]; then
-  if version="$(git -C "$root_dir" describe --tags --always --dirty 2>/dev/null)"; then
-    :
-  else
-    version="$(date -u +%Y%m%d%H%M%S)"
-  fi
+if (( ! skip_tests )); then
+  printf '[palpanel] Running backend tests\n'
+  (cd "$root_dir/backend" && go test ./...)
+  printf '[palpanel] Running sav-cli tests with cgo\n'
+  (cd "$root_dir/sav-cli" && CGO_ENABLED=1 go test ./...)
+  printf '[palpanel] Installing frontend dependencies\n'
+  (cd "$root_dir/frontend" && npm ci)
+  printf '[palpanel] Running frontend checks\n'
+  (cd "$root_dir/frontend" && npm run check)
+else
+  printf '[palpanel] Skipping tests\n'
+  (cd "$root_dir/frontend" && npm ci && npm run build)
 fi
-version="${version//\//-}"
-version="${version// /-}"
-
-run_checks_and_frontend_build() {
-  if [[ "$skip_tests" -eq 0 ]]; then
-    printf '[palpanel] Running backend tests\n'
-    (cd "$root_dir/backend" && go test ./...)
-    printf '[palpanel] Running sav-cli tests\n'
-    (cd "$root_dir/sav-cli" && go test ./...)
-    printf '[palpanel] Installing frontend dependencies\n'
-    (cd "$root_dir/frontend" && npm ci)
-    printf '[palpanel] Running frontend check\n'
-    (cd "$root_dir/frontend" && npm run check)
-  else
-    printf '[palpanel] Skipping tests and checks\n'
-    printf '[palpanel] Installing frontend dependencies\n'
-    (cd "$root_dir/frontend" && npm ci)
-    printf '[palpanel] Building frontend\n'
-    (cd "$root_dir/frontend" && npm run build)
-  fi
-}
 
 copy_common_files() {
-  local pkg_dir="$1"
-
-  mkdir -p "$pkg_dir/bin" "$pkg_dir/config" "$pkg_dir/scripts" "$pkg_dir/frontend" "$pkg_dir/backend/deployments"
-  cp -R "$root_dir/frontend/dist" "$pkg_dir/frontend/dist"
-  cp -R "$root_dir/backend/deployments/wine-runner" "$pkg_dir/backend/deployments/wine-runner"
-  cp "$root_dir/scripts/palpanel.env.example" "$pkg_dir/config/palpanel.env.example"
-  cp "$root_dir/scripts/package-README.md" "$pkg_dir/README.md"
-  cp "$root_dir/scripts/start.sh" "$pkg_dir/scripts/start.sh"
-  cp "$root_dir/scripts/start.ps1" "$pkg_dir/scripts/start.ps1"
-  chmod +x "$pkg_dir/scripts/start.sh"
+  local package_dir="$1"
+  local gooz_dir
+  gooz_dir="$(cd "$root_dir/sav-cli" && go list -m -f '{{.Dir}}' github.com/oriath-net/gooz)"
+  mkdir -p "$package_dir/bin" "$package_dir/config" "$package_dir/frontend" "$package_dir/backend/deployments" "$package_dir/systemd" "$package_dir/licenses"
+  cp -R "$root_dir/frontend/dist" "$package_dir/frontend/dist"
+  cp -R "$root_dir/backend/deployments/wine-runner" "$package_dir/backend/deployments/wine-runner"
+  cp "$root_dir/scripts/palpanel.env.example" "$package_dir/config/palpanel.env.example"
+  cp "$root_dir/scripts/package-README.md" "$package_dir/README.md"
+  cp "$root_dir/scripts/palpanelctl" "$package_dir/palpanelctl"
+  cp "$root_dir/scripts/systemd/palpanel.service" "$package_dir/systemd/palpanel.service"
+  cp "$root_dir/scripts/systemd/palpanel-sav-cli.service" "$package_dir/systemd/palpanel-sav-cli.service"
+  cp "$root_dir/THIRD_PARTY_LICENSES.txt" "$package_dir/THIRD_PARTY_LICENSES.txt"
+  cp "$root_dir/sav-cli/LICENSE" "$package_dir/licenses/sav-cli-LICENSE.txt"
+  cp "$gooz_dir/COPYING" "$package_dir/licenses/GPL-3.0.txt"
+  cp "$root_dir/backend/internal/pallocalize/LICENSE.apache-2.0" "$package_dir/licenses/pallocalize-Apache-2.0.txt"
+  chmod 755 "$package_dir/palpanelctl"
 }
 
-build_target() {
-  local target="$1"
-  local goos="${target%-*}"
-  local goarch="${target#*-}"
-  local exe_ext=""
-  local archive=""
+build_linux() {
+  local arch="$1"
+  [[ "$arch" == "amd64" ]] || { printf 'Only linux-amd64 is supported for v1.0.0\n' >&2; exit 64; }
+  [[ "$(go env GOOS)" == "linux" && "$(go env GOARCH)" == "$arch" ]] || {
+    printf 'The cgo sav-cli release must be built natively on linux-%s\n' "$arch" >&2
+    exit 69
+  }
+  local package_name="palpanel_${version}_linux_${arch}"
+  local package_dir="$staging_dir/$package_name"
+  local archive="$packages_dir/$package_name.tar.gz"
+  local checksum_tmp="$staging_dir/.${package_name}.checksums"
+  rm -rf "$package_dir" "$archive"
+  copy_common_files "$package_dir"
 
-  if [[ "$target" != "$goos-$goarch" || -z "$goos" || -z "$goarch" ]]; then
-    printf 'Invalid target: %s\n' "$target" >&2
-    exit 64
-  fi
-  if [[ "$goos" == "windows" ]]; then
-    exe_ext=".exe"
-  fi
+  local backend_ldflags="-s -w -X palpanel/internal/buildinfo.Version=$version -X palpanel/internal/buildinfo.Commit=$commit -X palpanel/internal/buildinfo.BuildTime=$build_time"
+  local sav_ldflags="-s -w -X palpanel/sav-cli/internal/buildinfo.Version=$version -X palpanel/sav-cli/internal/buildinfo.Commit=$commit -X palpanel/sav-cli/internal/buildinfo.BuildTime=$build_time"
+  printf '[palpanel] Building backend linux-%s\n' "$arch"
+  (cd "$root_dir/backend" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$backend_ldflags" -o "$package_dir/bin/palpanel" ./cmd/palpanel)
+  printf '[palpanel] Building cgo sav-cli linux-%s\n' "$arch"
+  (cd "$root_dir/sav-cli" && CGO_ENABLED=1 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$sav_ldflags" -o "$package_dir/bin/sav-cli" ./cmd/sav_cli)
+  chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli"
 
-  local pkg_name="palpanel_${version}_${goos}_${goarch}"
-  local pkg_dir="$staging_dir/$pkg_name"
-  rm -rf "$pkg_dir"
-  copy_common_files "$pkg_dir"
-
-  printf '[palpanel] Building backend for %s\n' "$target"
-  (cd "$root_dir/backend" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -o "$pkg_dir/bin/palpanel$exe_ext" ./cmd/palpanel)
-  printf '[palpanel] Building sav-cli for %s\n' "$target"
-  (cd "$root_dir/sav-cli" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -o "$pkg_dir/bin/sav-cli$exe_ext" ./cmd/sav_cli)
-
-  (cd "$pkg_dir" && find . -type f ! -name checksums.txt -print0 | sort -z | xargs -0 sha256sum >checksums.txt)
-
-  if [[ "$goos" == "windows" ]]; then
-    archive="$packages_dir/$pkg_name.zip"
-    rm -f "$archive"
-    if command -v zip >/dev/null 2>&1; then
-      (cd "$staging_dir" && zip -qr "$archive" "$pkg_name")
-    elif command -v python3 >/dev/null 2>&1; then
-      (cd "$staging_dir" && python3 -m zipfile -c "$archive" "$pkg_name")
-    else
-      printf 'zip or python3 is required to create %s\n' "$archive" >&2
-      exit 69
-    fi
-  else
-    archive="$packages_dir/$pkg_name.tar.gz"
-    rm -f "$archive"
-    tar -czf "$archive" -C "$staging_dir" "$pkg_name"
-  fi
-
+  (cd "$package_dir" && find . -type f ! -name checksums.txt -print0 | sort -z | xargs -0 sha256sum) >"$checksum_tmp"
+  mv "$checksum_tmp" "$package_dir/checksums.txt"
+  tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive" -C "$staging_dir" "$package_name"
   printf '[palpanel] Wrote %s\n' "$archive"
 }
 
-run_checks_and_frontend_build
+build_source_archive() {
+  local source_name="palpanel-sav-cli_${version}_source"
+  local source_root="$staging_dir/$source_name"
+  local archive="$packages_dir/$source_name.tar.gz"
+  rm -rf "$source_root" "$archive"
+  mkdir -p "$source_root"
+  (
+    cd "$root_dir"
+    while IFS= read -r -d '' path; do
+      cp -a --parents "$path" "$source_root/"
+    done < <(git ls-files --cached --others --exclude-standard -z -- sav-cli)
+  )
+  (cd "$source_root/sav-cli" && go mod vendor)
+  tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive" -C "$staging_dir" "$source_name"
+  printf '[palpanel] Wrote %s\n' "$archive"
+}
 
 IFS=',' read -r -a target_list <<<"$targets"
 for target in "${target_list[@]}"; do
   target="${target//[[:space:]]/}"
-  if [[ -n "$target" ]]; then
-    build_target "$target"
-  fi
+  case "$target" in
+    linux-amd64) build_linux amd64 ;;
+    "") ;;
+    *) printf 'Unsupported release target: %s\n' "$target" >&2; exit 64 ;;
+  esac
 done
-
+build_source_archive
 rm -rf "$staging_dir"
+
+cp "$root_dir/THIRD_PARTY_LICENSES.txt" "$packages_dir/THIRD_PARTY_LICENSES.txt"
+(
+  cd "$packages_dir"
+  find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.spdx.json' -o -name 'THIRD_PARTY_LICENSES.txt' \) -printf '%f\0' |
+    sort -z | xargs -0 sha256sum >SHA256SUMS
+)

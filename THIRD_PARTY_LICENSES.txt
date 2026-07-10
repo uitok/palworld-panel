@@ -1,0 +1,40 @@
+PalPanel v1.0.0 third-party license inventory
+================================================
+
+This inventory applies to the distributed Linux package. PalPanel's backend
+and frontend retain their existing repository license status. The sav-cli
+component is distributed under GPL-3.0-or-later; see sav-cli/LICENSE.
+
+sav-cli native parser
+---------------------
+- github.com/oriath-net/gooz v1.0.1: GPL-3.0-or-later. The vendored source and
+  complete license text are included in the sav-cli release source archive.
+- ooz code incorporated by gooz, copyright Powzix: GPL-3.0-or-later.
+
+Backend Go dependencies
+-----------------------
+- github.com/gin-gonic/gin and gin-contrib/sse: MIT.
+- modernc.org/sqlite and related modernc.org modules: BSD-3-Clause and other
+  permissive notices shipped by the upstream modules.
+- github.com/bytedance/sonic, cloudwego/base64x, klauspost/cpuid,
+  twitchyliquid64/golang-asm: Apache-2.0, BSD, or MIT upstream licenses.
+- github.com/go-playground/*, google/uuid, json-iterator/go, pelletier/go-toml,
+  quic-go/*, ugorji/go/codec, and golang.org/x/*: permissive MIT, BSD, or
+  Apache-2.0 upstream licenses.
+- google.golang.org/protobuf: BSD-3-Clause.
+
+Frontend dependencies
+---------------------
+- React, React DOM, React Router, Axios, TanStack Query, TanStack Virtual,
+  Recharts, Lucide React, Vite, Vitest, TypeScript, Tailwind CSS, PostCSS,
+  Autoprefixer, oxlint, jsdom, and Testing Library packages: permissive MIT,
+  Apache-2.0, BSD, or ISC upstream licenses as declared by each package.
+
+Localization data
+-----------------
+- Palworld localization-derived catalog under backend/internal/pallocalize:
+  Apache-2.0; see the included NOTICE.md and LICENSE.apache-2.0.
+
+The release SBOM provides the exact package/version inventory. Corresponding
+license texts remain available from each dependency's source distribution and
+are preserved in the sav-cli vendored source archive where required by GPL.

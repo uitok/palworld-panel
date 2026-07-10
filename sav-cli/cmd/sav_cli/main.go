@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
+	"palpanel/sav-cli/internal/buildinfo"
 	"palpanel/sav-cli/internal/indexer"
 	"palpanel/sav-cli/internal/sav"
 	"palpanel/sav-cli/internal/sidecar"
@@ -26,6 +32,10 @@ func run(args []string) error {
 		return usage()
 	}
 	switch args[0] {
+	case "-version", "--version", "version":
+		info := buildinfo.Current()
+		fmt.Printf("sav-cli %s (commit %s, built %s)\n", info.Version, info.Commit, info.BuildTime)
+		return nil
 	case "index":
 		return runIndex(args[1:])
 	case "inspect":
@@ -91,8 +101,32 @@ func runServe(args []string) error {
 		return err
 	}
 	addr := net.JoinHostPort(*host, *port)
-	fmt.Fprintf(os.Stderr, "sav_cli sidecar listening on http://%s\n", addr)
-	return sidecar.ListenAndServe(addr)
+	httpServer := sidecar.NewHTTPServer(addr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fmt.Fprintf(os.Stderr, "sav-cli %s listening on http://%s\n", buildinfo.Version, addr)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- httpServer.ListenAndServe()
+	}()
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	err := <-errCh
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 func writeJSON(path string, value any) error {
@@ -122,5 +156,6 @@ func usage() error {
 	return errors.New(`usage:
   sav_cli index --save-dir <world-dir|save-root|Level.sav> [--output <path|-]
   sav_cli inspect --file <Level.sav|LevelMeta.sav> [--output <path|-]
-  sav_cli serve [--host 127.0.0.1] [--port 8090]`)
+  sav_cli serve [--host 127.0.0.1] [--port 8090]
+  sav_cli --version`)
 }

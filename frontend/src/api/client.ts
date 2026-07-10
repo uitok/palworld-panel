@@ -30,9 +30,9 @@ const loopbackHosts = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 
 const readToken = () => {
   if (typeof localStorage === 'undefined') {
-    return import.meta.env.VITE_PANEL_TOKEN || '';
+    return '';
   }
-  return readAppStorage('token') || import.meta.env.VITE_PANEL_TOKEN || '';
+  return readAppStorage('token') || '';
 };
 
 const currentPageHostname = () => {
@@ -244,11 +244,10 @@ const shouldSuppressLog = (error: unknown, quiet?: boolean) => {
 };
 
 const logFallback = (error: unknown, quiet?: boolean) => {
+  if (!import.meta.env.DEV) return;
   if (shouldSuppressLog(error, quiet)) {
-    if (import.meta.env.DEV) {
-      const statusCode = getStatusCode(error);
-      console.debug('API request used fallback', statusCode ? `HTTP ${statusCode}` : error);
-    }
+    const statusCode = getStatusCode(error);
+    console.debug('API request used fallback', statusCode ? `HTTP ${statusCode}` : error);
     return;
   }
 

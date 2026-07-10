@@ -1,0 +1,32 @@
+[Unit]
+Description=PalPanel save indexer sidecar
+After=local-fs.target
+PartOf=palpanel.service
+
+[Service]
+Type=simple
+User=palpanel
+Group=palpanel
+UMask=0077
+ExecStart=/opt/palpanel/current/bin/sav-cli serve --host 127.0.0.1 --port 8090
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/var/lib/palpanel
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=palpanel-sav-cli
+
+[Install]
+WantedBy=multi-user.target

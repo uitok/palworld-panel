@@ -35,9 +35,11 @@ func New(cfg appconfig.Config, store *db.Store, serverManager server.Manager, re
 	return Manager{cfg: cfg, store: store, server: serverManager, palrest: restClient}
 }
 
-func (m Manager) Start(ctx context.Context) {
+func (m Manager) Start(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
-		_, _ = m.Sample(context.Background())
+		defer close(done)
+		_, _ = m.Sample(ctx)
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -45,10 +47,11 @@ func (m Manager) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, _ = m.Sample(context.Background())
+				_, _ = m.Sample(ctx)
 			}
 		}
 	}()
+	return done
 }
 
 func (m Manager) Snapshot(ctx context.Context) (Snapshot, error) {

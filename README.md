@@ -2,41 +2,42 @@
 
 这是一个面向 Palworld Windows Dedicated Server 的本地/私有化运维面板，包含 Go 后端和 React 前端。
 
-## 推荐运行方式：离线包
+## v1.0.0 推荐运行方式：Linux 正式包
 
-生成 Linux amd64 与 Windows amd64 离线包：
+生成 Linux amd64 正式包与 sav-cli 对应源码包：
 
 ```bash
-scripts/package.sh --targets linux-amd64,windows-amd64
+scripts/package.sh --version v1.0.0 --targets linux-amd64
 ```
 
 产物位于 `dist/packages/`：
 
 - `palpanel_<version>_linux_amd64.tar.gz`
-- `palpanel_<version>_windows_amd64.zip`
+- `palpanel-sav-cli_<version>_source.tar.gz`
+- `SHA256SUMS`
 
-解压后运行包内脚本：
+解压后的便携模式：
 
 ```bash
-./scripts/start.sh
+./palpanelctl init
+./palpanelctl start
+./palpanelctl status
+./palpanelctl logs -f
 ```
 
-```powershell
-.\scripts\start.ps1
+systemd 安装模式：
+
+```bash
+sudo ./palpanelctl install
 ```
 
-首次启动会从 `config/palpanel.env.example` 生成 `config/palpanel.env`，创建随机 `PANEL_TOKEN`，并打印访问地址。默认访问 `http://127.0.0.1:8080/dashboard`。
+首次初始化会生成权限为 `0600` 的 `config/palpanel.env` 和强随机 `PANEL_TOKEN`。Token 仅在创建时显示，之后可用 `./palpanelctl token` 读取。生产默认启用鉴权并监听 `127.0.0.1:8080`。
 
-离线包内包含：
+systemd 模式将版本化程序安装到 `/opt/palpanel/<version>`，配置放在 `/etc/palpanel`，数据放在 `/var/lib/palpanel`，通过 `/opt/palpanel/current` 切换版本。普通卸载保留配置和数据，`uninstall --purge` 才会删除。
 
-- `bin/palpanel[.exe]`
-- `bin/sav-cli[.exe]`
-- `frontend/dist/`
-- `backend/deployments/wine-runner/`
-- `config/palpanel.env.example`
-- `scripts/start.*`
-- `README.md`
-- `checksums.txt`
+正式包包含 `bin/palpanel`、`bin/sav-cli`、`palpanelctl`、前端静态资源、Wine runner、systemd 单元、第三方许可清单和内部校验和。
+
+仓库包含 Windows `PalPanel.exe` Launcher 和原生 MinGW CGO CI 验证，但 v1.0.0 不发布未签名 Windows 资产。取得 Authenticode 证书后再补充 Windows Release。
 
 ## 本地开发
 
@@ -66,10 +67,17 @@ go run ./cmd/palpanel
 - `PALPANEL_PALDEFENDER_REST_PORT`: 写入 PalDefender RESTConfig 的端口，默认 `17993`。
 - `PALPANEL_GAME_DATA_TIMEOUT_MS`: 官方 `/game-data` 代理超时，默认 `3000` 毫秒。
 - `PALPANEL_GAME_DATA_MAX_MB`: 官方 `/game-data` 响应上限，默认 `16` MiB。
+- `PALPANEL_STEAM_API_BASE_URL`: Steam Web API 地址，默认官方 HTTPS 地址。
+- `PALPANEL_STEAM_API_TIMEOUT_SECONDS`: Steam 请求超时，默认 `15` 秒。
+- `PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS`: AI Provider 请求超时，默认 `90` 秒。
+- `PALPANEL_LOG_LEVEL`: `debug`、`info`、`warn` 或 `error`，默认 `info`。
+- `STEAM_WEB_API_KEY`: 可选的 Workshop 搜索 Key；源码和二进制不包含默认 Key。
 
 ## 配置优先级
 
-后端只读取进程环境变量。离线包的 `scripts/start.*` 会先加载 `config/palpanel.env`，再为未设置的运行路径补齐包内默认值：
+后端支持 `--config <path>`，使用严格的 `KEY=VALUE` 解析器读取配置文件，不执行 shell、变量替换或命令替换。进程环境变量始终高于文件值。`--init-config` 安全生成首次配置，`--version` 输出版本、Git commit 与构建时间。
+
+离线包的 `palpanelctl` 为运行路径补齐包内默认值：
 
 - `PALPANEL_FRONTEND_DIST=<package>/frontend/dist`
 - `PALPANEL_BACKEND_DIR=<package>/backend`

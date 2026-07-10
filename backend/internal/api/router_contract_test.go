@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"palpanel/internal/appconfig"
@@ -60,6 +61,15 @@ func TestNewContractRoutes(t *testing.T) {
 		monitor.New(cfg, store, serverManager, restClient),
 		scheduler.New(store, serverManager, restClient),
 	)
+	healthRequest := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	healthRecorder := httptest.NewRecorder()
+	router.ServeHTTP(healthRecorder, healthRequest)
+	if healthRecorder.Code != http.StatusOK || !strings.Contains(healthRecorder.Body.String(), `"status":"ok"`) ||
+		!strings.Contains(healthRecorder.Body.String(), `"version":"dev"`) ||
+		!strings.Contains(healthRecorder.Body.String(), `"commit":"unknown"`) ||
+		!strings.Contains(healthRecorder.Body.String(), `"build_time":"unknown"`) {
+		t.Fatalf("unexpected health response: %d %s", healthRecorder.Code, healthRecorder.Body.String())
+	}
 
 	for _, path := range []string{
 		"/api/config/palworld/schema",

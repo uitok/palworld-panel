@@ -18,7 +18,7 @@ import (
 	"palpanel/internal/server"
 )
 
-func TestWorkshopStatusUsesEmbeddedSteamAPIKeyWhenEnvUnset(t *testing.T) {
+func TestWorkshopStatusReportsUnconfiguredWhenEnvUnset(t *testing.T) {
 	root := t.TempDir()
 	cfg := appconfig.Config{
 		DataDir:         root,
@@ -69,7 +69,7 @@ func TestWorkshopStatusUsesEmbeddedSteamAPIKeyWhenEnvUnset(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `"configured":true`) || !strings.Contains(body, `"key_source":"embedded"`) {
+	if !strings.Contains(body, `"configured":false`) || !strings.Contains(body, `"key_source":""`) {
 		t.Fatalf("unexpected status response: %s", body)
 	}
 }
@@ -126,7 +126,7 @@ func TestWorkshopStatusDoesNotExposeSteamAPIKey(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"configured":true`) ||
-		!strings.Contains(rec.Body.String(), `"key_source":"env"`) ||
+		!strings.Contains(rec.Body.String(), `"key_source":"environment"`) ||
 		strings.Contains(rec.Body.String(), "secret-steam-key") {
 		t.Fatalf("unexpected status response: %s", rec.Body.String())
 	}

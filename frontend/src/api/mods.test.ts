@@ -46,13 +46,21 @@ describe('mods api mapping', () => {
     expect(
       mapWorkshopStatus({
         configured: true,
-        key_source: 'embedded',
+        key_source: 'environment',
         app_id: 1623730,
         key: 'should-not-be-read',
       }),
     ).toEqual({
       configured: true,
-      key_source: 'embedded',
+      key_source: 'environment',
+      app_id: '1623730',
+    });
+  });
+
+  it('does not preserve obsolete or unknown Workshop key sources', () => {
+    expect(mapWorkshopStatus({ configured: true, key_source: 'embedded', app_id: '1623730' })).toEqual({
+      configured: false,
+      key_source: '',
       app_id: '1623730',
     });
   });

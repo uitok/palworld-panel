@@ -1,0 +1,20 @@
+title = "PalPanel current-tree secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated dependency locks and explicit test fixtures"
+paths = [
+  '''(^|/)frontend/package-lock\.json$''',
+  '''(^|/)(backend|sav-cli)/go\.sum$''',
+  '''(^|/).*_test\.go$''',
+  '''(^|/).*\.test\.(ts|tsx)$''',
+  '''(^|/)data/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+]
+regexes = [
+  '''replace-with-a-random-32-byte-token''',
+  '''process-environment-token-value''',
+]

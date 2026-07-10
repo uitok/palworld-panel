@@ -1,8 +1,9 @@
 package appconfig
 
 import (
-	"encoding/hex"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,9 @@ import (
 
 const DefaultDockerRunnerBaseImage = "scottyhardy/docker-wine:latest@sha256:477aae36af41923cfb5eefb23923b035f8010caa49eaded952316f937dd8a49b"
 const DefaultPalDefenderRESTPort = 17993
+const DefaultSteamAPIBaseURL = "https://api.steampowered.com"
+const DefaultSteamAPITimeoutSeconds = 15
+const DefaultAITranslationTimeoutSeconds = 90
 
 var DefaultDockerRunnerBaseImageMirrorPrefixes = []string{
 	"docker.m.daocloud.io",
@@ -48,6 +52,8 @@ type Config struct {
 	DockerRunnerBaseImageMirrors []string
 	SteamWebAPIKey               string
 	SteamWebAPIKeySource         string
+	SteamAPIBaseURL              string
+	SteamAPITimeoutSeconds       int
 	WorkshopAppID                string
 	GamePort                     int
 	QueryPort                    int
@@ -65,10 +71,15 @@ type Config struct {
 	SaveIndexCacheDir            string
 	SaveIndexTimeoutSeconds      int
 	PerfSlowRequestMS            int
+	AITranslationTimeoutSeconds  int
+	LogLevel                     string
 	RunnerDir                    string
 }
 
 func Load() (Config, error) {
+	if err := validateScalarEnvironment(); err != nil {
+		return Config{}, err
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return Config{}, err
@@ -94,7 +105,7 @@ func Load() (Config, error) {
 	steamWebAPIKey, steamWebAPIKeySource := resolveSteamWebAPIKey()
 	palDefenderRESTPort := envInt("PALPANEL_PALDEFENDER_REST_PORT", DefaultPalDefenderRESTPort)
 	cfg := Config{
-		ListenAddr:                   env("PALPANEL_LISTEN_ADDR", ":8080"),
+		ListenAddr:                   env("PALPANEL_LISTEN_ADDR", "127.0.0.1:8080"),
 		DataDir:                      dataDir,
 		ServerDir:                    env("PALPANEL_SERVER_DIR", filepath.Join(dataDir, "server")),
 		WinePrefixDir:                env("PALPANEL_WINE_PREFIX_DIR", filepath.Join(dataDir, "wineprefix")),
@@ -118,6 +129,8 @@ func Load() (Config, error) {
 		DockerRunnerBaseImageMirrors: envList("PALPANEL_DOCKER_RUNNER_BASE_IMAGE_MIRRORS", DefaultDockerRunnerBaseImageMirrorPrefixes),
 		SteamWebAPIKey:               steamWebAPIKey,
 		SteamWebAPIKeySource:         steamWebAPIKeySource,
+		SteamAPIBaseURL:              strings.TrimRight(env("PALPANEL_STEAM_API_BASE_URL", DefaultSteamAPIBaseURL), "/"),
+		SteamAPITimeoutSeconds:       envInt("PALPANEL_STEAM_API_TIMEOUT_SECONDS", DefaultSteamAPITimeoutSeconds),
 		WorkshopAppID:                env("PALPANEL_WORKSHOP_APP_ID", "1623730"),
 		GamePort:                     envInt("PALPANEL_GAME_PORT", 8211),
 		QueryPort:                    envInt("PALPANEL_QUERY_PORT", 27015),
@@ -135,6 +148,8 @@ func Load() (Config, error) {
 		SaveIndexCacheDir:            env("PALPANEL_SAVE_INDEX_CACHE_DIR", filepath.Join(dataDir, "save-index")),
 		SaveIndexTimeoutSeconds:      envInt("PALPANEL_SAVE_INDEX_TIMEOUT_SECONDS", 120),
 		PerfSlowRequestMS:            envInt("PALPANEL_PERF_SLOW_REQUEST_MS", 500),
+		AITranslationTimeoutSeconds:  envInt("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS", DefaultAITranslationTimeoutSeconds),
+		LogLevel:                     strings.ToLower(env("PALPANEL_LOG_LEVEL", "info")),
 		RunnerDir:                    env("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner")),
 	}
 	if cfg.RequireAuth && isWeakToken(cfg.PanelToken) {
@@ -145,6 +160,23 @@ func Load() (Config, error) {
 	}
 	if cfg.RequireAuth && cfg.ViewerToken != "" && isWeakToken(cfg.ViewerToken) {
 		return Config{}, fmt.Errorf("PANEL_VIEWER_TOKEN must be strong when configured")
+	}
+	if err := validateListenAddress(cfg.ListenAddr); err != nil {
+		return Config{}, err
+	}
+	if err := validateHTTPBaseURL("PALPANEL_STEAM_API_BASE_URL", cfg.SteamAPIBaseURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.SteamAPITimeoutSeconds < 1 || cfg.SteamAPITimeoutSeconds > 300 {
+		return Config{}, fmt.Errorf("PALPANEL_STEAM_API_TIMEOUT_SECONDS must be between 1 and 300")
+	}
+	if cfg.AITranslationTimeoutSeconds < 1 || cfg.AITranslationTimeoutSeconds > 600 {
+		return Config{}, fmt.Errorf("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS must be between 1 and 600")
+	}
+	switch cfg.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return Config{}, fmt.Errorf("PALPANEL_LOG_LEVEL must be one of debug, info, warn, or error")
 	}
 
 	return cfg, nil
@@ -226,10 +258,7 @@ func (c Config) AITranslationKeyPath() string {
 }
 
 func (c Config) EffectiveSteamWebAPIKey() string {
-	if key := strings.TrimSpace(c.SteamWebAPIKey); key != "" {
-		return key
-	}
-	return DefaultSteamWebAPIKey()
+	return strings.TrimSpace(c.SteamWebAPIKey)
 }
 
 func (c Config) SteamWebAPIKeyConfigured() bool {
@@ -237,39 +266,86 @@ func (c Config) SteamWebAPIKeyConfigured() bool {
 }
 
 func (c Config) SteamWebAPIKeySourceName() string {
-	if source := strings.TrimSpace(c.SteamWebAPIKeySource); source != "" {
-		return source
-	}
-	key := strings.TrimSpace(c.SteamWebAPIKey)
-	if key == "" {
-		if strings.TrimSpace(DefaultSteamWebAPIKey()) != "" {
-			return "embedded"
-		}
+	if strings.TrimSpace(c.SteamWebAPIKey) == "" {
 		return ""
 	}
-	if key == DefaultSteamWebAPIKey() {
-		return "embedded"
-	}
-	return "env"
-}
-
-func DefaultSteamWebAPIKey() string {
-	obfuscated := []byte{
-		0xD5, 0xED, 0xDA, 0x66, 0x64, 0xFF, 0x23, 0xA6,
-		0xB3, 0xD8, 0x50, 0x2C, 0x63, 0xB1, 0xBF, 0x6D,
-	}
-	decoded := make([]byte, len(obfuscated))
-	for i, b := range obfuscated {
-		decoded[i] = b ^ 0x55
-	}
-	return hex.EncodeToString(decoded)
+	return "environment"
 }
 
 func resolveSteamWebAPIKey() (string, string) {
 	if key := strings.TrimSpace(os.Getenv("STEAM_WEB_API_KEY")); key != "" {
-		return key, "env"
+		return key, "environment"
 	}
-	return DefaultSteamWebAPIKey(), "embedded"
+	return "", ""
+}
+
+func validateHTTPBaseURL(name, raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%s must be an absolute HTTP(S) URL without credentials, query, or fragment", name)
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	if parsed.Scheme != "http" {
+		return fmt.Errorf("%s must use HTTPS, except for loopback HTTP endpoints", name)
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("%s must use HTTPS, except for loopback HTTP endpoints", name)
+	}
+	return nil
+}
+
+func validateScalarEnvironment() error {
+	for _, name := range []string{"PALPANEL_REQUIRE_AUTH", "PALPANEL_SAVE_INDEXER_ENABLED"} {
+		raw := strings.TrimSpace(os.Getenv(name))
+		if raw == "" {
+			continue
+		}
+		if _, err := strconv.ParseBool(raw); err != nil {
+			return fmt.Errorf("%s must be true or false", name)
+		}
+	}
+	for _, name := range []string{
+		"PALPANEL_PALDEFENDER_REST_PORT",
+		"PALPANEL_MAX_UPLOAD_MB",
+		"PALPANEL_STEAM_API_TIMEOUT_SECONDS",
+		"PALPANEL_GAME_PORT",
+		"PALPANEL_QUERY_PORT",
+		"PALPANEL_REST_PORT",
+		"PALPANEL_PALWORLD_REST_READ_TIMEOUT_MS",
+		"PALPANEL_GAME_DATA_TIMEOUT_MS",
+		"PALPANEL_GAME_DATA_MAX_MB",
+		"PALPANEL_SAVE_INDEX_TIMEOUT_SECONDS",
+		"PALPANEL_PERF_SLOW_REQUEST_MS",
+		"PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS",
+	} {
+		raw := strings.TrimSpace(os.Getenv(name))
+		if raw == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(raw); err != nil {
+			return fmt.Errorf("%s must be an integer", name)
+		}
+	}
+	return nil
+}
+
+func validateListenAddress(address string) error {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return fmt.Errorf("PALPANEL_LISTEN_ADDR must be a host:port address: %w", err)
+	}
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 {
+		return fmt.Errorf("PALPANEL_LISTEN_ADDR port must be between 1 and 65535")
+	}
+	return nil
 }
 
 func env(key, fallback string) string {

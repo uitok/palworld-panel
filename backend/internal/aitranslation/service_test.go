@@ -207,6 +207,24 @@ func TestProviderTimeoutAllowsLongDescriptionGeneration(t *testing.T) {
 	}
 }
 
+func TestProviderTimeoutUsesConfiguredValue(t *testing.T) {
+	root := t.TempDir()
+	cfg := appconfig.Config{
+		DataDir:                     root,
+		DBPath:                      filepath.Join(root, "test.db"),
+		AITranslationTimeoutSeconds: 123,
+	}
+	store, err := db.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := New(cfg, store)
+	if service.client.Timeout != 123*time.Second {
+		t.Fatalf("AI provider timeout = %s", service.client.Timeout)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, appconfig.Config, func()) {
 	t.Helper()
 	root := t.TempDir()

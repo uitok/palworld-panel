@@ -87,9 +87,10 @@ const mapWorkshopSearchResponse = (raw: unknown): WorkshopSearchResponse => {
 
 export const mapWorkshopStatus = (raw: unknown): WorkshopStatus => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const keySource = data.key_source === 'environment' ? 'environment' : '';
   return {
-    configured: Boolean(data.configured),
-    key_source: data.key_source ? String(data.key_source) : undefined,
+    configured: Boolean(data.configured) && keySource === 'environment',
+    key_source: keySource,
     app_id: String(data.app_id || '1623730'),
   };
 };
@@ -135,7 +136,7 @@ export const modsApi = {
   workshopStatus: () =>
     handleRequest<unknown, WorkshopStatus>(
       () => apiClient.get('/mods/workshop/status'),
-      { configured: true, key_source: 'embedded', app_id: '1623730' },
+      { configured: false, key_source: '', app_id: '1623730' },
       { map: mapWorkshopStatus, quiet: true, fallbackOnError: false },
     ),
 

@@ -134,15 +134,17 @@ func TestSteamClientTimeoutMapping(t *testing.T) {
 	}
 }
 
-func TestWorkshopServiceUsesEffectiveConfigKey(t *testing.T) {
-	service := NewWorkshopService(appconfig.Config{WorkshopAppID: "1623730"})
-	if service.client.apiKey == "" {
-		t.Fatal("expected embedded Steam Web API key")
+func TestWorkshopServiceUsesConfiguredEndpointAndTimeout(t *testing.T) {
+	service := NewWorkshopService(appconfig.Config{
+		SteamWebAPIKey:         "key",
+		WorkshopAppID:          "1623730",
+		SteamAPIBaseURL:        "http://127.0.0.1:19000/",
+		SteamAPITimeoutSeconds: 23,
+	})
+	if service.client.apiKey != "key" || service.client.baseURL != "http://127.0.0.1:19000" {
+		t.Fatalf("Steam client config = %q, %q", service.client.apiKey, service.client.baseURL)
 	}
-	if len(service.client.apiKey) != 32 {
-		t.Fatal("embedded Steam Web API key has invalid length")
-	}
-	if service.client.httpClient.Timeout != workshopRequestTimeout {
-		t.Fatalf("Steam request timeout = %s, want %s", service.client.httpClient.Timeout, workshopRequestTimeout)
+	if service.client.httpClient.Timeout != 23*time.Second || service.requestTimeout != 23*time.Second {
+		t.Fatalf("Steam request timeout = %s, %s", service.client.httpClient.Timeout, service.requestTimeout)
 	}
 }

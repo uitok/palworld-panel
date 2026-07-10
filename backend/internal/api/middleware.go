@@ -84,7 +84,7 @@ func PerformanceMiddleware(cfg appconfig.Config) gin.HandlerFunc {
 		c.Next()
 		elapsed := time.Since(start)
 		timingWriter.setTimingHeader()
-		if elapsed >= slowAfter {
+		if elapsed >= slowAfter && cfg.LogLevel != "error" {
 			log.Printf("slow request method=%s path=%s status=%d duration_ms=%s", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), strconv.FormatFloat(float64(elapsed.Microseconds())/1000, 'f', 1, 64))
 		}
 	}

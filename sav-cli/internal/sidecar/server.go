@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"palpanel/sav-cli/internal/buildinfo"
 	"palpanel/sav-cli/internal/indexer"
 )
 
@@ -48,7 +50,15 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{OK: false, Error: &errorPayload{Code: "method_not_allowed", Message: "method not allowed"}})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{OK: true, Data: map[string]any{"status": "ok", "version": indexer.IndexVersion, "parser": indexer.ParserName}})
+	info := buildinfo.Current()
+	writeJSON(w, http.StatusOK, envelope{OK: true, Data: map[string]any{
+		"status":        "ok",
+		"version":       indexer.IndexVersion,
+		"parser":        indexer.ParserName,
+		"build_version": info.Version,
+		"commit":        info.Commit,
+		"build_time":    info.BuildTime,
+	}})
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +96,16 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func ListenAndServe(addr string) error {
-	return http.ListenAndServe(addr, New())
+	return NewHTTPServer(addr).ListenAndServe()
+}
+
+func NewHTTPServer(addr string) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           New(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

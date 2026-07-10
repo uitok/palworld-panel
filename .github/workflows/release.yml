@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.sum
+            sav-cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Validate release tag
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(git rev-parse HEAD)" == "$(git rev-list -n 1 "$GITHUB_REF_NAME")" ]]
+          scripts/scan-secrets.sh
+          git diff --check
+      - name: Build release assets from tag
+        run: scripts/package.sh --version "$GITHUB_REF_NAME" --targets linux-amd64 --clean
+      - name: Extract package for SBOM
+        run: |
+          mkdir -p dist/sbom-root
+          tar -xzf "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz" -C dist/sbom-root
+      - uses: anchore/sbom-action@v0
+        with:
+          path: dist/sbom-root
+          format: spdx-json
+          output-file: dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.spdx.json
+          upload-artifact: false
+      - name: Finalize and verify assets
+        run: |
+          cd dist/packages
+          sha256sum \
+            "palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
+            "palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz" \
+            "palpanel_${GITHUB_REF_NAME}_linux_amd64.spdx.json" \
+            THIRD_PARTY_LICENSES.txt > SHA256SUMS
+          cd ../..
+          scripts/verify-release-contents.sh \
+            "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
+            "dist/packages/palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz"
+          scripts/smoke-linux.sh "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz"
+      - name: Publish private repository release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PalPanel ${{ github.ref_name }}
+          body_path: docs/release-v1.0.0.md
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.tar.gz
+            dist/packages/palpanel-sav-cli_${{ github.ref_name }}_source.tar.gz
+            dist/packages/palpanel_${{ github.ref_name }}_linux_amd64.spdx.json
+            dist/packages/THIRD_PARTY_LICENSES.txt
+            dist/packages/SHA256SUMS

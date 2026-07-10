@@ -82,7 +82,7 @@ export const Mods: React.FC = () => {
       return await modsApi.workshopStatus();
     } catch (error) {
       setStoreError(getErrorMessage(error));
-      return { configured: true, key_source: 'embedded', app_id: '1623730' };
+      return { configured: false, key_source: '' as const, app_id: '1623730' };
     } finally {
       setStatusLoading(false);
     }

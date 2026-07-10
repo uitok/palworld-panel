@@ -405,7 +405,7 @@ export interface WorkshopSearchResponse {
 
 export interface WorkshopStatus {
   configured: boolean;
-  key_source?: 'env' | 'embedded' | string;
+  key_source?: 'environment' | '';
   app_id: string;
 }
 

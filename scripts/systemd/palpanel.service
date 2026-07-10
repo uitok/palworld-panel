@@ -1,0 +1,39 @@
+[Unit]
+Description=PalPanel web application
+Requires=palpanel-sav-cli.service
+After=network-online.target palpanel-sav-cli.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=palpanel
+Group=palpanel
+UMask=0077
+Environment=PALPANEL_DATA_DIR=/var/lib/palpanel
+Environment=PALPANEL_FRONTEND_DIST=/opt/palpanel/current/frontend/dist
+Environment=PALPANEL_BACKEND_DIR=/opt/palpanel/current/backend
+Environment=PALPANEL_RUNNER_DIR=/opt/palpanel/current/backend/deployments/wine-runner
+Environment=PALPANEL_SAVE_INDEXER_ENABLED=true
+Environment=PALPANEL_SAVE_INDEXER_URL=http://127.0.0.1:8090
+ExecStart=/opt/palpanel/current/bin/palpanel --config /etc/palpanel/palpanel.env
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/palpanel
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=palpanel
+
+[Install]
+WantedBy=multi-user.target

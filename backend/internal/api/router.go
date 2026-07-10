@@ -20,6 +20,7 @@ import (
 
 	"palpanel/internal/aitranslation"
 	"palpanel/internal/appconfig"
+	"palpanel/internal/buildinfo"
 	"palpanel/internal/db"
 	"palpanel/internal/id"
 	"palpanel/internal/mods"
@@ -197,7 +198,13 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 }
 
 func (s Server) health(c *gin.Context) {
-	ok(c, gin.H{"status": "ok"})
+	info := buildinfo.Current()
+	ok(c, gin.H{
+		"status":     "ok",
+		"version":    info.Version,
+		"commit":     info.Commit,
+		"build_time": info.BuildTime,
+	})
 }
 
 func (s Server) listJobs(c *gin.Context) {

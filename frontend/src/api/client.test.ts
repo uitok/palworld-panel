@@ -69,7 +69,7 @@ describe('api client response handling', () => {
   });
 
   it('prefers an explicitly configured same-origin proxy over a stored absolute URL', () => {
-    writeBackendUrl('http://175.30.217.48:64217');
+    writeBackendUrl('http://198.51.100.48:64217');
 
     expect(readBackendUrl(true, '/api')).toBe('/api');
     expect(currentApiBaseUrl(true, '/api')).toBe('/api');

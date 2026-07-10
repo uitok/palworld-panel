@@ -59,7 +59,7 @@ describe('Mods Workshop store', () => {
     vi.clearAllMocks();
     localStorage.setItem(storageKeys.token, 'operator-token');
     mocks.modsApi.list.mockResolvedValue([]);
-    mocks.modsApi.workshopStatus.mockResolvedValue({ configured: true, key_source: 'embedded', app_id: '1623730' });
+    mocks.modsApi.workshopStatus.mockResolvedValue({ configured: true, key_source: 'environment', app_id: '1623730' });
     mocks.modsApi.searchWorkshop.mockResolvedValue({ items: [], total: 0, page_size: 24 });
     mocks.modsApi.getWorkshopItem.mockResolvedValue({
       id: '123456789', title: 'Test Mod', summary: 'Original description', steam_url: 'https://steamcommunity.com/sharedfiles/filedetails/?id=123456789',

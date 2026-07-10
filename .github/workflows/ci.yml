@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.sum
+            sav-cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install shellcheck and gitleaks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/zricethezav/gitleaks/v8@v8.27.2
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Go tests
+        run: |
+          (cd backend && go test ./...)
+          (cd sav-cli && CGO_ENABLED=1 go test ./...)
+      - name: Frontend checks
+        run: |
+          cd frontend
+          npm ci
+          npm run check
+      - name: Source and shell checks
+        run: |
+          shellcheck scripts/package.sh scripts/palpanelctl scripts/start.sh scripts/scan-secrets.sh scripts/verify-release-contents.sh scripts/smoke-linux.sh scripts/test-install.sh
+          scripts/scan-secrets.sh
+          gitleaks dir . --config .gitleaks.toml --redact --no-banner
+          git diff --check
+      - name: Verify systemd units
+        run: |
+          tmp="$(mktemp -d)"
+          sed 's|ExecStart=/opt/palpanel/current/bin/palpanel.*|ExecStart=/bin/true|' scripts/systemd/palpanel.service > "$tmp/palpanel.service"
+          sed 's|ExecStart=/opt/palpanel/current/bin/sav-cli.*|ExecStart=/bin/true|' scripts/systemd/palpanel-sav-cli.service > "$tmp/palpanel-sav-cli.service"
+          systemd-analyze verify "$tmp/palpanel.service" "$tmp/palpanel-sav-cli.service"
+      - name: Build and smoke Linux package
+        run: |
+          scripts/package.sh --version v1.0.0 --targets linux-amd64 --skip-tests --clean
+          scripts/verify-release-contents.sh \
+            dist/packages/palpanel_v1.0.0_linux_amd64.tar.gz \
+            dist/packages/palpanel-sav-cli_v1.0.0_source.tar.gz
+          scripts/smoke-linux.sh dist/packages/palpanel_v1.0.0_linux_amd64.tar.gz
+          sudo scripts/test-install.sh dist/packages/palpanel_v1.0.0_linux_amd64.tar.gz
+
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.sum
+            sav-cli/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+      - name: Native tests and build
+        shell: pwsh
+        run: |
+          $gcc = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\gcc.exe"
+          if (-not (Test-Path $gcc)) { throw "MinGW gcc not found: $gcc" }
+          Push-Location backend
+          go test ./...
+          Pop-Location
+          $env:CGO_ENABLED = "1"
+          $env:CC = $gcc
+          Push-Location sav-cli
+          go test ./...
+          Pop-Location
+          Push-Location frontend
+          npm.cmd ci
+          npm.cmd run check
+          Pop-Location
+          ./scripts/package.ps1 -Version v1.0.0 -SkipTests -Clean -MingwGcc $gcc
+      - name: Launcher and process smoke test
+        shell: pwsh
+        run: |
+          $package = Resolve-Path "dist\packages\palpanel_v1.0.0_windows_amd64"
+          (& "$package\palpanel-server.exe" --version | Out-String) | Select-String "v1.0.0"
+          (& "$package\sav-cli.exe" --version | Out-String) | Select-String "v1.0.0"
+          (& "$package\PalPanel.exe" --version | Out-String) | Select-String "v1.0.0"
+          $process = Start-Process -FilePath "$package\PalPanel.exe" -ArgumentList "--no-browser", "--no-prompt", "--exit-after-health" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Launcher smoke failed with exit code $($process.ExitCode)" }
+          if (-not (Test-Path "$package\config\palpanel.env")) { throw "Launcher did not initialize config" }
+          Start-Sleep -Seconds 2
+          $prefix = $package.Path.ToLowerInvariant()
+          $remaining = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant().StartsWith($prefix) }
+          if ($remaining) { throw "Launcher left child processes running: $($remaining.Name -join ', ')" }
+
+  vulnerability:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Dependency vulnerability checks
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@latest
+          (cd backend && "$RUNNER_TEMP/bin/govulncheck" ./...)
+          (cd sav-cli && "$RUNNER_TEMP/bin/govulncheck" ./...)
+          cd frontend
+          npm audit --audit-level=high

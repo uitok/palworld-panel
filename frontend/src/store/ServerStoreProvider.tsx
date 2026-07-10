@@ -6,7 +6,7 @@ import { ServerStoreContext } from './serverStoreContext';
 
 export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [panelToken, setPanelTokenState] = useState<string>(() => {
-    return readAppStorage('token') || import.meta.env.VITE_PANEL_TOKEN || '';
+    return readAppStorage('token') || '';
   });
   const [authError, setAuthError] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);

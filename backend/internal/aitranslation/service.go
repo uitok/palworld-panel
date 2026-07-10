@@ -28,7 +28,7 @@ const (
 	kvBaseURL         = "ai_translation_base_url"
 	kvModel           = "ai_translation_model"
 	maxResponseSize   = 1024 * 1024
-	aiProviderTimeout = 90 * time.Second
+	aiProviderTimeout = time.Duration(appconfig.DefaultAITranslationTimeoutSeconds) * time.Second
 )
 
 type PublicConfig struct {
@@ -84,11 +84,15 @@ type runtimeConfig struct {
 }
 
 func New(cfg appconfig.Config, store *db.Store) *Service {
+	timeout := time.Duration(cfg.AITranslationTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = aiProviderTimeout
+	}
 	return &Service{
 		cfg:   cfg,
 		store: store,
 		client: &http.Client{
-			Timeout: aiProviderTimeout,
+			Timeout: timeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return errors.New("AI provider redirects are not allowed")
 			},

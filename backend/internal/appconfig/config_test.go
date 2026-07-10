@@ -2,11 +2,8 @@ package appconfig
 
 import (
 	"os"
-	"regexp"
 	"testing"
 )
-
-var steamWebAPIKeyPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func TestLoadRejectsMissingPanelTokenByDefault(t *testing.T) {
 	t.Setenv("PANEL_TOKEN", "")
@@ -36,7 +33,7 @@ func TestLoadAllowsExplicitDevNoAuth(t *testing.T) {
 	if cfg.SteamWebAPIKey != "steam-key" {
 		t.Fatalf("SteamWebAPIKey = %q", cfg.SteamWebAPIKey)
 	}
-	if cfg.SteamWebAPIKeySource != "env" {
+	if cfg.SteamWebAPIKeySource != "environment" {
 		t.Fatalf("SteamWebAPIKeySource = %q", cfg.SteamWebAPIKeySource)
 	}
 	if cfg.WorkshopAppID != "1623730" {
@@ -76,7 +73,7 @@ func TestLoadUsesPalDefenderRESTOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadUsesEmbeddedSteamWebAPIKeyWhenEnvUnset(t *testing.T) {
+func TestLoadLeavesSteamWebAPIKeyUnconfiguredWhenEnvUnset(t *testing.T) {
 	t.Setenv("PANEL_TOKEN", "")
 	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
 	t.Setenv("STEAM_WEB_API_KEY", "")
@@ -89,17 +86,33 @@ func TestLoadUsesEmbeddedSteamWebAPIKeyWhenEnvUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if cfg.SteamWebAPIKeySource != "embedded" {
+	if cfg.SteamWebAPIKeySource != "" {
 		t.Fatalf("SteamWebAPIKeySource = %q", cfg.SteamWebAPIKeySource)
 	}
-	if !steamWebAPIKeyPattern.MatchString(cfg.SteamWebAPIKey) {
-		t.Fatal("embedded Steam Web API key has invalid format")
+	if cfg.SteamWebAPIKey != "" || cfg.SteamWebAPIKeyConfigured() {
+		t.Fatal("Steam Web API key should be unconfigured")
 	}
 }
 
-func TestDefaultSteamWebAPIKeyFormat(t *testing.T) {
-	if !steamWebAPIKeyPattern.MatchString(DefaultSteamWebAPIKey()) {
-		t.Fatal("default Steam Web API key has invalid format")
+func TestLoadUsesProductionNetworkAndProviderDefaults(t *testing.T) {
+	t.Setenv("PANEL_TOKEN", "")
+	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
+	t.Setenv("PALPANEL_LISTEN_ADDR", "")
+	t.Setenv("PALPANEL_STEAM_API_BASE_URL", "")
+	t.Setenv("PALPANEL_STEAM_API_TIMEOUT_SECONDS", "")
+	t.Setenv("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ListenAddr != "127.0.0.1:8080" {
+		t.Fatalf("ListenAddr = %q", cfg.ListenAddr)
+	}
+	if cfg.SteamAPIBaseURL != DefaultSteamAPIBaseURL || cfg.SteamAPITimeoutSeconds != 15 {
+		t.Fatalf("Steam defaults = %q, %d", cfg.SteamAPIBaseURL, cfg.SteamAPITimeoutSeconds)
+	}
+	if cfg.AITranslationTimeoutSeconds != 90 {
+		t.Fatalf("AITranslationTimeoutSeconds = %d", cfg.AITranslationTimeoutSeconds)
 	}
 }
 
@@ -110,5 +123,24 @@ func TestLoadRejectsWeakRoleTokens(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected weak operator token to fail")
+	}
+}
+
+func TestLoadRejectsInvalidScalarConfiguration(t *testing.T) {
+	tests := map[string]string{
+		"PALPANEL_REQUIRE_AUTH":                   "sometimes",
+		"PALPANEL_STEAM_API_TIMEOUT_SECONDS":      "soon",
+		"PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS": "0",
+		"PALPANEL_LISTEN_ADDR":                    "127.0.0.1:not-a-port",
+	}
+	for name, value := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("PANEL_TOKEN", "")
+			t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
+			t.Setenv(name, value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected %s=%q to fail", name, value)
+			}
+		})
 	}
 }

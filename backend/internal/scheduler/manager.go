@@ -25,8 +25,10 @@ func New(store *db.Store, serverManager server.Manager, restClient palrest.Clien
 	return Manager{store: store, server: serverManager, palrest: restClient}
 }
 
-func (m Manager) Start(ctx context.Context) {
+func (m Manager) Start(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -34,10 +36,11 @@ func (m Manager) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = m.RunDue(context.Background())
+				_ = m.RunDue(ctx)
 			}
 		}
 	}()
+	return done
 }
 
 func (m Manager) List(ctx context.Context) ([]db.Schedule, error) {

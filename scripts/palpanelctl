@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+script_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+script_dir="$(cd -- "$(dirname -- "$script_path")" && pwd -P)"
+if [[ -d "$script_dir/bin" ]]; then
+  package_dir="$script_dir"
+else
+  package_dir="$(cd -- "$script_dir/.." && pwd -P)"
+fi
+ctl="$script_path"
+backend_bin="$package_dir/bin/palpanel"
+sav_bin="$package_dir/bin/sav-cli"
+
+opt_root="${PALPANEL_INSTALL_ROOT:-/opt/palpanel}"
+etc_dir="${PALPANEL_ETC_DIR:-/etc/palpanel}"
+system_data_dir="${PALPANEL_SYSTEM_DATA_DIR:-/var/lib/palpanel}"
+systemd_dir="${PALPANEL_SYSTEMD_DIR:-/etc/systemd/system}"
+service_user="${PALPANEL_SERVICE_USER:-palpanel}"
+test_mode="${PALPANEL_TEST_MODE:-0}"
+
+portable_config="${PALPANEL_CONFIG:-$package_dir/config/palpanel.env}"
+portable_data="${PALPANEL_DATA_DIR:-$package_dir/data}"
+runtime_dir="${PALPANEL_RUNTIME_DIR:-$package_dir/run}"
+log_dir="${PALPANEL_LOG_DIR:-$package_dir/logs}"
+sidecar_port="${PALPANEL_SAVE_INDEXER_PORT:-8090}"
+max_log_bytes="${PALPANEL_MAX_LOG_BYTES:-10485760}"
+max_log_files="${PALPANEL_MAX_LOG_FILES:-5}"
+
+fail() {
+  printf 'palpanelctl: %s\n' "$*" >&2
+  exit 1
+}
+
+require_binary() {
+  [[ -x "$1" ]] || fail "missing executable: $1"
+}
+
+system_mode() {
+  [[ "$package_dir" == "$opt_root/"* ]]
+}
+
+config_path() {
+  if system_mode; then
+    printf '%s\n' "$etc_dir/palpanel.env"
+  else
+    printf '%s\n' "$portable_config"
+  fi
+}
+
+read_config_value() {
+  local name="$1"
+  local path="$2"
+  [[ -f "$path" ]] || return 0
+  awk -v wanted="$name" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    {
+      equals = index($0, "=")
+      if (equals == 0) next
+      key = substr($0, 1, equals - 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key != wanted) next
+      value = substr($0, equals + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (length(value) >= 2) {
+        first = substr(value, 1, 1)
+        last = substr(value, length(value), 1)
+        if ((first == "\"" && last == "\"") || (first == "\047" && last == "\047")) {
+          value = substr(value, 2, length(value) - 2)
+        }
+      }
+      print value
+      exit
+    }
+  ' "$path"
+}
+
+portable_init() {
+  require_binary "$backend_bin"
+  mkdir -p "$(dirname -- "$portable_config")" "$portable_data" "$runtime_dir" "$log_dir"
+  "$backend_bin" --config "$portable_config" --init-config
+  chmod 600 "$portable_config"
+}
+
+ensure_portable_config() {
+  if [[ ! -f "$portable_config" ]]; then
+    portable_init
+  else
+    chmod 600 "$portable_config"
+  fi
+}
+
+pid_running() {
+  local path="$1"
+  local pid
+  [[ -f "$path" ]] || return 1
+  pid="$(tr -cd '0-9' <"$path")"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+stop_pid_file() {
+  local path="$1"
+  local pid=""
+  [[ -f "$path" ]] || return 0
+  pid="$(tr -cd '0-9' <"$path")"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 1 150); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$path"
+}
+
+rotate_log() {
+  local path="$1"
+  local size=0
+  [[ -f "$path" ]] || return 0
+  size="$(stat -c '%s' "$path" 2>/dev/null || printf '0')"
+  (( size >= max_log_bytes )) || return 0
+  local index
+  for ((index = max_log_files; index >= 2; index--)); do
+    if [[ -f "$path.$((index - 1))" ]]; then
+      mv -f "$path.$((index - 1))" "$path.$index"
+    fi
+  done
+  cp "$path" "$path.1"
+  : >"$path"
+}
+
+http_ready() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --silent --show-error --max-time 2 "$url" >/dev/null 2>&1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 2 -O /dev/null "$url"
+  else
+    fail "curl or wget is required for health checks"
+  fi
+}
+
+wait_for_health() {
+  local url="$1"
+  local pid_file="$2"
+  local attempts="${3:-60}"
+  local attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    http_ready "$url" && return 0
+    pid_running "$pid_file" || return 1
+    sleep 0.5
+  done
+  return 1
+}
+
+backend_health_url() {
+  local listen="${PALPANEL_LISTEN_ADDR:-}"
+  if [[ -z "$listen" ]]; then
+    listen="$(read_config_value PALPANEL_LISTEN_ADDR "$portable_config")"
+  fi
+  [[ -n "$listen" ]] || listen="127.0.0.1:8080"
+  local port="${listen##*:}"
+  port="${port//]/}"
+  [[ "$port" =~ ^[0-9]+$ ]] || port="8080"
+  printf 'http://127.0.0.1:%s/api/health\n' "$port"
+}
+
+supervisor_cleanup() {
+  stop_pid_file "$runtime_dir/backend.pid"
+  stop_pid_file "$runtime_dir/sav-cli.pid"
+  rm -f "$runtime_dir/ready" "$runtime_dir/supervisor.pid"
+}
+
+supervise() {
+  require_binary "$backend_bin"
+  require_binary "$sav_bin"
+  ensure_portable_config
+  mkdir -p "$portable_data" "$runtime_dir" "$log_dir"
+  if pid_running "$runtime_dir/supervisor.pid"; then
+    fail "portable instance is already running"
+  fi
+  printf '%s\n' "$BASHPID" >"$runtime_dir/supervisor.pid"
+  rm -f "$runtime_dir/ready"
+  trap 'exit 0' INT TERM HUP
+  trap supervisor_cleanup EXIT
+
+  rotate_log "$log_dir/sav-cli.log"
+  "$sav_bin" serve --host 127.0.0.1 --port "$sidecar_port" >>"$log_dir/sav-cli.log" 2>&1 &
+  printf '%s\n' "$!" >"$runtime_dir/sav-cli.pid"
+  if ! wait_for_health "http://127.0.0.1:$sidecar_port/health" "$runtime_dir/sav-cli.pid"; then
+    printf 'sav-cli failed its health check\n' >&2
+    return 1
+  fi
+
+  rotate_log "$log_dir/palpanel.log"
+  PALPANEL_FRONTEND_DIST="$package_dir/frontend/dist" \
+  PALPANEL_BACKEND_DIR="$package_dir/backend" \
+  PALPANEL_DATA_DIR="$portable_data" \
+  PALPANEL_RUNNER_DIR="$package_dir/backend/deployments/wine-runner" \
+  PALPANEL_SAVE_INDEXER_ENABLED=true \
+  PALPANEL_SAVE_INDEXER_URL="http://127.0.0.1:$sidecar_port" \
+    "$backend_bin" --config "$portable_config" >>"$log_dir/palpanel.log" 2>&1 &
+  printf '%s\n' "$!" >"$runtime_dir/backend.pid"
+  if ! wait_for_health "$(backend_health_url)" "$runtime_dir/backend.pid"; then
+    printf 'palpanel failed its health check\n' >&2
+    return 1
+  fi
+  : >"$runtime_dir/ready"
+
+  while pid_running "$runtime_dir/backend.pid" && pid_running "$runtime_dir/sav-cli.pid"; do
+    rotate_log "$log_dir/palpanel.log"
+    rotate_log "$log_dir/sav-cli.log"
+    sleep 2
+  done
+  printf 'a managed process exited unexpectedly\n' >&2
+  return 1
+}
+
+portable_start() {
+  ensure_portable_config
+  mkdir -p "$runtime_dir" "$log_dir"
+  if pid_running "$runtime_dir/supervisor.pid"; then
+    printf 'PalPanel is already running\n'
+    return 0
+  fi
+  rm -f "$runtime_dir/ready"
+  rotate_log "$log_dir/controller.log"
+  nohup "$ctl" __supervise >>"$log_dir/controller.log" 2>&1 &
+  local supervisor_pid="$!"
+  for _ in $(seq 1 80); do
+    if [[ -f "$runtime_dir/ready" ]]; then
+      printf 'PalPanel started: %s\n' "$(backend_health_url | sed 's|/api/health$|/|')"
+      return 0
+    fi
+    if ! kill -0 "$supervisor_pid" 2>/dev/null; then
+      tail -n 40 "$log_dir/controller.log" >&2 || true
+      fail "portable startup failed"
+    fi
+    sleep 0.5
+  done
+  kill -TERM "$supervisor_pid" 2>/dev/null || true
+  fail "portable startup timed out"
+}
+
+portable_stop() {
+  if pid_running "$runtime_dir/supervisor.pid"; then
+    stop_pid_file "$runtime_dir/supervisor.pid"
+  fi
+  stop_pid_file "$runtime_dir/backend.pid"
+  stop_pid_file "$runtime_dir/sav-cli.pid"
+  rm -f "$runtime_dir/ready"
+  printf 'PalPanel stopped\n'
+}
+
+portable_status() {
+  local backend_state="stopped"
+  local sav_state="stopped"
+  pid_running "$runtime_dir/backend.pid" && backend_state="running"
+  pid_running "$runtime_dir/sav-cli.pid" && sav_state="running"
+  printf 'palpanel: %s\nsav-cli: %s\n' "$backend_state" "$sav_state"
+  [[ "$backend_state" == "running" && "$sav_state" == "running" ]]
+}
+
+show_logs() {
+  local follow=0
+  [[ "${1:-}" == "-f" || "${1:-}" == "--follow" ]] && follow=1
+  if system_mode; then
+    if (( follow )); then
+      exec journalctl -u palpanel.service -u palpanel-sav-cli.service -f
+    fi
+    exec journalctl -u palpanel.service -u palpanel-sav-cli.service -n 200 --no-pager
+  fi
+  mkdir -p "$log_dir"
+  touch "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
+  if (( follow )); then
+    exec tail -n 100 -F "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
+  fi
+  tail -n 100 "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
+}
+
+show_token() {
+  if [[ -n "${PANEL_TOKEN:-}" ]]; then
+    printf '%s\n' "$PANEL_TOKEN"
+    return 0
+  fi
+  local path
+  path="$(config_path)"
+  [[ -r "$path" ]] || fail "cannot read config: $path"
+  local token
+  token="$(read_config_value PANEL_TOKEN "$path")"
+  [[ -n "$token" ]] || fail "PANEL_TOKEN is not configured"
+  printf '%s\n' "$token"
+}
+
+show_config() {
+  local path
+  path="$(config_path)"
+  if [[ "${1:-}" == "edit" ]]; then
+    exec "${EDITOR:-vi}" "$path"
+  fi
+  printf '%s\n' "$path"
+}
+
+require_root() {
+  [[ "$test_mode" == "1" ]] && return 0
+  [[ "$(id -u)" -eq 0 ]] || fail "this command must be run as root"
+}
+
+service_control_enabled() {
+  [[ "${PALPANEL_SKIP_SYSTEMD:-0}" != "1" ]]
+}
+
+install_system() {
+  require_root
+  require_binary "$backend_bin"
+  require_binary "$sav_bin"
+  local docker_access=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --docker) docker_access=1 ;;
+      *) fail "unknown install option: $1" ;;
+    esac
+    shift
+  done
+  local version
+  version="$($backend_bin --version | awk 'NR == 1 { print $2 }')"
+  [[ "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || fail "invalid build version: $version"
+  local version_dir="$opt_root/$version"
+  local staging="$opt_root/.${version}.tmp.$BASHPID"
+  rm -rf "$staging"
+  mkdir -p "$staging" "$etc_dir" "$system_data_dir" "$systemd_dir"
+  chmod 755 "$opt_root"
+  chmod 750 "$etc_dir" "$system_data_dir"
+  local item
+  for item in bin frontend backend systemd config licenses README.md THIRD_PARTY_LICENSES.txt palpanelctl; do
+    [[ -e "$package_dir/$item" ]] && cp -a "$package_dir/$item" "$staging/"
+  done
+  rm -f "$staging/config/palpanel.env"
+  rm -rf "$version_dir"
+  mv "$staging" "$version_dir"
+  chmod 755 "$version_dir"
+  rm -f "$opt_root/.current.new"
+  ln -s "$version_dir" "$opt_root/.current.new"
+  mv -Tf "$opt_root/.current.new" "$opt_root/current"
+
+  if [[ "$test_mode" != "1" ]]; then
+    if ! id "$service_user" >/dev/null 2>&1; then
+      useradd --system --home-dir "$system_data_dir" --shell /usr/sbin/nologin "$service_user"
+    fi
+    chown root:root "$opt_root" "$version_dir"
+    chown root:"$service_user" "$etc_dir"
+    if (( docker_access )); then
+      getent group docker >/dev/null || fail "docker group does not exist"
+      usermod -aG docker "$service_user"
+      printf 'WARNING: docker group membership is effectively root-equivalent.\n' >&2
+    fi
+  elif (( docker_access )); then
+    fail "--docker is not available in test mode"
+  fi
+  if [[ ! -f "$etc_dir/palpanel.env" ]]; then
+    "$version_dir/bin/palpanel" --config "$etc_dir/palpanel.env" --init-config
+  fi
+  chmod 600 "$etc_dir/palpanel.env"
+  if [[ "$test_mode" != "1" ]]; then
+    chown "$service_user:$service_user" "$etc_dir/palpanel.env"
+    chown -R "$service_user:$service_user" "$system_data_dir"
+  fi
+
+  sed -e "s|/opt/palpanel|$opt_root|g" -e "s|/etc/palpanel|$etc_dir|g" -e "s|/var/lib/palpanel|$system_data_dir|g" \
+    -e "s|User=palpanel|User=$service_user|g" -e "s|Group=palpanel|Group=$service_user|g" \
+    "$version_dir/systemd/palpanel.service" >"$systemd_dir/palpanel.service"
+  sed -e "s|/opt/palpanel|$opt_root|g" -e "s|/var/lib/palpanel|$system_data_dir|g" \
+    -e "s|User=palpanel|User=$service_user|g" -e "s|Group=palpanel|Group=$service_user|g" \
+    "$version_dir/systemd/palpanel-sav-cli.service" >"$systemd_dir/palpanel-sav-cli.service"
+  chmod 644 "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service"
+  if service_control_enabled; then
+    systemctl daemon-reload
+    systemctl enable --now palpanel.service
+  fi
+  printf 'installed PalPanel %s in %s\n' "$version" "$version_dir"
+}
+
+uninstall_system() {
+  require_root
+  local purge=0
+  [[ "${1:-}" == "--purge" ]] && purge=1 && shift
+  [[ $# -eq 0 ]] || fail "unknown uninstall option: $1"
+  if service_control_enabled; then
+    systemctl disable --now palpanel.service palpanel-sav-cli.service 2>/dev/null || true
+  fi
+  rm -f "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service"
+  if service_control_enabled; then
+    systemctl daemon-reload
+  fi
+  rm -rf "$opt_root"
+  if (( purge )); then
+    rm -rf "$etc_dir" "$system_data_dir"
+    if [[ "$test_mode" != "1" ]]; then
+      userdel "$service_user" 2>/dev/null || true
+    fi
+    printf 'uninstalled PalPanel and purged configuration and data\n'
+  else
+    printf 'uninstalled PalPanel; preserved %s and %s\n' "$etc_dir" "$system_data_dir"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+Usage: palpanelctl COMMAND [OPTIONS]
+
+Commands:
+  init                 create a secure portable configuration
+  run                  run portable PalPanel in the foreground
+  start                start both managed processes
+  stop                 stop both managed processes
+  restart              restart both managed processes
+  status               show process or systemd status
+  logs [-f]            show or follow bounded logs
+  config [edit]        print or edit the active config path
+  token                print the configured admin token
+  install [--docker]   install under /opt and enable systemd services
+  uninstall [--purge]  remove programs; preserve config/data unless purged
+EOF
+}
+
+command="${1:-}"
+[[ $# -gt 0 ]] && shift
+case "$command" in
+  __supervise) supervise "$@" ;;
+  init)
+    if system_mode; then
+      "$backend_bin" --config "$etc_dir/palpanel.env" --init-config
+    else
+      portable_init
+    fi
+    ;;
+  run)
+    if system_mode; then
+      systemctl start palpanel.service
+      exec journalctl -u palpanel.service -u palpanel-sav-cli.service -f
+    fi
+    supervise
+    ;;
+  start)
+    if system_mode; then systemctl start palpanel.service; else portable_start; fi
+    ;;
+  stop)
+    if system_mode; then systemctl stop palpanel.service palpanel-sav-cli.service; else portable_stop; fi
+    ;;
+  restart)
+    if system_mode; then systemctl restart palpanel-sav-cli.service palpanel.service; else portable_stop && portable_start; fi
+    ;;
+  status)
+    if system_mode; then systemctl status palpanel.service palpanel-sav-cli.service --no-pager; else portable_status; fi
+    ;;
+  logs) show_logs "$@" ;;
+  config) show_config "$@" ;;
+  token) show_token ;;
+  install) install_system "$@" ;;
+  uninstall) uninstall_system "$@" ;;
+  -h|--help|help) usage ;;
+  *) usage >&2; exit 64 ;;
+esac
