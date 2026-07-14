@@ -4,7 +4,7 @@ PalPanel 是一个面向 Palworld Dedicated Server 的自托管管理面板。
 
 开一台服并不难，麻烦的是后面的日常维护：更新、备份、看日志、改配置、处理 Mod，以及在出问题时弄清楚到底是哪一层没有正常工作。PalPanel 把这些操作放进一个中文 Web 界面里，同时保留可审计的任务记录和清晰的数据目录。
 
-当前 Linux 热修复版是 `v1.0.3-hotfix.1`；Windows 最新正式包仍为 `v1.0.2`。Windows 包包含可双击启动的 Launcher，但目前没有 Authenticode 签名。
+当前 Linux 热修复版是 `v1.0.3-hotfix.1`；Windows 请自行编译
 
 ![PalPanel 系统总览](docs/images/system-overview.png)
 
