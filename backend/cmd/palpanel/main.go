@@ -1,23 +1,29 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"palpanel/internal/api"
 	"palpanel/internal/appconfig"
+	panelauth "palpanel/internal/auth"
 	"palpanel/internal/buildinfo"
 	"palpanel/internal/db"
 	"palpanel/internal/docker"
+	"palpanel/internal/jobs"
 	"palpanel/internal/mods"
 	"palpanel/internal/monitor"
 	"palpanel/internal/paldefender"
@@ -27,14 +33,22 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := runWithIO(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		log.Printf("palpanel: %v", err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
+	return runWithIO(args, os.Stdin, os.Stdout, os.Stderr)
+}
+
+func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) error {
+	if len(args) > 0 && args[0] == "admin" {
+		return runAdminWithIO(args[1:], input, output, errorOutput)
+	}
 	fs := flag.NewFlagSet("palpanel", flag.ContinueOnError)
+	fs.SetOutput(errorOutput)
 	configPath := fs.String("config", "", "path to palpanel.env")
 	initConfig := fs.Bool("init-config", false, "create a secure production configuration")
 	showVersion := fs.Bool("version", false, "print version and exit")
@@ -46,7 +60,7 @@ func run(args []string) error {
 	}
 	if *showVersion {
 		info := buildinfo.Current()
-		fmt.Printf("palpanel %s (commit %s, built %s)\n", info.Version, info.Commit, info.BuildTime)
+		fmt.Fprintf(output, "palpanel %s (commit %s, built %s)\n", info.Version, info.Commit, info.BuildTime)
 		return nil
 	}
 	if *initConfig {
@@ -54,16 +68,16 @@ func run(args []string) error {
 		if path == "" {
 			path = "palpanel.env"
 		}
-		token, created, err := appconfig.InitFile(path)
+		created, err := appconfig.InitFile(path)
 		if err != nil {
 			return fmt.Errorf("initialize config: %w", err)
 		}
 		if created {
 			absolute, _ := filepath.Abs(path)
-			fmt.Printf("created %s\n", absolute)
-			fmt.Printf("PANEL_TOKEN=%s\n", token)
+			fmt.Fprintf(output, "created %s\n", absolute)
+			fmt.Fprintln(output, "open the dashboard to register the first administrator")
 		} else {
-			fmt.Printf("config already exists: %s\n", path)
+			fmt.Fprintf(output, "config already exists: %s\n", path)
 		}
 		return nil
 	}
@@ -73,9 +87,11 @@ func run(args []string) error {
 		if err != nil {
 			return fmt.Errorf("load config file: %w", err)
 		}
-		if _, err := appconfig.ApplyFileEnvironment(values); err != nil {
+		restore, err := appconfig.ApplyFileEnvironment(values)
+		if err != nil {
 			return fmt.Errorf("load config file: %w", err)
 		}
+		defer restore()
 	}
 	cfg, err := appconfig.Load()
 	if err != nil {
@@ -89,14 +105,22 @@ func run(args []string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer store.Close()
+	jobExecutor := jobs.New(store, 4)
+	interrupted, err := jobExecutor.Reconcile(context.Background())
+	if err != nil {
+		return fmt.Errorf("reconcile interrupted jobs: %w", err)
+	}
+	if interrupted > 0 {
+		log.Printf("marked %d interrupted jobs as failed", interrupted)
+	}
 
 	runner := docker.NewRunner(cfg)
-	serverManager := server.NewManager(cfg, store, runner)
-	modsManager := mods.NewManager(cfg, store, runner)
-	palDefenderManager := paldefender.NewManager(cfg, store)
+	serverManager := server.NewManager(cfg, store, runner, jobExecutor)
+	modsManager := mods.NewManager(cfg, store, runner, jobExecutor)
+	palDefenderManager := paldefender.NewManager(cfg, store, jobExecutor)
 	restClient := palrest.New(cfg.PalworldRESTBaseURL, cfg.PalworldRESTUser, cfg.PalworldRESTPass)
 	monitorManager := monitor.New(cfg, store, serverManager, restClient)
-	schedulerManager := scheduler.New(store, serverManager, restClient)
+	schedulerManager := scheduler.New(store, serverManager, restClient, jobExecutor)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	monitorDone := monitorManager.Start(ctx)
@@ -106,6 +130,7 @@ func run(args []string) error {
 		workerCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = waitForBackground(workerCtx, monitorDone, schedulerDone)
+		_ = jobExecutor.Shutdown(workerCtx)
 	}()
 
 	router := api.NewRouter(cfg, store, serverManager, modsManager, palDefenderManager, restClient, monitorManager, schedulerManager)
@@ -144,10 +169,85 @@ func run(args []string) error {
 	if err := waitForBackground(shutdownCtx, monitorDone, schedulerDone); err != nil {
 		return err
 	}
+	if err := jobExecutor.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("wait for background jobs: %w", err)
+	}
 	if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("run api: %w", err)
 	}
 	log.Printf("shutdown complete")
+	return nil
+}
+
+func runAdmin(args []string) error {
+	return runAdminWithIO(args, os.Stdin, os.Stdout, os.Stderr)
+}
+
+func runAdminWithIO(args []string, input io.Reader, output, errorOutput io.Writer) error {
+	if len(args) == 0 || args[0] != "reset-password" {
+		return errors.New("usage: palpanel admin reset-password [--config path] [--username name]")
+	}
+	fs := flag.NewFlagSet("palpanel admin reset-password", flag.ContinueOnError)
+	fs.SetOutput(errorOutput)
+	configPath := fs.String("config", "", "path to palpanel.env")
+	username := fs.String("username", "", "administrator username; defaults to the first account")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if *configPath != "" {
+		values, err := appconfig.ParseEnvFile(*configPath)
+		if err != nil {
+			return fmt.Errorf("load config file: %w", err)
+		}
+		restore, err := appconfig.ApplyFileEnvironment(values)
+		if err != nil {
+			return fmt.Errorf("load config file: %w", err)
+		}
+		defer restore()
+	}
+	cfg, err := appconfig.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	store, err := db.Open(cfg.DBPath)
+	if err != nil {
+		return fmt.Errorf("open panel database: %w", err)
+	}
+	defer store.Close()
+	name := strings.TrimSpace(*username)
+	if name == "" {
+		user, err := store.FirstUser(context.Background())
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("no administrator account exists; register in the browser first")
+		}
+		if err != nil {
+			return fmt.Errorf("read administrator: %w", err)
+		}
+		name = user.Username
+	}
+	reader := bufio.NewReader(input)
+	fmt.Fprintf(errorOutput, "New password for %s: ", name)
+	password, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read password: %w", err)
+	}
+	fmt.Fprint(errorOutput, "Confirm password: ")
+	confirmation, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read password confirmation: %w", err)
+	}
+	password = strings.TrimRight(password, "\r\n")
+	confirmation = strings.TrimRight(confirmation, "\r\n")
+	if password != confirmation {
+		return errors.New("passwords do not match")
+	}
+	if err := panelauth.New(store).ResetPassword(context.Background(), name, password); err != nil {
+		return fmt.Errorf("reset administrator password: %w", err)
+	}
+	fmt.Fprintf(output, "password reset for %s; all sessions and development keys were revoked\n", name)
 	return nil
 }
 

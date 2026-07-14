@@ -43,6 +43,47 @@ func TestInstallReleaseFromZip(t *testing.T) {
 			t.Fatalf("%s was not installed", name)
 		}
 	}
+	installed, err := os.ReadFile(filepath.Join(manager.cfg.Win64Dir(), "PalDefender.dll"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedSum := sha256.Sum256(installed)
+	if hex.EncodeToString(installedSum[:]) != BundledPalDefenderSHA256 {
+		t.Fatal("install did not prefer the bundled PalDefender.dll")
+	}
+}
+
+func TestBundledPalDefenderMetadataAndReplacement(t *testing.T) {
+	info := BundledInfo()
+	if info.Version != "1.8.1" || info.SHA256 != BundledPalDefenderSHA256 || info.Size != 3287552 {
+		t.Fatalf("BundledInfo = %#v", info)
+	}
+	if err := validateBundledDLL(); err != nil {
+		t.Fatal(err)
+	}
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	destination := filepath.Join(manager.cfg.Win64Dir(), "PalDefender.dll")
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("older"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.installBundledDLL(); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(installed)
+	if hex.EncodeToString(sum[:]) != BundledPalDefenderSHA256 {
+		t.Fatal("installed bundle hash mismatch")
+	}
+	if fileExists(destination + ".palpanel-replaced") {
+		t.Fatal("replacement staging file was not cleaned")
+	}
 }
 
 func TestBalancedPresetAndRESTToken(t *testing.T) {
@@ -52,7 +93,7 @@ func TestBalancedPresetAndRESTToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyPreset returned error: %v", err)
 	}
-	if cfg["shouldKickCheaters"] != true || cfg["shouldBanCheaters"] != false {
+	if cfg["shouldKickCheaters"] != true || cfg["shouldBanCheaters"] != false || cfg["exitServerOnStartupFailure"] != false {
 		t.Fatalf("unexpected balanced preset: %#v", cfg)
 	}
 	token, err := manager.CreateRESTToken(context.Background(), "Panel", nil)
@@ -61,6 +102,14 @@ func TestBalancedPresetAndRESTToken(t *testing.T) {
 	}
 	if token.Token == "" || !fileExists(token.Path) || !manager.restEnabled() {
 		t.Fatalf("unexpected token result: %#v", token)
+	}
+	if len(token.Permissions) != len(panelRESTPermissions) || token.Permissions[0] != "REST.Version.Read" {
+		t.Fatalf("default permissions = %#v", token.Permissions)
+	}
+	for _, permission := range token.Permissions {
+		if permission == "REST.*" {
+			t.Fatal("default panel token must not grant REST.*")
+		}
 	}
 }
 
@@ -82,6 +131,70 @@ func TestCreateRESTTokenUsesConfiguredRESTPort(t *testing.T) {
 	}
 	if cfg["Port"] != float64(28080) {
 		t.Fatalf("Port = %#v", cfg["Port"])
+	}
+}
+
+func TestCreateRESTTokenUsesRuntimeAddressAndPreservesRESTConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		address string
+	}{
+		{name: "wine docker", mode: runtimeWineDocker, address: "0.0.0.0"},
+		{name: "windows steamcmd", mode: runtimeWindowsSteamCMD, address: "127.0.0.1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, cleanup := testManager(t)
+			defer cleanup()
+			if err := manager.store.SetKV(t.Context(), kvRuntimeMode, tt.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(manager.restConfigPath()), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			existing := map[string]any{
+				"Enabled":    false,
+				"Address":    "192.0.2.10",
+				"Port":       28080,
+				"LogConsole": true,
+				"Cors":       map[string]any{"Allowed-Origins": []string{"https://panel.example"}},
+			}
+			body, err := json.Marshal(existing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(manager.restConfigPath(), body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := manager.CreateRESTToken(t.Context(), "Panel", nil); err != nil {
+				t.Fatalf("CreateRESTToken returned error: %v", err)
+			}
+			body, err = os.ReadFile(manager.restConfigPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg map[string]any
+			if err := json.Unmarshal(body, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if cfg["Enabled"] != true || cfg["Address"] != tt.address {
+				t.Fatalf("runtime REST settings = %#v", cfg)
+			}
+			if cfg["Port"] != float64(28080) || cfg["LogConsole"] != true {
+				t.Fatalf("existing scalar settings were not preserved: %#v", cfg)
+			}
+			cors, ok := cfg["Cors"].(map[string]any)
+			if !ok {
+				t.Fatalf("Cors = %#v", cfg["Cors"])
+			}
+			origins, ok := cors["Allowed-Origins"].([]any)
+			if !ok || len(origins) != 2 || origins[0] != "https://panel.example" || origins[1] != panelRESTOrigin {
+				t.Fatalf("Cors was not preserved: %#v", cors)
+			}
+		})
 	}
 }
 
@@ -170,7 +283,7 @@ func TestReloadConfigUsesOfficialEndpoint(t *testing.T) {
 	var paths []string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
-		if r.URL.Path != "/ReloadConfig" {
+		if r.URL.Path != "/v1/pdapi/ReloadConfig" {
 			http.NotFound(w, r)
 			return
 		}
@@ -185,7 +298,7 @@ func TestReloadConfigUsesOfficialEndpoint(t *testing.T) {
 	if err := manager.ReloadConfig(context.Background()); err != nil {
 		t.Fatalf("ReloadConfig returned error: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != "/ReloadConfig" {
+	if len(paths) != 1 || paths[0] != "/v1/pdapi/ReloadConfig" {
 		t.Fatalf("unexpected paths: %#v", paths)
 	}
 }
@@ -200,11 +313,11 @@ func TestReloadConfigFallsBackToLegacyEndpoint(t *testing.T) {
 	var paths []string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
-		if r.URL.Path == "/ReloadConfig" {
+		if r.URL.Path == "/v1/pdapi/ReloadConfig" {
 			http.NotFound(w, r)
 			return
 		}
-		if r.URL.Path == "/v1/pdapi/ReloadConfig" {
+		if r.URL.Path == "/ReloadConfig" {
 			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 			return
 		}
@@ -216,7 +329,7 @@ func TestReloadConfigFallsBackToLegacyEndpoint(t *testing.T) {
 	if err := manager.ReloadConfig(context.Background()); err != nil {
 		t.Fatalf("ReloadConfig returned error: %v", err)
 	}
-	if len(paths) != 2 || paths[0] != "/ReloadConfig" || paths[1] != "/v1/pdapi/ReloadConfig" {
+	if len(paths) != 2 || paths[0] != "/v1/pdapi/ReloadConfig" || paths[1] != "/ReloadConfig" {
 		t.Fatalf("unexpected paths: %#v", paths)
 	}
 }

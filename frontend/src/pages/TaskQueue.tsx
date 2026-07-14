@@ -57,6 +57,8 @@ const jobTypeLabel = (type: string) => {
 
 const scheduleTypeLabel = (type: string) => scheduleTypes.find((item) => item.value === type)?.label || type;
 
+const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
 export const TaskQueue: React.FC = () => {
   const { refreshKey } = useServerStore();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -72,6 +74,7 @@ export const TaskQueue: React.FC = () => {
     mode: 'interval' as 'interval' | 'daily',
     interval_minutes: 60,
     time_of_day: '04:00',
+    timezone: browserTimezone,
     waittime: 60,
     message: 'Scheduled maintenance',
   });
@@ -144,6 +147,7 @@ export const TaskQueue: React.FC = () => {
         enabled: true,
         interval_minutes: draft.mode === 'interval' ? draft.interval_minutes : undefined,
         time_of_day: draft.mode === 'daily' ? draft.time_of_day : undefined,
+        timezone: draft.mode === 'daily' ? draft.timezone : undefined,
         waittime: draft.type === 'safe_restart' ? draft.waittime : undefined,
         message: draft.type === 'safe_restart' ? draft.message : undefined,
       });
@@ -393,7 +397,7 @@ export const TaskQueue: React.FC = () => {
 
 const scheduleRule = (schedule: Schedule) => {
   if (schedule.interval_minutes) return `每 ${schedule.interval_minutes} 分钟`;
-  if (schedule.time_of_day) return `每日 ${schedule.time_of_day}`;
+  if (schedule.time_of_day) return `每日 ${schedule.time_of_day} (${schedule.timezone || 'UTC'})`;
   return '-';
 };
 
@@ -403,6 +407,7 @@ const ScheduleForm: React.FC<{
     mode: 'interval' | 'daily';
     interval_minutes: number;
     time_of_day: string;
+    timezone: string;
     waittime: number;
     message: string;
   };
@@ -412,6 +417,7 @@ const ScheduleForm: React.FC<{
       mode: 'interval' | 'daily';
       interval_minutes: number;
       time_of_day: string;
+      timezone: string;
       waittime: number;
       message: string;
     }>
@@ -457,15 +463,26 @@ const ScheduleForm: React.FC<{
           />
         </label>
       ) : (
-        <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
-          每日时间
-          <input
-            type="time"
-            value={draft.time_of_day}
-            onChange={(event) => setDraft((prev) => ({ ...prev, time_of_day: event.target.value }))}
-            className="rounded-xl border border-slate-200 bg-white p-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
-          />
-        </label>
+        <>
+          <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
+            每日时间
+            <input
+              type="time"
+              value={draft.time_of_day}
+              onChange={(event) => setDraft((prev) => ({ ...prev, time_of_day: event.target.value }))}
+              className="rounded-xl border border-slate-200 bg-white p-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
+            时区
+            <input
+              type="text"
+              value={draft.timezone}
+              onChange={(event) => setDraft((prev) => ({ ...prev, timezone: event.target.value }))}
+              className="rounded-xl border border-slate-200 bg-white p-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
+            />
+          </label>
+        </>
       )}
       <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
         等待秒数

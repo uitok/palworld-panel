@@ -28,7 +28,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Validate release tag
         run: |
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
           [[ "$(git rev-parse HEAD)" == "$(git rev-list -n 1 "$GITHUB_REF_NAME")" ]]
           scripts/scan-secrets.sh
           git diff --check
@@ -88,7 +88,7 @@ jobs:
       - name: Validate release tag
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF_NAME -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "invalid release tag" }
+          if ($env:GITHUB_REF_NAME -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$') { throw "invalid release tag" }
           if ((git rev-parse HEAD).Trim() -ne (git rev-list -n 1 $env:GITHUB_REF_NAME).Trim()) { throw "tag does not point at HEAD" }
       - name: Build Windows release package
         shell: pwsh
@@ -137,11 +137,23 @@ jobs:
             "palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz" \
             "palpanel_${GITHUB_REF_NAME}_linux_amd64.spdx.json" \
             THIRD_PARTY_LICENSES.txt > SHA256SUMS
+      - name: Prepare release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="docs/release-${GITHUB_REF_NAME}.md"
+          if [[ ! -f "$notes" ]]; then
+            mkdir -p docs
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$GITHUB_REF_NAME" \
+              -f target_commitish="$GITHUB_SHA" \
+              --jq .body > "$notes"
+          fi
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: PalPanel ${{ github.ref_name }}
-          body_path: docs/release-v1.0.2.md
+          body_path: docs/release-${{ github.ref_name }}.md
           draft: false
           prerelease: false
           fail_on_unmatched_files: true

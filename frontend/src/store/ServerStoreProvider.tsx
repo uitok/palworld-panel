@@ -1,14 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { Job, ServerMetrics, ServerStatus, SessionInfo } from '../types';
 import { appEvents, readAppStorage, writeAppStorage } from '../config/defaults';
 import { authApi } from '../api/auth';
 import { ServerStoreContext } from './serverStoreContext';
 
+type AuthState = 'loading' | 'register' | 'login' | 'authenticated' | 'unavailable';
+
 export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [panelToken, setPanelTokenState] = useState<string>(() => {
-    return readAppStorage('token') || '';
-  });
-  const [authError, setAuthError] = useState(false);
+  const [authState, setAuthState] = useState<AuthState>('loading');
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [autoRefresh, setAutoRefreshState] = useState<boolean>(true);
   const [refreshKey, setRefreshKey] = useState<number>(0);
@@ -19,36 +18,31 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return readAppStorage('sidebarCollapsed') === 'true';
   });
 
-  const setPanelToken = (token: string) => {
-    setPanelTokenState(token);
-    writeAppStorage('token', token);
-    setAuthError(false);
-  };
-
-  const clearAuthError = () => setAuthError(false);
-
-  useEffect(() => {
-    let active = true;
-    setSession(null);
-    if (!panelToken) {
-      return () => {
-        active = false;
-      };
+  const refreshAuthentication = useCallback(async () => {
+    try {
+      const next = await authApi.status();
+      if (next.authenticated && next.user) {
+        setSession(next.user);
+        setAuthState('authenticated');
+      } else {
+        setSession(null);
+        setAuthState(next.initialized ? 'login' : 'register');
+      }
+    } catch {
+      setSession(null);
+      setAuthState('unavailable');
     }
-    void authApi.me()
-      .then((nextSession) => {
-        if (active) setSession(nextSession);
-      })
-      .catch(() => {
-        if (active) setSession(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [panelToken]);
+  }, []);
 
   useEffect(() => {
-    const onAuthError = () => setAuthError(true);
+    void refreshAuthentication();
+  }, [refreshAuthentication]);
+
+  useEffect(() => {
+    const onAuthError = () => {
+      setSession(null);
+      setAuthState('login');
+    };
     window.addEventListener(appEvents.authError, onAuthError);
     window.addEventListener(appEvents.legacyAuthError, onAuthError);
     return () => {
@@ -57,18 +51,23 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
     };
   }, []);
 
-  const setAutoRefresh = (auto: boolean) => {
-    setAutoRefreshState(auto);
+  const completeAuthentication = (nextSession: SessionInfo) => {
+    setSession(nextSession);
+    setAuthState('authenticated');
   };
 
-  const triggerRefresh = () => {
-    setRefreshKey((prev) => prev + 1);
+  const logout = async () => {
+    try {
+      await authApi.logout();
+    } finally {
+      setSession(null);
+      setAuthState('login');
+    }
   };
 
-  const setJobs = (nextJobs: Job[]) => {
-    setJobsState(Array.isArray(nextJobs) ? nextJobs : []);
-  };
-
+  const setAutoRefresh = (auto: boolean) => setAutoRefreshState(auto);
+  const triggerRefresh = () => setRefreshKey((previous) => previous + 1);
+  const setJobs = (nextJobs: Job[]) => setJobsState(Array.isArray(nextJobs) ? nextJobs : []);
   const setIsSidebarCollapsed = (collapsed: boolean) => {
     setIsSidebarCollapsedState(collapsed);
     writeAppStorage('sidebarCollapsed', String(collapsed));
@@ -77,11 +76,11 @@ export const ServerStoreProvider: React.FC<{ children: React.ReactNode }> = ({ c
   return (
     <ServerStoreContext.Provider
       value={{
-        panelToken,
-        setPanelToken,
-        authError,
-        clearAuthError,
+        authState,
         session,
+        completeAuthentication,
+        refreshAuthentication,
+        logout,
         autoRefresh,
         setAutoRefresh,
         refreshKey,

@@ -21,15 +21,16 @@ VITE_DEV_API_PROXY_TARGET=http://127.0.0.1:64217
 VITE_DEV_PORT=63107
 ```
 
-前端开发端口来自 `VITE_DEV_PORT`，默认 `63107`。开发环境通过 Vite 的 `VITE_DEV_API_PROXY_TARGET` 代理 `/api`；生产构建固定使用同源 `/api`，适合由后端直接托管 `frontend/dist`。界面不提供后端地址输入。
+前端开发端口来自 `VITE_DEV_PORT`，默认 `63107`。开发环境通过 Vite 的 `VITE_DEV_API_PROXY_TARGET` 代理 `/api`；生产构建固定使用同源 `/api` 并嵌入 Go 发布二进制。界面不提供后端地址输入。
 
-品牌名来自 `VITE_APP_BRAND`，默认 `PalPanel`。本地存储 key 使用 `VITE_STORAGE_PREFIX` 生成，例如默认 token key 是 `localStorage.palpanel_token`；旧版 key 会在读取时迁移一次。生产和开发构建均不接受构建期面板 Token，Token 只能由用户在运行时输入并保存在浏览器本地存储中。
+品牌名来自 `VITE_APP_BRAND`，默认 `PalPanel`。`VITE_STORAGE_PREFIX` 仅用于侧栏等非敏感界面偏好。认证状态来自 `/auth/status`，注册或登录后由浏览器保存 HttpOnly Session Cookie；前端不读取、持久化或注入认证凭据。
 
 ## 常用命令
 
 ```powershell
 npm install
 npm run dev
+npm run generate:api-types
 npm run typecheck
 npm run lint
 npm run test
@@ -37,16 +38,14 @@ npm run build
 npm run check
 ```
 
+`generate:api-types` deterministically regenerates the DTO contracts from `docs/openapi.yaml`. `npm run check` verifies that the generated file is current before type checking and testing.
+
 ## 后端联调
 
 1. 在 `backend` 目录启动后端：`PALPANEL_LISTEN_ADDR=0.0.0.0:64217 PALPANEL_CORS_ORIGINS=http://127.0.0.1:63107,http://localhost:63107 go run ./cmd/palpanel`
 2. 在本目录启动前端：`npm run dev -- --host 0.0.0.0`
 3. 浏览器访问 `http://127.0.0.1:63107/dashboard`
-4. 如需手动设置 token，在控制台执行：
-
-```js
-localStorage.setItem('palpanel_token', '<your-panel-token>')
-```
+4. 新数据库会进入管理员注册页；已有账号时进入登录页。Vite 代理保持浏览器请求同源，Session Cookie 会自动随 `/api` 请求发送。
 
 ## 路由
 
@@ -54,6 +53,7 @@ localStorage.setItem('palpanel_token', '<your-panel-token>')
 - `/dashboard` 系统总览
 - `/monitor` 实时监控
 - `/players` 玩家管理
+- `/gm` PalDefender GM 工具
 - `/banlist` 封禁列表
 - `/pals` 帕鲁管理
 - `/bases` 基地列表
@@ -65,6 +65,12 @@ localStorage.setItem('palpanel_token', '<your-panel-token>')
 - `/settings` 服务器设置
 
 `/setup` 会显示本地/最新 Steam Build ID，并提供“检查更新”和“检查后更新”。`/tasks` 可创建“检查更新”计划任务；该计划只产生提醒，不会自动安装更新。
+
+Mod 页的统一导入流程支持来源输入或本地 ZIP、GitHub ZIP 候选选择、检查结果、更新提示、异步 Job 进度和待重启状态。旧 Workshop 商店入口继续使用兼容 API。
+
+`/gm` 通过后端的类型化 PalDefender REST 代理工作，不会把 PalDefender Bearer Token 交给浏览器。页面提供玩家与在线状态筛选、六类背包查看、2,455 项 ItemID/中文名/图标搜索、最多 100 行批量发物品、玩家消息、广播、警报、踢出、封禁和解封。只读账号可查看；写操作按 `players:write` 禁用，安装与 REST Token 配置仍只在 `/security` 向具有 `security:write` 的管理员开放。
+
+管理员在 `/settings` 配置 Workshop 翻译所用的 OpenAI-compatible Base URL、模型和 API Key。前端只提交新 Key，不从读取接口取回秘密；测试、截图和示例配置必须使用占位值。
 
 ## 许可证
 

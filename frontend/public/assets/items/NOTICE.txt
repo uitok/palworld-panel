@@ -1,0 +1,12 @@
+Palworld item identification artwork
+
+Source: https://github.com/zaigie/palworld-server-tool
+Source commit: 18df587bd9e62d0f890b8cef1c32985fa6e9ba39
+
+Upstream NOTICE attribution:
+palworld-server-tool
+Copyright 2024 zaigie
+
+These WebP files are used only to identify items in the PalDefender GM tool.
+Palworld and its artwork are property of Pocketpair, Inc. The artwork is not
+relicensed under PalPanel's GPL-3.0-or-later license.

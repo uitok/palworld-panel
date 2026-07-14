@@ -2,11 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryProvider } from '../queryClient';
 import { ServerStoreProvider } from '../store/ServerStoreProvider';
-import { storageKeys } from '../config/defaults';
 import { Dashboard } from './Dashboard';
 
 const mocks = vi.hoisted(() => ({
-  authApi: { me: vi.fn() },
+  authApi: { status: vi.fn(), me: vi.fn() },
   serverApi: {
     getStatus: vi.fn(), getMetrics: vi.fn(), getLogs: vi.fn(), getWorld: vi.fn(), resetWorld: vi.fn(),
     start: vi.fn(), stop: vi.fn(), forceStop: vi.fn(),
@@ -23,7 +22,7 @@ vi.mock('../api/tasks', () => ({ tasksApi: mocks.tasksApi }));
 describe('Dashboard world reset and stopped logs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.setItem(storageKeys.token, 'admin-token');
+	mocks.authApi.status.mockResolvedValue({ initialized: true, authenticated: true, user: { name: 'admin', role: 'admin', permissions: ['read', 'world:reset'] } });
     mocks.authApi.me.mockResolvedValue({ name: 'admin', role: 'admin', permissions: ['read', 'world:reset'] });
     mocks.serverApi.getStatus.mockResolvedValue({
       status: 'stopped', installed: true, pending_restart: false, runtime_mode: 'wine_docker', setup_step: 'configured',

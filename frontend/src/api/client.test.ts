@@ -63,4 +63,18 @@ describe('api client response handling', () => {
     expect(currentApiBaseUrl()).toBe('/api');
     expect(baseUrl).toBe('/api');
   });
+
+  it('publishes an authentication event for HTTP 401 responses', async () => {
+	const listener = vi.fn();
+	window.addEventListener('palpanel:auth-error', listener);
+	await expect(
+	  handleRequest(
+		() => Promise.reject({ response: { status: 401 } }),
+		{},
+		{ quiet: true, fallbackOnError: false },
+	  ),
+	).rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+	expect(listener).toHaveBeenCalledTimes(1);
+	window.removeEventListener('palpanel:auth-error', listener);
+  });
 });

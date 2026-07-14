@@ -1,4 +1,4 @@
-type StorageKeyName = 'token' | 'sidebarCollapsed';
+type StorageKeyName = 'sidebarCollapsed';
 
 const envString = (value: unknown, fallback: string) => {
   const trimmed = String(value || '').trim();
@@ -16,12 +16,10 @@ export const appConfig = {
 export const DEV_PORT = appConfig.devPort;
 
 export const storageKeys: Record<StorageKeyName, string> = {
-  token: `${appConfig.storagePrefix}_token`,
   sidebarCollapsed: `${appConfig.storagePrefix}_sidebar_collapsed`,
 };
 
 export const legacyStorageKeys: Record<StorageKeyName, string> = {
-  token: 'palsphere_token',
   sidebarCollapsed: 'palsphere_sidebar_collapsed',
 };
 

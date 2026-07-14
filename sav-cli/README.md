@@ -25,7 +25,7 @@ Known status:
 - `PlZ1`, `PlZ2`, and `CNK` containers are decoded with zlib.
 - `PlM1` is decoded with the open-source `gooz` Oodle/Kraken decompressor when cgo is enabled.
 - Static `CGO_ENABLED=0` builds report `parser_incompatible` for `PlM1` instead of failing to compile.
-- Normalization covers players, guilds, bases, worker Pals, item containers and slots, and map objects. Unknown properties are skipped with warnings where an optional relationship cannot be resolved.
+- Normalization covers players, guilds, bases, worker Pals, item containers and slots, and map objects. Per-player saves under `Players/` associate `InventoryInfo` containers with their player; a missing or damaged individual player save is reported as a warning without failing the world index. Unknown properties are skipped with warnings where an optional relationship cannot be resolved.
 - The parser is read-only and never writes back to `.sav`.
 
 ## Palworld 1.0 verification

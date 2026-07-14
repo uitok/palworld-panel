@@ -3,6 +3,7 @@ package docker
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -182,7 +183,7 @@ func TestBuildImageDoesNotRetryDockerfileSyntaxError(t *testing.T) {
 	}
 }
 
-func TestStartMountsPersistentLogsAndBoundsDockerLogs(t *testing.T) {
+func TestStartPublishesManagementPortsOnLoopback(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell fixture exercises the Linux Wine runner")
 	}
@@ -190,7 +191,7 @@ func TestStartMountsPersistentLogsAndBoundsDockerLogs(t *testing.T) {
 	commandLog := filepath.Join(root, "commands.log")
 	fakeDocker := filepath.Join(root, "docker")
 	script := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$*\" >> " + shellQuote(commandLog) + "\n" +
+		"printf '%s\\n' \"$@\" >> " + shellQuote(commandLog) + "\n" +
 		"if [ \"$1\" = inspect ]; then echo 'No such object' >&2; exit 1; fi\n" +
 		"exit 0\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
@@ -199,7 +200,7 @@ func TestStartMountsPersistentLogsAndBoundsDockerLogs(t *testing.T) {
 	cfg := appconfig.Config{
 		DockerBinary: fakeDocker, DockerImage: "image", DockerContainer: "container",
 		ServerDir: filepath.Join(root, "server"), WinePrefixDir: filepath.Join(root, "wineprefix"), LogsDir: filepath.Join(root, "logs"),
-		GamePort: 8211, QueryPort: 27015, RESTPort: 8212,
+		GamePort: 8211, QueryPort: 27015, RESTPort: 18212, PalDefenderRESTPort: 18080,
 	}
 	if err := NewRunner(cfg).StartWithArgs(t.Context(), []string{"-port=8211", "-log"}); err != nil {
 		t.Fatal(err)
@@ -208,10 +209,85 @@ func TestStartMountsPersistentLogsAndBoundsDockerLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := string(body)
-	for _, expected := range []string{"max-size=20m", "max-file=5", cfg.LogsDir + ":/data/logs", "-log"} {
-		if !strings.Contains(command, expected) {
-			t.Errorf("Docker start command missing %q:\n%s", expected, command)
+	args := strings.Split(strings.TrimSpace(string(body)), "\n")
+	for _, expected := range []string{
+		"max-size=20m",
+		"max-file=5",
+		cfg.LogsDir + ":/data/logs",
+		"-log",
+	} {
+		if !containsExact(args, expected) {
+			t.Errorf("Docker start arguments missing %q:\n%s", expected, string(body))
 		}
 	}
+	if !containsAdjacent(args, "-e", "WINEDLLOVERRIDES="+wineDLLOverrides) {
+		t.Errorf("Docker start arguments do not pass the Wine DLL override as an environment variable:\n%s", string(body))
+	}
+	for _, binding := range []string{
+		"8211:8211/udp",
+		"27015:27015/udp",
+		"127.0.0.1:18212:8212/tcp",
+		"127.0.0.1:18080:18080/tcp",
+	} {
+		if !containsAdjacent(args, "-p", binding) {
+			t.Errorf("Docker start arguments do not publish %q:\n%s", binding, string(body))
+		}
+	}
+	for _, forbidden := range []string{"18212:8212/tcp", "18080:18080/tcp"} {
+		if containsExact(args, forbidden) {
+			t.Errorf("management port was published on all host interfaces as %q:\n%s", forbidden, string(body))
+		}
+	}
+}
+
+func TestWineDLLOverridesPreferNativePalDefenderLoader(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Bash fixture exercises the Linux Wine runner")
+	}
+	entrypoint, err := filepath.Abs(filepath.Join("..", "..", "deployments", "wine-runner", "entrypoint.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		configured string
+		want       string
+	}{
+		{name: "empty", want: wineDLLOverrides},
+		{name: "runner value is stable", configured: wineDLLOverrides, want: wineDLLOverrides},
+		{name: "preserves unrelated", configured: "xaudio2_7=b", want: "xaudio2_7=b;" + wineDLLOverrides},
+		{name: "normalizes separator", configured: "xaudio2_7=b;", want: "xaudio2_7=b;" + wineDLLOverrides},
+		{name: "upgrades old default", configured: "dwmapi=n,b", want: wineDLLOverrides},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", `source "$1" source-only; palpanel_wine_dll_overrides "$2"`, "bash", entrypoint, tt.configured)
+			cmd.Env = append(os.Environ(), "PALPANEL_ENTRYPOINT_SOURCE_ONLY=1")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("source entrypoint: %v: %s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != tt.want {
+				t.Fatalf("overrides = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func containsExact(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAdjacent(values []string, first, second string) bool {
+	for index := 0; index+1 < len(values); index++ {
+		if values[index] == first && values[index+1] == second {
+			return true
+		}
+	}
+	return false
 }

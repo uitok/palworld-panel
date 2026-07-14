@@ -5,11 +5,17 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 root_dir="$(cd -- "$script_dir/.." && pwd -P)"
 packages_dir="$root_dir/dist/packages"
 staging_dir="$packages_dir/staging"
+webui_embed_dir="$root_dir/backend/internal/webui/embedded"
 
 version=""
 targets="linux-amd64"
 skip_tests=0
 clean=0
+
+cleanup_webui_stage() {
+  find "$webui_embed_dir" -mindepth 1 ! -name .keep -exec rm -rf -- {} + 2>/dev/null || true
+}
+trap cleanup_webui_stage EXIT
 
 usage() {
   printf 'Usage: scripts/package.sh [--version VERSION] [--targets linux-amd64] [--skip-tests] [--clean]\n'
@@ -49,9 +55,9 @@ mkdir -p "$packages_dir" "$staging_dir"
 
 if (( ! skip_tests )); then
   printf '[palpanel] Running backend tests\n'
-  (cd "$root_dir/backend" && go test ./...)
+  (cd "$root_dir/backend" && go test -p=1 ./...)
   printf '[palpanel] Running sav-cli tests with cgo\n'
-  (cd "$root_dir/sav-cli" && CGO_ENABLED=1 go test ./...)
+  (cd "$root_dir/sav-cli" && CGO_ENABLED=1 go test -p=1 ./...)
   printf '[palpanel] Installing frontend dependencies\n'
   (cd "$root_dir/frontend" && npm ci)
   printf '[palpanel] Running frontend checks\n'
@@ -61,12 +67,15 @@ else
   (cd "$root_dir/frontend" && npm ci && npm run build)
 fi
 
+cleanup_webui_stage
+mkdir -p "$webui_embed_dir"
+cp -R "$root_dir/frontend/dist/." "$webui_embed_dir/"
+
 copy_common_files() {
   local package_dir="$1"
   local gooz_dir
   gooz_dir="$(cd "$root_dir/sav-cli" && go list -m -f '{{.Dir}}' github.com/oriath-net/gooz)"
-  mkdir -p "$package_dir/bin" "$package_dir/config" "$package_dir/frontend" "$package_dir/backend/deployments" "$package_dir/systemd" "$package_dir/licenses"
-  cp -R "$root_dir/frontend/dist" "$package_dir/frontend/dist"
+  mkdir -p "$package_dir/bin" "$package_dir/config" "$package_dir/backend/deployments" "$package_dir/systemd" "$package_dir/licenses"
   cp -R "$root_dir/backend/deployments/wine-runner" "$package_dir/backend/deployments/wine-runner"
   cp "$root_dir/scripts/palpanel.env.example" "$package_dir/config/palpanel.env.example"
   cp "$root_dir/scripts/package-README.md" "$package_dir/README.md"
@@ -78,6 +87,7 @@ copy_common_files() {
   cp "$root_dir/sav-cli/LICENSE" "$package_dir/licenses/sav-cli-LICENSE.txt"
   cp "$gooz_dir/COPYING" "$package_dir/licenses/GPL-3.0.txt"
   cp "$root_dir/backend/internal/pallocalize/LICENSE.apache-2.0" "$package_dir/licenses/pallocalize-Apache-2.0.txt"
+  cp "$root_dir/backend/internal/paldefender/assets/LICENSE.txt" "$package_dir/licenses/PalDefender-MIT.txt"
   chmod 755 "$package_dir/palpanelctl"
 }
 
@@ -98,7 +108,7 @@ build_linux() {
   local backend_ldflags="-s -w -X palpanel/internal/buildinfo.Version=$version -X palpanel/internal/buildinfo.Commit=$commit -X palpanel/internal/buildinfo.BuildTime=$build_time"
   local sav_ldflags="-s -w -X palpanel/sav-cli/internal/buildinfo.Version=$version -X palpanel/sav-cli/internal/buildinfo.Commit=$commit -X palpanel/sav-cli/internal/buildinfo.BuildTime=$build_time"
   printf '[palpanel] Building backend linux-%s\n' "$arch"
-  (cd "$root_dir/backend" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$backend_ldflags" -o "$package_dir/bin/palpanel" ./cmd/palpanel)
+  (cd "$root_dir/backend" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags embed_webui -trimpath -ldflags "$backend_ldflags" -o "$package_dir/bin/palpanel" ./cmd/palpanel)
   printf '[palpanel] Building cgo sav-cli linux-%s\n' "$arch"
   (cd "$root_dir/sav-cli" && CGO_ENABLED=1 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$sav_ldflags" -o "$package_dir/bin/sav-cli" ./cmd/sav_cli)
   chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli"
@@ -154,6 +164,7 @@ for target in "${target_list[@]}"; do
     *) printf 'Unsupported release target: %s\n' "$target" >&2; exit 64 ;;
   esac
 done
+cleanup_webui_stage
 build_source_archive
 build_project_source_archive
 rm -rf "$staging_dir"

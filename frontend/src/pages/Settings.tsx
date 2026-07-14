@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Info, KeyRound, Languages, Plus, RefreshCw, Save, Shield } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Info, KeyRound, Languages, Plus, RefreshCw, Save, Shield, Trash2 } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
+import { authApi } from '../api/auth';
 import { aiTranslationApi } from '../api/aiTranslation';
 import { serverApi } from '../api/server';
 import { settingsApi } from '../api/settings';
 import { useServerStore } from '../store/useServerStore';
-import { storageKeys } from '../config/defaults';
-import type { AITranslationConfig, AITranslationConfigUpdate, FieldSchema, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
+import type { AITranslationConfig, AITranslationConfigUpdate, DevelopmentKey, FieldSchema, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
 
 const groupLabels: Record<string, string> = {
   server_management: '服务器管理',
@@ -31,7 +31,7 @@ const coerceInitialValue = (field: FieldSchema, value: unknown) => {
 };
 
 export const Settings: React.FC = () => {
-  const { panelToken, setPanelToken, triggerRefresh, session } = useServerStore();
+  const { triggerRefresh, session } = useServerStore();
   const [fields, setFields] = useState<FieldSchema[]>([]);
   const [draft, setDraft] = useState<PalworldSettings>({});
   const [path, setPath] = useState('');
@@ -42,7 +42,6 @@ export const Settings: React.FC = () => {
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [activeGroup, setActiveGroup] = useState('server_management');
-  const [tokenInput, setTokenInput] = useState(panelToken);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [aiConfig, setAIConfig] = useState<AITranslationConfig | null>(null);
@@ -51,6 +50,10 @@ export const Settings: React.FC = () => {
   const [aiAPIKey, setAIAPIKey] = useState('');
   const [clearAIAPIKey, setClearAIAPIKey] = useState(false);
   const [aiBusy, setAIBusy] = useState(false);
+  const [developmentKeys, setDevelopmentKeys] = useState<DevelopmentKey[]>([]);
+  const [developmentKeyName, setDevelopmentKeyName] = useState('本机自动化');
+  const [revealedDevelopmentKey, setRevealedDevelopmentKey] = useState('');
+  const [developmentKeysBusy, setDevelopmentKeysBusy] = useState(false);
   const canConfigureAI = Boolean(session?.permissions.includes('ai:config'));
 
   const load = async () => {
@@ -115,6 +118,13 @@ export const Settings: React.FC = () => {
     };
   }, [canConfigureAI]);
 
+  useEffect(() => {
+    if (!session?.permissions.includes('security:write')) return;
+    void authApi.listKeys()
+      .then(setDevelopmentKeys)
+      .catch((error) => setMessage(getErrorMessage(error)));
+  }, [session]);
+
   const groups = useMemo(() => {
     const ids = Array.from(new Set(fields.map((field) => field.group)));
     return ids.map((id) => ({ id, label: groupLabels[id] || id, fields: fields.filter((field) => field.group === id) }));
@@ -147,7 +157,6 @@ export const Settings: React.FC = () => {
     const valid = await validate();
     if (!valid) return;
     try {
-      setPanelToken(tokenInput);
       const saved = await settingsApi.updateSettings(submission());
       setPendingRestart(saved.pending_restart);
       setIssues(saved.issues || []);
@@ -157,6 +166,34 @@ export const Settings: React.FC = () => {
       triggerRefresh();
     } catch (error) {
       setMessage(getErrorMessage(error));
+    }
+  };
+
+  const createDevelopmentKey = async () => {
+    if (!developmentKeyName.trim()) return;
+    setDevelopmentKeysBusy(true);
+    try {
+      const key = await authApi.createKey(developmentKeyName.trim());
+      setRevealedDevelopmentKey(key.token || '');
+      setDevelopmentKeys((current) => [key, ...current]);
+      setMessage('开发密钥已创建，请立即保存；关闭后无法再次查看完整值');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setDevelopmentKeysBusy(false);
+    }
+  };
+
+  const revokeDevelopmentKey = async (id: string) => {
+    setDevelopmentKeysBusy(true);
+    try {
+      await authApi.revokeKey(id);
+      setDevelopmentKeys((current) => current.map((key) => key.id === id ? { ...key, revoked_at: new Date().toISOString() } : key));
+      setMessage('开发密钥已撤销');
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setDevelopmentKeysBusy(false);
     }
   };
 
@@ -347,21 +384,6 @@ export const Settings: React.FC = () => {
             </div>
           )}
 
-          <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
-              面板 API 令牌
-              <input
-                type="password"
-                value={tokenInput}
-                onChange={(event) => setTokenInput(event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
-              />
-            </label>
-            <p className="mt-2 text-[10px] font-medium text-slate-400">
-              保存设置时同步写入本机 localStorage.{storageKeys.token}。
-            </p>
-          </div>
-
           <div className="sticky bottom-20 mt-6 flex justify-end border-t border-slate-100 bg-white/95 pt-4 backdrop-blur lg:bottom-0">
             <button
               type="button"
@@ -374,6 +396,57 @@ export const Settings: React.FC = () => {
           </div>
         </section>
       </div>
+
+      {session?.permissions.includes('security:write') && (
+        <section className="border-y border-slate-100 bg-white py-5 sm:py-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-[15px] font-bold text-slate-800"><KeyRound size={17} className="text-sky-500" />开发密钥</div>
+              <p className="mt-1 text-[11px] font-semibold text-slate-400">用于脚本和 API 客户端，拥有管理员权限。</p>
+            </div>
+            <div className="flex w-full gap-2 sm:w-auto">
+              <input
+                type="text"
+                value={developmentKeyName}
+                onChange={(event) => setDevelopmentKeyName(event.target.value)}
+                maxLength={64}
+                aria-label="开发密钥名称"
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none sm:w-52"
+              />
+              <button type="button" onClick={() => void createDevelopmentKey()} disabled={developmentKeysBusy || !developmentKeyName.trim()} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">
+                <Plus size={14} />创建
+              </button>
+            </div>
+          </div>
+
+          {revealedDevelopmentKey && (
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <code className="min-w-0 flex-1 break-all text-xs font-semibold text-amber-900">{revealedDevelopmentKey}</code>
+              <button type="button" title="复制开发密钥" aria-label="复制开发密钥" onClick={() => void navigator.clipboard.writeText(revealedDevelopmentKey)} className="shrink-0 rounded-lg p-2 text-amber-700 hover:bg-amber-100">
+                <Copy size={15} />
+              </button>
+            </div>
+          )}
+
+          <div className="mt-4 divide-y divide-slate-100 border-y border-slate-100">
+            {developmentKeys.length === 0 ? (
+              <p className="py-5 text-center text-xs font-semibold text-slate-400">尚未创建开发密钥</p>
+            ) : developmentKeys.map((key) => (
+              <div key={key.id} className="flex items-center justify-between gap-3 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-bold text-slate-700">{key.name}</p>
+                  <p className="mt-0.5 font-mono text-[10px] font-semibold text-slate-400">{key.prefix}... · {key.revoked_at ? '已撤销' : '有效'}</p>
+                </div>
+                {!key.revoked_at && (
+                  <button type="button" title="撤销开发密钥" aria-label={`撤销 ${key.name}`} onClick={() => void revokeDevelopmentKey(key.id)} disabled={developmentKeysBusy} className="shrink-0 rounded-lg p-2 text-rose-500 hover:bg-rose-50 disabled:opacity-40">
+                    <Trash2 size={15} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {canConfigureAI && (
         <section className="rounded-lg border border-slate-100 bg-white p-5 sm:p-6">

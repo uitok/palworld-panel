@@ -38,6 +38,11 @@ func ReadInfo(path string) (Info, error) {
 	if info.PackageName == "" {
 		return Info{}, fmt.Errorf("Info.json missing PackageName")
 	}
+	if len(info.PackageName) > 255 || strings.IndexFunc(info.PackageName, func(character rune) bool {
+		return character < 0x20 || character == 0x7f
+	}) >= 0 {
+		return Info{}, fmt.Errorf("Info.json contains an invalid PackageName")
+	}
 	if info.Name == "" {
 		info.Name = info.PackageName
 	}

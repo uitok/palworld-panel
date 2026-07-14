@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { KeyRound, RefreshCw, RotateCcw, Save, ShieldCheck, Sparkles, Wand2 } from 'lucide-react';
+import { Gamepad2, KeyRound, RefreshCw, RotateCcw, Save, ShieldCheck, Sparkles, Wand2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { getErrorMessage } from '../api/client';
-import { securityApi } from '../api/security';
+import { palDefenderPanelPermissions, securityApi } from '../api/security';
 import { tasksApi } from '../api/tasks';
 import type { Job, PalDefenderRelease, PalDefenderStatus, TokenResult } from '../types';
 import { StatusBadge } from '../components/ui/StatusBadge';
@@ -83,7 +84,7 @@ export const Security: React.FC = () => {
 
   const createToken = async () => {
     try {
-      const token = await securityApi.createToken(tokenName, ['REST.*']);
+      const token = await securityApi.createToken(tokenName, [...palDefenderPanelPermissions]);
       setTokenResult(token);
       setMessage('已生成面板专用 REST Token，请妥善保存');
       await load();
@@ -119,6 +120,7 @@ export const Security: React.FC = () => {
             <div className="flex flex-col gap-3">
               <InfoRow label="安装状态" value={status.installed ? '已安装' : '未安装'} ok={status.installed} />
               <InfoRow label="版本" value={status.version || '未知'} ok={Boolean(status.version)} />
+              <InfoRow label="内置 DLL" value={status.bundled.version ? `v${status.bundled.version}` : '不可用'} ok={Boolean(status.bundled.version)} />
               <InfoRow label="REST API" value={status.rest_api_enabled ? '已启用' : '未启用'} ok={status.rest_api_enabled} />
               <InfoRow label="首次启动" value={status.needs_first_start ? '需要启动生成配置' : '已就绪'} ok={!status.needs_first_start} />
               {status.warnings.length > 0 && (
@@ -133,7 +135,7 @@ export const Security: React.FC = () => {
         <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
           <h3 className="mb-4 flex items-center gap-2 text-[15px] font-bold text-slate-800">
             <Sparkles size={18} className="text-sky-500" />
-            Release
+            加载器 Release
           </h3>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
             <p className="text-[11px] font-semibold text-slate-400">Latest</p>
@@ -144,6 +146,7 @@ export const Security: React.FC = () => {
             <p className="mt-3 text-[11px] font-semibold text-slate-500">
               {(latest?.assets || []).map((asset) => asset.name).join(' / ') || '暂无资产信息'}
             </p>
+            {status?.bundled.sha256 && <p className="mt-3 break-all font-mono text-[9px] text-slate-400">DLL SHA-256: {status.bundled.sha256}</p>}
           </div>
           {activeJob && (
             <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-3">
@@ -168,6 +171,9 @@ export const Security: React.FC = () => {
               回滚最近备份
             </button>
           </div>
+          <Link to="/gm" className="mt-3 flex items-center justify-center gap-2 rounded-lg border border-sky-200 px-4 py-2.5 text-xs font-bold text-sky-700 hover:bg-sky-50">
+            <Gamepad2 size={14} /> 打开 GM 工具
+          </Link>
         </section>
 
         <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
@@ -183,7 +189,7 @@ export const Security: React.FC = () => {
               className="rounded-xl border border-slate-200 p-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
             />
             <button type="button" onClick={createToken} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800">
-              生成 REST.* Token
+              生成 GM Token
             </button>
             {tokenResult && (
               <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">

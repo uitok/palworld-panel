@@ -22,18 +22,23 @@ required=(
   '/LICENSE'
   '/THIRD_PARTY_LICENSES.txt'
   '/licenses/GPL-3.0.txt'
+  '/licenses/PalDefender-MIT.txt'
   '/checksums.txt'
 )
 for item in "${required[@]}"; do
   grep -Fq "$item" <<<"$listing" || { printf 'release archive is missing %s\n' "$item" >&2; exit 1; }
 done
+if grep -Eq '(^|/)frontend/' <<<"$listing"; then
+  printf 'release archive contains a separate frontend directory\n' >&2
+  exit 1
+fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 tar -xzf "$archive" -C "$tmp"
 package_dir="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 (cd "$package_dir" && sha256sum -c checksums.txt >/dev/null)
-if grep -RInI -E '(PANEL_TOKEN|STEAM_WEB_API_KEY)[[:space:]]*=[[:space:]]*[A-Za-z0-9_+/=-]{20,}' "$package_dir" --exclude='checksums.txt'; then
+if grep -RInI -E 'STEAM_WEB_API_KEY[[:space:]]*=[[:space:]]*[A-Za-z0-9_+/=-]{20,}' "$package_dir" --exclude='checksums.txt'; then
   printf 'release archive contains a configured secret\n' >&2
   exit 1
 fi
@@ -61,11 +66,23 @@ fi
 if [[ -n "$project_source_archive" ]]; then
   [[ -f "$project_source_archive" ]] || { printf 'project source archive not found: %s\n' "$project_source_archive" >&2; exit 1; }
   project_listing="$(tar -tzf "$project_source_archive")"
-  if grep -E '/(data|logs|run|dist|node_modules)/|/\.env$|/\.env\..*\.local$|\.(db|sqlite|log|sav|zip|exe|dll|o|a)$' <<<"$project_listing"; then
+  if grep -E '/(data|logs|run|dist|node_modules)/|/\.env$|/\.env\..*\.local$|\.(db|sqlite|log|sav|zip|exe|o|a)$' <<<"$project_listing"; then
     printf 'project source archive contains runtime data, secrets, dependencies, or build artifacts\n' >&2
     exit 1
   fi
-  for item in '/LICENSE' '/backend/go.mod' '/frontend/package.json' '/sav-cli/go.mod' '/scripts/package.ps1' '/sav-cli/vendor/github.com/oriath-net/gooz/kraken.cpp'; do
+  unexpected_dlls="$(grep -Ei '\.dll$' <<<"$project_listing" | grep -Fv '/backend/internal/paldefender/assets/PalDefender.dll' || true)"
+  if [[ -n "$unexpected_dlls" ]]; then
+    printf '%s\nproject source archive contains an unexpected DLL\n' "$unexpected_dlls" >&2
+    exit 1
+  fi
+  embedded_dll="$(grep -E '/backend/internal/paldefender/assets/PalDefender\.dll$' <<<"$project_listing" || true)"
+  [[ -n "$embedded_dll" ]] || { printf 'project source archive is missing bundled PalDefender.dll\n' >&2; exit 1; }
+  embedded_hash="$(tar -xOzf "$project_source_archive" "$embedded_dll" | sha256sum | awk '{print $1}')"
+  [[ "$embedded_hash" == '18b9f63eea2dd407f29b77a262f9d33b1dcd4b744328892c13d5822701418d03' ]] || {
+    printf 'bundled PalDefender.dll checksum mismatch\n' >&2
+    exit 1
+  }
+  for item in '/LICENSE' '/backend/go.mod' '/frontend/package.json' '/sav-cli/go.mod' '/scripts/package.ps1' '/sav-cli/vendor/github.com/oriath-net/gooz/kraken.cpp' '/backend/internal/paldefender/assets/LICENSE.txt'; do
     grep -Fq "$item" <<<"$project_listing" || { printf 'project source archive is missing %s\n' "$item" >&2; exit 1; }
   done
 fi

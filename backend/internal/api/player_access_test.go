@@ -31,7 +31,7 @@ func TestPlayerAccessEmptyListsReturnArrays(t *testing.T) {
 	for _, path := range []string{"/api/players/bans", "/api/players/whitelist"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer secret")
+		authorizeTestRequest(req)
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s expected 200, got %d: %s", path, rec.Code, rec.Body.String())
@@ -131,7 +131,6 @@ func newPlayerTestRouter(t *testing.T, restClient palrest.Client) (*gin.Engine, 
 		BackupsDir:          filepath.Join(root, "backups"),
 		LogsDir:             filepath.Join(root, "logs"),
 		DBPath:              filepath.Join(root, "test.db"),
-		PanelToken:          "secret",
 		RequireAuth:         true,
 		DockerBinary:        "docker",
 		DockerImage:         "test-image",
@@ -150,6 +149,7 @@ func newPlayerTestRouter(t *testing.T, restClient palrest.Client) (*gin.Engine, 
 	if err != nil {
 		t.Fatalf("db.Open returned error: %v", err)
 	}
+	provisionTestPrincipal(t, store, RoleAdmin)
 	runner := docker.NewRunner(cfg)
 	serverManager := server.NewManager(cfg, store, runner)
 	monitorManager := monitor.New(cfg, store, serverManager, restClient)
@@ -173,7 +173,7 @@ func postJSON(t *testing.T, router *gin.Engine, path string, payload map[string]
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

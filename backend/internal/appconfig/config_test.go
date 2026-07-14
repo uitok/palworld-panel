@@ -1,21 +1,23 @@
 package appconfig
 
 import (
+	"encoding/hex"
 	"os"
 	"testing"
 )
 
-func TestLoadRejectsMissingPanelTokenByDefault(t *testing.T) {
-	t.Setenv("PANEL_TOKEN", "")
-	t.Setenv("PALPANEL_REQUIRE_AUTH", "true")
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected missing PANEL_TOKEN to fail")
+func TestLoadRequiresAuthenticationByDefault(t *testing.T) {
+	t.Setenv("PALPANEL_REQUIRE_AUTH", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.RequireAuth {
+		t.Fatal("expected authentication to be enabled by default")
 	}
 }
 
 func TestLoadAllowsExplicitDevNoAuth(t *testing.T) {
-	t.Setenv("PANEL_TOKEN", "")
 	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
 	t.Setenv("STEAM_WEB_API_KEY", "steam-key")
 	cwd, err := os.Getwd()
@@ -48,7 +50,6 @@ func TestLoadAllowsExplicitDevNoAuth(t *testing.T) {
 }
 
 func TestLoadUsesPalDefenderRESTOverrides(t *testing.T) {
-	t.Setenv("PANEL_TOKEN", "")
 	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
 	t.Setenv("PALPANEL_PALDEFENDER_REST_BASE_URL", "http://10.0.0.4:28080/")
 	t.Setenv("PALPANEL_PALDEFENDER_REST_PORT", "28080")
@@ -73,8 +74,7 @@ func TestLoadUsesPalDefenderRESTOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadLeavesSteamWebAPIKeyUnconfiguredWhenEnvUnset(t *testing.T) {
-	t.Setenv("PANEL_TOKEN", "")
+func TestLoadUsesBundledSteamWebAPIKeyWhenEnvUnset(t *testing.T) {
 	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
 	t.Setenv("STEAM_WEB_API_KEY", "")
 	cwd, err := os.Getwd()
@@ -86,16 +86,18 @@ func TestLoadLeavesSteamWebAPIKeyUnconfiguredWhenEnvUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if cfg.SteamWebAPIKeySource != "" {
+	if cfg.SteamWebAPIKeySource != "bundled" || cfg.SteamWebAPIKeySourceName() != "bundled" {
 		t.Fatalf("SteamWebAPIKeySource = %q", cfg.SteamWebAPIKeySource)
 	}
-	if cfg.SteamWebAPIKey != "" || cfg.SteamWebAPIKeyConfigured() {
-		t.Fatal("Steam Web API key should be unconfigured")
+	if !cfg.SteamWebAPIKeyConfigured() || len(cfg.EffectiveSteamWebAPIKey()) != 32 {
+		t.Fatal("bundled Steam Web API key should be configured")
+	}
+	if _, err := hex.DecodeString(cfg.EffectiveSteamWebAPIKey()); err != nil {
+		t.Fatalf("bundled Steam Web API key is not hexadecimal: %v", err)
 	}
 }
 
 func TestLoadUsesProductionNetworkAndProviderDefaults(t *testing.T) {
-	t.Setenv("PANEL_TOKEN", "")
 	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
 	t.Setenv("PALPANEL_LISTEN_ADDR", "")
 	t.Setenv("PALPANEL_STEAM_API_BASE_URL", "")
@@ -114,15 +116,8 @@ func TestLoadUsesProductionNetworkAndProviderDefaults(t *testing.T) {
 	if cfg.AITranslationTimeoutSeconds != 90 {
 		t.Fatalf("AITranslationTimeoutSeconds = %d", cfg.AITranslationTimeoutSeconds)
 	}
-}
-
-func TestLoadRejectsWeakRoleTokens(t *testing.T) {
-	t.Setenv("PANEL_TOKEN", "replace-with-a-random-32-byte-token")
-	t.Setenv("PANEL_OPERATOR_TOKEN", "change-me")
-	t.Setenv("PALPANEL_REQUIRE_AUTH", "true")
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected weak operator token to fail")
+	if cfg.MonitorRetentionDays != DefaultMonitorRetentionDays {
+		t.Fatalf("MonitorRetentionDays = %d", cfg.MonitorRetentionDays)
 	}
 }
 
@@ -132,10 +127,10 @@ func TestLoadRejectsInvalidScalarConfiguration(t *testing.T) {
 		"PALPANEL_STEAM_API_TIMEOUT_SECONDS":      "soon",
 		"PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS": "0",
 		"PALPANEL_LISTEN_ADDR":                    "127.0.0.1:not-a-port",
+		"PALPANEL_MONITOR_RETENTION_DAYS":         "-1",
 	}
 	for name, value := range tests {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("PANEL_TOKEN", "")
 			t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
 			t.Setenv(name, value)
 			if _, err := Load(); err == nil {

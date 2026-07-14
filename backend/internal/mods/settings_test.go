@@ -3,6 +3,7 @@ package mods
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +14,16 @@ func TestReadInfoRequiresPackageName(t *testing.T) {
 	}
 	if _, err := ReadInfo(path); err == nil {
 		t.Fatal("expected missing PackageName error")
+	}
+}
+
+func TestReadInfoRejectsPackageNameControlCharacters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Info.json")
+	if err := os.WriteFile(path, []byte("{\"Name\":\"Bad\",\"PackageName\":\"Good\\nActiveModList=Injected\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadInfo(path); err == nil || !strings.Contains(err.Error(), "invalid PackageName") {
+		t.Fatalf("ReadInfo error = %v", err)
 	}
 }
 

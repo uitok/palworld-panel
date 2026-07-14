@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -21,6 +22,7 @@ type Job struct {
 	Progress  int    `json:"progress"`
 	Message   string `json:"message"`
 	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -92,6 +94,7 @@ type Schedule struct {
 	Enabled         bool   `json:"enabled"`
 	IntervalMinutes int    `json:"interval_minutes,omitempty"`
 	TimeOfDay       string `json:"time_of_day,omitempty"`
+	Timezone        string `json:"timezone,omitempty"`
 	WaitTime        int    `json:"waittime,omitempty"`
 	Message         string `json:"message,omitempty"`
 	LastRunAt       string `json:"last_run_at,omitempty"`
@@ -121,12 +124,48 @@ type AITranslation struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+type User struct {
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"-"`
+	Role         string `json:"role"`
+	Disabled     bool   `json:"disabled"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+type Session struct {
+	ID         string `json:"id"`
+	UserID     string `json:"user_id"`
+	TokenHash  string `json:"-"`
+	ExpiresAt  string `json:"expires_at"`
+	LastSeenAt string `json:"last_seen_at"`
+	CreatedAt  string `json:"created_at"`
+}
+
+type APIKey struct {
+	ID         string `json:"id"`
+	UserID     string `json:"user_id"`
+	Name       string `json:"name"`
+	Prefix     string `json:"prefix"`
+	TokenHash  string `json:"-"`
+	LastUsedAt string `json:"last_used_at,omitempty"`
+	RevokedAt  string `json:"revoked_at,omitempty"`
+	CreatedAt  string `json:"created_at"`
+}
+
+var ErrAlreadyInitialized = errors.New("panel is already initialized")
+
 func Open(path string) (*Store, error) {
 	d, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	d.SetMaxOpenConns(1)
+	if err := configureSQLite(d); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
 	s := &Store{db: d}
 	if err := s.Migrate(context.Background()); err != nil {
 		_ = d.Close()
@@ -135,11 +174,82 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+func configureSQLite(d *sql.DB) error {
+	for _, stmt := range []string{
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA foreign_keys = ON`,
+	} {
+		if _, err := d.Exec(stmt); err != nil {
+			return fmt.Errorf("configure sqlite: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
+func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	var version int
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version)
+	return version, err
+}
+
 func (s *Store) Migrate(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		applied_at TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("create schema migrations table: %w", err)
+	}
+	for _, migration := range migrations() {
+		var applied int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=?`, migration.version).Scan(&applied); err != nil {
+			return fmt.Errorf("read schema migration %d: %w", migration.version, err)
+		}
+		if applied > 0 {
+			continue
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin schema migration %d: %w", migration.version, err)
+		}
+		if err := migration.apply(ctx, tx); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply schema migration %d: %w", migration.version, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, migration.version, now()); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record schema migration %d: %w", migration.version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit schema migration %d: %w", migration.version, err)
+		}
+	}
+	return nil
+}
+
+type schemaMigration struct {
+	version int
+	apply   func(context.Context, *sql.Tx) error
+}
+
+func migrations() []schemaMigration {
+	return []schemaMigration{
+		{version: 1, apply: migrateBaseline},
+		{version: 2, apply: migrateOperationalReliability},
+		{version: 3, apply: migrateJobErrorCodes},
+		{version: 4, apply: migrateAccountAuthentication},
+	}
+}
+
+func migrateBaseline(ctx context.Context, tx *sql.Tx) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS jobs (
 			id TEXT PRIMARY KEY,
@@ -148,6 +258,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			progress INTEGER NOT NULL DEFAULT 0,
 			message TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
+			error_code TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
@@ -250,48 +361,89 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)`,
 	}
 	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
-	if err := s.ensureColumn(ctx, "mods", "workshop_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+	for _, column := range []struct{ name, definition string }{
+		{"workshop_id", "TEXT NOT NULL DEFAULT ''"},
+		{"preview_url", "TEXT NOT NULL DEFAULT ''"},
+		{"steam_url", "TEXT NOT NULL DEFAULT ''"},
+		{"summary", "TEXT NOT NULL DEFAULT ''"},
+		{"tags_json", "TEXT NOT NULL DEFAULT '[]'"},
+		{"file_size", "INTEGER NOT NULL DEFAULT 0"},
+		{"subscriptions", "INTEGER NOT NULL DEFAULT 0"},
+		{"time_updated", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_checked_at", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumn(ctx, tx, "mods", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	return execAll(ctx, tx,
+		`CREATE INDEX IF NOT EXISTS idx_mods_workshop_id ON mods(workshop_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_translations_workshop_id ON ai_translations(workshop_id)`,
+	)
+}
+
+func migrateOperationalReliability(ctx context.Context, tx *sql.Tx) error {
+	if err := ensureColumn(ctx, tx, "schedules", "timezone", "TEXT NOT NULL DEFAULT 'UTC'"); err != nil {
 		return err
 	}
-	if err := s.ensureColumn(ctx, "mods", "preview_url", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "mods", "steam_url", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "mods", "summary", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "mods", "tags_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "mods", "file_size", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "mods", "subscriptions", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "mods", "time_updated", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "mods", "last_checked_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_mods_workshop_id ON mods(workshop_id)`); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_ai_translations_workshop_id ON ai_translations(workshop_id)`); err != nil {
-		return err
+	return execAll(ctx, tx, `CREATE INDEX IF NOT EXISTS idx_monitor_samples_created_at ON monitor_samples(created_at)`)
+}
+
+func migrateJobErrorCodes(ctx context.Context, tx *sql.Tx) error {
+	return ensureColumn(ctx, tx, "jobs", "error_code", "TEXT NOT NULL DEFAULT ''")
+}
+
+func migrateAccountAuthentication(ctx context.Context, tx *sql.Tx) error {
+	return execAll(ctx, tx,
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL,
+			disabled INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			token_hash TEXT NOT NULL UNIQUE,
+			expires_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			prefix TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			last_used_at TEXT NOT NULL DEFAULT '',
+			revoked_at TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_token_hash ON api_keys(token_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`,
+	)
+}
+
+func execAll(ctx context.Context, tx *sql.Tx, statements ...string) error {
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+func ensureColumn(ctx context.Context, tx *sql.Tx, table, column, definition string) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return err
 	}
@@ -312,7 +464,7 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, definition stri
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+definition)
+	_, err = tx.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+definition)
 	return err
 }
 
@@ -481,6 +633,19 @@ func (s *Store) ListMonitorSamples(ctx context.Context, limit int) ([]MonitorSam
 	return out, rows.Err()
 }
 
+func (s *Store) DeleteMonitorSamplesBefore(ctx context.Context, cutoff time.Time, batchSize int) (int64, error) {
+	if batchSize <= 0 || batchSize > 10000 {
+		batchSize = 1000
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM monitor_samples WHERE id IN (
+		SELECT id FROM monitor_samples WHERE created_at < ? ORDER BY created_at LIMIT ?
+	)`, cutoff.UTC().Format(time.RFC3339Nano), batchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) UpsertSchedule(ctx context.Context, item Schedule) error {
 	if item.ID == "" {
 		return errors.New("schedule id is required")
@@ -493,18 +658,18 @@ func (s *Store) UpsertSchedule(ctx context.Context, item Schedule) error {
 		item.CreatedAt = now
 	}
 	item.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO schedules (id,type,enabled,interval_minutes,time_of_day,waittime,message,last_run_at,next_run_at,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO schedules (id,type,enabled,interval_minutes,time_of_day,timezone,waittime,message,last_run_at,next_run_at,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET type=excluded.type, enabled=excluded.enabled, interval_minutes=excluded.interval_minutes,
-		time_of_day=excluded.time_of_day, waittime=excluded.waittime, message=excluded.message, last_run_at=excluded.last_run_at,
+		time_of_day=excluded.time_of_day, timezone=excluded.timezone, waittime=excluded.waittime, message=excluded.message, last_run_at=excluded.last_run_at,
 		next_run_at=excluded.next_run_at, updated_at=excluded.updated_at`,
-		item.ID, item.Type, boolInt(item.Enabled), item.IntervalMinutes, item.TimeOfDay, item.WaitTime,
+		item.ID, item.Type, boolInt(item.Enabled), item.IntervalMinutes, item.TimeOfDay, item.Timezone, item.WaitTime,
 		item.Message, item.LastRunAt, item.NextRunAt, item.CreatedAt, item.UpdatedAt)
 	return err
 }
 
 func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,type,enabled,interval_minutes,time_of_day,waittime,message,last_run_at,next_run_at,created_at,updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,type,enabled,interval_minutes,time_of_day,timezone,waittime,message,last_run_at,next_run_at,created_at,updated_at
 		FROM schedules ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -514,7 +679,7 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 	for rows.Next() {
 		var item Schedule
 		var enabled int
-		if err := rows.Scan(&item.ID, &item.Type, &enabled, &item.IntervalMinutes, &item.TimeOfDay, &item.WaitTime,
+		if err := rows.Scan(&item.ID, &item.Type, &enabled, &item.IntervalMinutes, &item.TimeOfDay, &item.Timezone, &item.WaitTime,
 			&item.Message, &item.LastRunAt, &item.NextRunAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -525,11 +690,11 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 }
 
 func (s *Store) GetSchedule(ctx context.Context, id string) (Schedule, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,type,enabled,interval_minutes,time_of_day,waittime,message,last_run_at,next_run_at,created_at,updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT id,type,enabled,interval_minutes,time_of_day,timezone,waittime,message,last_run_at,next_run_at,created_at,updated_at
 		FROM schedules WHERE id=?`, id)
 	var item Schedule
 	var enabled int
-	err := row.Scan(&item.ID, &item.Type, &enabled, &item.IntervalMinutes, &item.TimeOfDay, &item.WaitTime,
+	err := row.Scan(&item.ID, &item.Type, &enabled, &item.IntervalMinutes, &item.TimeOfDay, &item.Timezone, &item.WaitTime,
 		&item.Message, &item.LastRunAt, &item.NextRunAt, &item.CreatedAt, &item.UpdatedAt)
 	item.Enabled = enabled == 1
 	return item, err
@@ -603,21 +768,46 @@ func (s *Store) AckAlert(ctx context.Context, id string) error {
 func (s *Store) CreateJob(ctx context.Context, id, typ, message string) (Job, error) {
 	now := now()
 	j := Job{ID: id, Type: typ, Status: "queued", Progress: 0, Message: message, CreatedAt: now, UpdatedAt: now}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id,type,status,progress,message,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
-		j.ID, j.Type, j.Status, j.Progress, j.Message, j.Error, j.CreatedAt, j.UpdatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id,type,status,progress,message,error,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		j.ID, j.Type, j.Status, j.Progress, j.Message, j.Error, j.ErrorCode, j.CreatedAt, j.UpdatedAt)
 	return j, err
 }
 
 func (s *Store) UpdateJob(ctx context.Context, id, status string, progress int, message, errText string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status=?, progress=?, message=?, error=?, updated_at=? WHERE id=?`,
-		status, progress, message, errText, now(), id)
+	return s.UpdateJobWithCode(ctx, id, status, progress, message, errText, "")
+
+}
+
+func (s *Store) UpdateJobWithCode(ctx context.Context, id, status string, progress int, message, errText, errorCode string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status=?, progress=?, message=?, error=?, error_code=?, updated_at=? WHERE id=?`,
+		status, progress, message, errText, errorCode, now(), id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
 	return err
 }
 
+func (s *Store) FailIncompleteJobs(ctx context.Context, errorCode, message string) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs
+		SET status='failed', message=?, error=?, error_code=?, updated_at=?
+		WHERE status IN ('queued', 'waiting', 'running')`, message, message, errorCode, now())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,type,status,progress,message,error,created_at,updated_at FROM jobs WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,type,status,progress,message,error,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
 	var j Job
-	err := row.Scan(&j.ID, &j.Type, &j.Status, &j.Progress, &j.Message, &j.Error, &j.CreatedAt, &j.UpdatedAt)
+	err := row.Scan(&j.ID, &j.Type, &j.Status, &j.Progress, &j.Message, &j.Error, &j.ErrorCode, &j.CreatedAt, &j.UpdatedAt)
 	return j, err
 }
 
@@ -625,7 +815,7 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,type,status,progress,message,error,created_at,updated_at FROM jobs ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,type,status,progress,message,error,error_code,created_at,updated_at FROM jobs ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -634,7 +824,7 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 	var jobs []Job
 	for rows.Next() {
 		var j Job
-		if err := rows.Scan(&j.ID, &j.Type, &j.Status, &j.Progress, &j.Message, &j.Error, &j.CreatedAt, &j.UpdatedAt); err != nil {
+		if err := rows.Scan(&j.ID, &j.Type, &j.Status, &j.Progress, &j.Message, &j.Error, &j.ErrorCode, &j.CreatedAt, &j.UpdatedAt); err != nil {
 			return nil, err
 		}
 		jobs = append(jobs, j)
@@ -774,6 +964,186 @@ func (s *Store) UpsertAITranslation(ctx context.Context, item AITranslation) err
 	DO UPDATE SET translation=excluded.translation, created_at=excluded.created_at`,
 		item.WorkshopID, item.SourceSHA256, item.TargetLanguage, item.Provider, item.Model, item.Translation, item.CreatedAt)
 	return err
+}
+
+func (s *Store) UserCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
+	return count, err
+}
+
+func (s *Store) CreateInitialUser(ctx context.Context, user User) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return ErrAlreadyInitialized
+	}
+	if user.CreatedAt == "" {
+		user.CreatedAt = now()
+	}
+	user.UpdatedAt = user.CreatedAt
+	_, err = tx.ExecContext(ctx, `INSERT INTO users (id,username,password_hash,role,disabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`,
+		user.ID, user.Username, user.PasswordHash, user.Role, boolInt(user.Disabled), user.CreatedAt, user.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, error) {
+	var user User
+	var disabled int
+	err := s.db.QueryRowContext(ctx, `SELECT id,username,password_hash,role,disabled,created_at,updated_at FROM users WHERE username=?`, username).
+		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &disabled, &user.CreatedAt, &user.UpdatedAt)
+	user.Disabled = disabled == 1
+	return user, err
+}
+
+func (s *Store) FirstUser(ctx context.Context) (User, error) {
+	var user User
+	var disabled int
+	err := s.db.QueryRowContext(ctx, `SELECT id,username,password_hash,role,disabled,created_at,updated_at FROM users ORDER BY created_at LIMIT 1`).
+		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &disabled, &user.CreatedAt, &user.UpdatedAt)
+	user.Disabled = disabled == 1
+	return user, err
+}
+
+func (s *Store) CreateSession(ctx context.Context, session Session) error {
+	if session.CreatedAt == "" {
+		session.CreatedAt = now()
+	}
+	if session.LastSeenAt == "" {
+		session.LastSeenAt = session.CreatedAt
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (id,user_id,token_hash,expires_at,last_seen_at,created_at) VALUES (?,?,?,?,?,?)`,
+		session.ID, session.UserID, session.TokenHash, session.ExpiresAt, session.LastSeenAt, session.CreatedAt)
+	return err
+}
+
+func (s *Store) GetUserBySessionHash(ctx context.Context, tokenHash string, at time.Time) (User, Session, error) {
+	var user User
+	var session Session
+	var disabled int
+	err := s.db.QueryRowContext(ctx, `SELECT u.id,u.username,u.password_hash,u.role,u.disabled,u.created_at,u.updated_at,
+		s.id,s.user_id,s.token_hash,s.expires_at,s.last_seen_at,s.created_at
+		FROM sessions s JOIN users u ON u.id=s.user_id
+		WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0`, tokenHash, at.UTC().Format(time.RFC3339Nano)).
+		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &disabled, &user.CreatedAt, &user.UpdatedAt,
+			&session.ID, &session.UserID, &session.TokenHash, &session.ExpiresAt, &session.LastSeenAt, &session.CreatedAt)
+	user.Disabled = disabled == 1
+	return user, session, err
+}
+
+func (s *Store) TouchSession(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET last_seen_at=? WHERE id=?`, at.UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+func (s *Store) DeleteSessionByHash(ctx context.Context, tokenHash string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=?`, tokenHash)
+	return err
+}
+
+func (s *Store) DeleteExpiredSessions(ctx context.Context, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at<=?`, at.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *Store) CreateAPIKey(ctx context.Context, key APIKey) error {
+	if key.CreatedAt == "" {
+		key.CreatedAt = now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO api_keys (id,user_id,name,prefix,token_hash,last_used_at,revoked_at,created_at) VALUES (?,?,?,?,?,?,?,?)`,
+		key.ID, key.UserID, key.Name, key.Prefix, key.TokenHash, key.LastUsedAt, key.RevokedAt, key.CreatedAt)
+	return err
+}
+
+func (s *Store) ListAPIKeys(ctx context.Context, userID string) ([]APIKey, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,user_id,name,prefix,last_used_at,revoked_at,created_at FROM api_keys WHERE user_id=? ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]APIKey, 0)
+	for rows.Next() {
+		var key APIKey
+		if err := rows.Scan(&key.ID, &key.UserID, &key.Name, &key.Prefix, &key.LastUsedAt, &key.RevokedAt, &key.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, key)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetUserByAPIKeyHash(ctx context.Context, tokenHash string) (User, APIKey, error) {
+	var user User
+	var key APIKey
+	var disabled int
+	err := s.db.QueryRowContext(ctx, `SELECT u.id,u.username,u.password_hash,u.role,u.disabled,u.created_at,u.updated_at,
+		k.id,k.user_id,k.name,k.prefix,k.token_hash,k.last_used_at,k.revoked_at,k.created_at
+		FROM api_keys k JOIN users u ON u.id=k.user_id
+		WHERE k.token_hash=? AND k.revoked_at='' AND u.disabled=0`, tokenHash).
+		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &disabled, &user.CreatedAt, &user.UpdatedAt,
+			&key.ID, &key.UserID, &key.Name, &key.Prefix, &key.TokenHash, &key.LastUsedAt, &key.RevokedAt, &key.CreatedAt)
+	user.Disabled = disabled == 1
+	return user, key, err
+}
+
+func (s *Store) TouchAPIKey(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE id=?`, at.UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+func (s *Store) RevokeAPIKey(ctx context.Context, userID, id string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at=''`, now(), id, userID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ResetUserPassword(ctx context.Context, username, passwordHash string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE users SET password_hash=?,updated_at=? WHERE username=?`, passwordHash, now(), username)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	var userID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM users WHERE username=?`, username).Scan(&userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE user_id=? AND revoked_at=''`, now(), userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func boolInt(v bool) int {

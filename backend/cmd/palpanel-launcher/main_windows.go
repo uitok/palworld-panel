@@ -3,13 +3,11 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,13 +30,18 @@ const (
 	messageBoxIconQuestion   = 0x00000020
 	messageBoxIconError      = 0x00000010
 	messageBoxSetForeground  = 0x00010000
+	messageBoxResultOK       = 1
 	messageBoxResultYes      = 6
+	windowMessageCommand     = 0x0111
 	processAssignPermissions = windows.PROCESS_SET_QUOTA | windows.PROCESS_TERMINATE
 )
 
 var (
-	user32         = windows.NewLazySystemDLL("user32.dll")
-	messageBoxProc = user32.NewProc("MessageBoxW")
+	user32                       = windows.NewLazySystemDLL("user32.dll")
+	messageBoxProc               = user32.NewProc("MessageBoxW")
+	findWindowExProc             = user32.NewProc("FindWindowExW")
+	getWindowThreadProcessIDProc = user32.NewProc("GetWindowThreadProcessId")
+	postMessageProc              = user32.NewProc("PostMessageW")
 )
 
 type options struct {
@@ -46,11 +49,6 @@ type options struct {
 	noPrompt        bool
 	exitAfterHealth bool
 	showVersion     bool
-}
-
-type childProcess struct {
-	cmd *exec.Cmd
-	log *os.File
 }
 
 func main() {
@@ -103,7 +101,6 @@ func run(args []string) error {
 		}
 	}
 	configPath := filepath.Join(root, "config", "palpanel.env")
-	tokenMarkerPath := filepath.Join(root, "config", ".show-admin-token")
 	dataPath := filepath.Join(root, "data")
 	logsPath := filepath.Join(root, "logs")
 	firstRun := false
@@ -128,9 +125,6 @@ func run(args []string) error {
 		output, initErr := exec.Command(serverPath, "--config", configPath, "--init-config").CombinedOutput()
 		if initErr != nil {
 			return fmt.Errorf("initialize config: %w: %s", initErr, strings.TrimSpace(string(output)))
-		}
-		if err := os.WriteFile(tokenMarkerPath, []byte("pending\n"), 0o600); err != nil {
-			return fmt.Errorf("record first-run token state: %w", err)
 		}
 	} else if err != nil {
 		return err
@@ -165,12 +159,11 @@ func run(args []string) error {
 		return fmt.Errorf("start sav-cli: %w", err)
 	}
 	defer savChild.closeLog()
-	if err := waitForHealth("http://127.0.0.1:8090/health", savChild.cmd, 30*time.Second); err != nil {
+	if err := waitForHealth("http://127.0.0.1:8090/health", savChild, 30*time.Second); err != nil {
 		return fmt.Errorf("sav-cli health check: %w", err)
 	}
 
 	childEnv := map[string]string{
-		"PALPANEL_FRONTEND_DIST":        filepath.Join(root, "frontend", "dist"),
 		"PALPANEL_BACKEND_DIR":          filepath.Join(root, "backend"),
 		"PALPANEL_RUNNER_DIR":           filepath.Join(root, "backend", "deployments", "wine-runner"),
 		"PALPANEL_DATA_DIR":             dataPath,
@@ -183,7 +176,7 @@ func run(args []string) error {
 	}
 	defer serverChild.closeLog()
 	healthURL, dashboardURL := panelURLs(config)
-	if err := waitForHealth(healthURL, serverChild.cmd, 45*time.Second); err != nil {
+	if err := waitForHealth(healthURL, serverChild, 45*time.Second); err != nil {
 		return fmt.Errorf("palpanel health check: %w", err)
 	}
 
@@ -193,37 +186,27 @@ func run(args []string) error {
 	if !opts.noBrowser {
 		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", dashboardURL).Start()
 	}
-	showFirstToken := firstRun
-	if _, err := os.Stat(tokenMarkerPath); err == nil {
-		showFirstToken = true
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if showFirstToken && !opts.noPrompt {
-		token := strings.TrimSpace(os.Getenv("PANEL_TOKEN"))
-		if token == "" {
-			token = strings.TrimSpace(config["PANEL_TOKEN"])
-		}
-		if _, err := messageBox(
-			"PalPanel is ready",
-			fmt.Sprintf("Dashboard: %s\n\nAdmin token (shown on first launch):\n%s\n\nChoose OK to stop PalPanel.", dashboardURL, token),
-			messageBoxOK|messageBoxIconInfo|messageBoxSetForeground,
-		); err != nil {
-			return err
-		}
-		_ = os.Remove(tokenMarkerPath)
-		return nil
-	}
 	if opts.exitAfterHealth {
 		return nil
 	}
 	if !opts.noPrompt {
-		if _, err := messageBox("PalPanel is running", "The dashboard is ready. Choose OK to stop PalPanel.", messageBoxOK|messageBoxIconInfo|messageBoxSetForeground); err != nil {
-			return err
+		message := "The dashboard is ready. Choose OK to stop PalPanel."
+		if firstRun {
+			message = "The dashboard is ready. Create the first administrator in the browser, then choose OK here to stop PalPanel."
 		}
-		return nil
+		const title = "PalPanel is running"
+		prompt := startAsyncPrompt(
+			func() error {
+				_, err := messageBox(title, message, messageBoxOK|messageBoxIconInfo|messageBoxSetForeground)
+				return err
+			},
+			func(finished <-chan struct{}) {
+				dismissMessageBox(title, finished)
+			},
+		)
+		return waitForPromptOrChildren(prompt, savChild, serverChild)
 	}
-	return waitForEitherChild(savChild.cmd, serverChild.cmd)
+	return waitForEitherChild(savChild, serverChild)
 }
 
 func acquireInstanceMutex(root string) (windows.Handle, bool, error) {
@@ -286,13 +269,12 @@ func startChild(job windows.Handle, path string, args []string, overrides map[st
 		_ = logFile.Close()
 		return nil, err
 	}
-	return &childProcess{cmd: cmd, log: logFile}, nil
-}
-
-func (c *childProcess) closeLog() {
-	if c != nil && c.log != nil {
-		_ = c.log.Close()
-	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+		close(done)
+	}()
+	return &childProcess{log: logFile, done: done}, nil
 }
 
 func mergeEnvironment(current []string, overrides map[string]string) []string {
@@ -320,32 +302,6 @@ func mergeEnvironment(current []string, overrides map[string]string) []string {
 		result = append(result, name+"="+value)
 	}
 	return result
-}
-
-func waitForHealth(url string, command *exec.Cmd, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	client := &http.Client{Timeout: 2 * time.Second}
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if command.ProcessState != nil && command.ProcessState.Exited() {
-				return errors.New("process exited before becoming healthy")
-			}
-			request, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			response, err := client.Do(request)
-			if err == nil {
-				_ = response.Body.Close()
-				if response.StatusCode == http.StatusOK {
-					return nil
-				}
-			}
-		}
-	}
 }
 
 func panelURLs(config map[string]string) (string, string) {
@@ -403,18 +359,6 @@ func rotateLog(path string, maxBytes int64, backups int) error {
 	return os.Truncate(path, 0)
 }
 
-func waitForEitherChild(commands ...*exec.Cmd) error {
-	result := make(chan error, len(commands))
-	for _, command := range commands {
-		go func(cmd *exec.Cmd) { result <- cmd.Wait() }(command)
-	}
-	err := <-result
-	if err == nil {
-		return errors.New("a managed process exited")
-	}
-	return fmt.Errorf("a managed process exited: %w", err)
-}
-
 func messageBox(title, message string, flags uintptr) (int, error) {
 	titlePtr, err := windows.UTF16PtrFromString(title)
 	if err != nil {
@@ -429,4 +373,43 @@ func messageBox(title, message string, flags uintptr) (int, error) {
 		return 0, callErr
 	}
 	return int(result), nil
+}
+
+func dismissMessageBox(title string, finished <-chan struct{}) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_ = postOKToOwnMessageBox(title)
+		select {
+		case <-finished:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func postOKToOwnMessageBox(title string) bool {
+	className, err := windows.UTF16PtrFromString("#32770")
+	if err != nil {
+		return false
+	}
+	titlePtr, err := windows.UTF16PtrFromString(title)
+	if err != nil {
+		return false
+	}
+	var previous uintptr
+	for {
+		window, _, _ := findWindowExProc.Call(0, previous, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(titlePtr)))
+		if window == 0 {
+			return false
+		}
+		previous = window
+		var processID uint32
+		getWindowThreadProcessIDProc.Call(window, uintptr(unsafe.Pointer(&processID)))
+		if processID != uint32(os.Getpid()) {
+			continue
+		}
+		posted, _, _ := postMessageProc.Call(window, windowMessageCommand, messageBoxResultOK, 0)
+		return posted != 0
+	}
 }

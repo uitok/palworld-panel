@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': {
           target: apiProxyTarget,
-          changeOrigin: true,
+          changeOrigin: false,
         }
       }
     },
@@ -24,6 +24,9 @@ export default defineConfig(({ mode }) => {
       environment: 'jsdom',
       setupFiles: './src/test/setup.ts',
       css: true,
+	  fileParallelism: false,
+	  maxWorkers: 1,
+	  exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
     }
   }
 })

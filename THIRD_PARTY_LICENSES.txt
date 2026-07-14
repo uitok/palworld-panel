@@ -33,7 +33,25 @@ Frontend dependencies
 Localization data
 -----------------
 - Palworld localization-derived catalog under backend/internal/pallocalize:
-  Apache-2.0; see the included NOTICE.md and LICENSE.apache-2.0.
+  Apache-2.0; see the included NOTICE.md and LICENSE.apache-2.0. The upstream
+  NOTICE attribution is:
+
+    palworld-server-tool
+    Copyright 2024 zaigie
+
+- Palworld item-identification WebP artwork under frontend/public/assets/items
+  is sourced from zaigie/palworld-server-tool commit
+  18df587bd9e62d0f890b8cef1c32985fa6e9ba39. Palworld and its artwork are
+  property of Pocketpair, Inc. and are not relicensed under PalPanel's GPL.
+
+Bundled PalDefender
+-------------------
+- PalDefender.dll 1.8.1, copyright Ultimeit: MIT. The bundled binary has
+  SHA-256 18b9f63eea2dd407f29b77a262f9d33b1dcd4b744328892c13d5822701418d03.
+  The complete license is included as licenses/PalDefender-MIT.txt.
+- The current official PalDefender Release supplies d3d9.dll as its loader.
+  PalPanel downloads that loader during an explicitly requested installation;
+  it is not the locally embedded PalDefender.dll described above.
 
 The release SBOM provides the exact package/version inventory. Corresponding
 license texts remain available from each dependency's source distribution and

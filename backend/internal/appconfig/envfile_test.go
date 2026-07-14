@@ -12,7 +12,7 @@ func TestParseEnvFileTreatsShellSyntaxAsData(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "must-not-exist")
 	path := filepath.Join(root, "palpanel.env")
-	body := "PANEL_TOKEN='strong-token-from-file'\n" +
+	body := "PALPANEL_LOG_LEVEL='debug'\n" +
 		"LITERAL=$(touch " + marker + ")\n" +
 		"URL=\"http://127.0.0.1:8090/path\"\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -32,10 +32,10 @@ func TestParseEnvFileTreatsShellSyntaxAsData(t *testing.T) {
 
 func TestParseEnvFileRejectsShellAndAmbiguousSyntax(t *testing.T) {
 	for _, body := range []string{
-		"export PANEL_TOKEN=value\n",
-		"PANEL_TOKEN=value\nPANEL_TOKEN=other\n",
+		"export PALPANEL_LOG_LEVEL=debug\n",
+		"PALPANEL_LOG_LEVEL=debug\nPALPANEL_LOG_LEVEL=info\n",
 		"NOT A NAME=value\n",
-		"PANEL_TOKEN='unterminated\n",
+		"PALPANEL_LOG_LEVEL='unterminated\n",
 	} {
 		path := filepath.Join(t.TempDir(), "palpanel.env")
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -50,19 +50,17 @@ func TestParseEnvFileRejectsShellAndAmbiguousSyntax(t *testing.T) {
 func TestLoadFileGivesProcessEnvironmentPriority(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "palpanel.env")
 	if err := os.WriteFile(path, []byte(strings.Join([]string{
-		"PANEL_TOKEN=weak-file-value",
 		"PALPANEL_REQUIRE_AUTH=true",
 		"PALPANEL_LISTEN_ADDR=127.0.0.1:9000",
 	}, "\n")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PANEL_TOKEN", "process-environment-token-value")
 	t.Setenv("PALPANEL_LISTEN_ADDR", "127.0.0.1:9100")
 	cfg, err := LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PanelToken != "process-environment-token-value" || cfg.ListenAddr != "127.0.0.1:9100" {
+	if cfg.ListenAddr != "127.0.0.1:9100" || !cfg.RequireAuth {
 		t.Fatalf("process environment did not win: %#v", cfg)
 	}
 }
@@ -77,14 +75,11 @@ func TestLoadFileRejectsUnsafeEnvironmentNames(t *testing.T) {
 	}
 }
 
-func TestInitFileCreatesTokenOnceWithPrivatePermissions(t *testing.T) {
+func TestInitFileCreatesPrivateRegistrationConfigOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "palpanel.env")
-	token, created, err := InitFile(path)
+	created, err := InitFile(path)
 	if err != nil || !created {
-		t.Fatalf("InitFile = %q, %v, %v", token, created, err)
-	}
-	if len(token) != 64 {
-		t.Fatalf("token length = %d", len(token))
+		t.Fatalf("InitFile = %v, %v", created, err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -94,15 +89,15 @@ func TestInitFileCreatesTokenOnceWithPrivatePermissions(t *testing.T) {
 		t.Fatalf("config mode = %o", info.Mode().Perm())
 	}
 	body, err := os.ReadFile(path)
-	if err != nil || !strings.Contains(string(body), "PANEL_TOKEN="+token) {
-		t.Fatalf("config does not contain generated token: %v", err)
+	if err != nil || !strings.Contains(string(body), "PALPANEL_REQUIRE_AUTH=true") {
+		t.Fatalf("config does not contain browser-registration settings: %v, %s", err, body)
 	}
-	secondToken, secondCreated, err := InitFile(path)
-	if err != nil || secondCreated || secondToken != "" {
-		t.Fatalf("second InitFile = %q, %v, %v", secondToken, secondCreated, err)
+	secondCreated, err := InitFile(path)
+	if err != nil || secondCreated {
+		t.Fatalf("second InitFile = %v, %v", secondCreated, err)
 	}
 	secondBody, _ := os.ReadFile(path)
 	if string(secondBody) != string(body) {
-		t.Fatal("existing token was rotated")
+		t.Fatal("existing configuration was changed")
 	}
 }

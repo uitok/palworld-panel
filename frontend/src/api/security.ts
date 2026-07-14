@@ -2,8 +2,28 @@ import { apiClient, handleRequest } from './client';
 import type { Job, PalDefenderRelease, PalDefenderStatus, TokenResult } from '../types';
 import { mapJob } from './tasks';
 
+export const palDefenderPanelPermissions = [
+  'REST.Version.Read',
+  'REST.Players.Read',
+  'REST.Items.Read',
+  'REST.Items.Give',
+  'REST.Messages.Send.PlayerChat',
+  'REST.Messages.Send.GlobalChat',
+  'REST.Messages.Send.GuildChat',
+  'REST.Messages.Send.Log.Normal',
+  'REST.Messages.Send.Log.Important',
+  'REST.Messages.Send.Log.VeryImportant',
+  'REST.Messages.Broadcast',
+  'REST.Messages.Alert',
+  'REST.Punishments.Kick',
+  'REST.Punishments.Ban',
+  'REST.Punishments.Unban',
+  'REST.Reload.Config',
+] as const;
+
 const fallbackStatus: PalDefenderStatus = {
   installed: false,
+  bundled: { version: '', sha256: '', size: 0 },
   needs_first_start: false,
   files: {},
   paths: {},
@@ -15,6 +35,14 @@ const mapStatus = (raw: unknown): PalDefenderStatus => {
   return {
     installed: Boolean(data.installed),
     version: data.version ? String(data.version) : undefined,
+    bundled: (() => {
+      const bundled = data.bundled && typeof data.bundled === 'object' ? (data.bundled as Record<string, unknown>) : {};
+      return {
+        version: String(bundled.version || ''),
+        sha256: String(bundled.sha256 || ''),
+        size: Number(bundled.size || 0),
+      };
+    })(),
     needs_first_start: Boolean(data.needs_first_start),
     files:
       data.files && typeof data.files === 'object' && !Array.isArray(data.files)
@@ -39,7 +67,7 @@ const mapToken = (raw: unknown): TokenResult => {
   return {
     name: String(data.name || 'AdminPanel'),
     token: String(data.token || ''),
-    permissions: Array.isArray(data.permissions) ? data.permissions.map(String) : ['REST.*'],
+    permissions: Array.isArray(data.permissions) ? data.permissions.map(String) : [...palDefenderPanelPermissions],
     path: String(data.path || ''),
   };
 };
@@ -110,7 +138,7 @@ export const securityApi = {
       { quiet: true, fallbackOnError: false },
     ),
 
-  createToken: (name = 'AdminPanel', permissions: string[] = ['REST.*']) =>
+  createToken: (name = 'AdminPanel', permissions: string[] = [...palDefenderPanelPermissions]) =>
     handleRequest<unknown, TokenResult>(
       () => apiClient.post('/security/paldefender/rest-token', { name, permissions }),
       { name, token: '', permissions, path: '' },

@@ -6,57 +6,51 @@ Go/Gin backend for a Palworld dedicated-server panel. It manages a Windows editi
 
 ```powershell
 cd backend
-$env:PANEL_TOKEN="replace-with-a-random-32-byte-token"
 $env:PALPANEL_REQUIRE_AUTH="true"
 $env:PALPANEL_CORS_ORIGINS="http://127.0.0.1:63107,http://localhost:63107"
-go test ./...
+go test -p=1 ./...
 go run ./cmd/palpanel
 ```
 
-The API listens on `127.0.0.1:8080` by default. Runtime data is stored in the repository `data` directory unless `PALPANEL_DATA_DIR` is set. `PANEL_TOKEN` is required by default and must not be empty or `change-me`. The Vite frontend port comes from `VITE_DEV_PORT` and defaults to `63107`; if it is opened from a LAN address such as `http://192.168.x.x:63107`, either include that exact origin in `PALPANEL_CORS_ORIGINS` or use `PALPANEL_CORS_ORIGINS=*` for local development.
+The API listens on `127.0.0.1:8080` by default. Runtime data is stored in the repository `data` directory unless `PALPANEL_DATA_DIR` is set. On a new database, open the web UI and register the first administrator; later visits use the server-managed session. The Vite frontend port comes from `VITE_DEV_PORT` and defaults to `63107`; if it is opened from a LAN address such as `http://192.168.x.x:63107`, include that exact origin in `PALPANEL_CORS_ORIGINS` or use `PALPANEL_CORS_ORIGINS=*` only for isolated local development.
 
 Proxy environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` are optional host-level settings. They are intentionally not enabled by default in `.env.example`.
 
 ## Production Package
 
-The repository-level `scripts/package.sh` builds the supported Linux amd64 release. It includes native cgo/Oodle support in sav-cli, `palpanelctl`, and systemd units. `scripts/package.ps1` builds the unsigned Windows amd64 ZIP that is verified on a native runner and published from v1.0.2 onward.
+The repository-level `scripts/package.sh` builds the supported Linux amd64 release. It builds the frontend first and embeds it in the Go binary, then packages native cgo/Oodle support in sav-cli, `palpanelctl`, and systemd units. `scripts/package.ps1` builds the equivalent unsigned Windows amd64 ZIP.
 
-In the Linux package the backend binary serves `frontend/dist` directly and `palpanelctl` sets package-local defaults:
+In the Linux package the backend binary serves the embedded UI and `palpanelctl` sets package-local defaults:
 
-- `PALPANEL_FRONTEND_DIST=<package>/frontend/dist`
 - `PALPANEL_BACKEND_DIR=<package>/backend`
 - `PALPANEL_DATA_DIR=<package>/data`
 - `PALPANEL_RUNNER_DIR=<package>/backend/deployments/wine-runner`
 
-`palpanelctl init` creates a private config and random `PANEL_TOKEN`. `palpanelctl install` uses `/opt/palpanel/<version>`, `/etc/palpanel`, and `/var/lib/palpanel` with separate systemd services for the web process and sav-cli.
+`palpanelctl init` creates a private configuration and directs the user to browser registration. `palpanelctl install` uses `/opt/palpanel/<version>`, `/etc/palpanel`, and `/var/lib/palpanel` with separate systemd services for the web process and sav-cli. Installation enables and starts both units; portable mode and the Windows Launcher also start sav-cli before the backend and wait for its health endpoint.
 
 ## Auth
 
-All management endpoints require:
+Browser authentication uses the `palpanel_session` HttpOnly, SameSite=Lax Cookie returned by registration or login. State-changing session requests must also be same-origin. Automation uses a revocable development key created in Settings:
 
 ```http
-Authorization: Bearer <PANEL_TOKEN>
+Authorization: Bearer ppk_...
 ```
 
-`GET /api/health` is public and returns `status`, `version`, `commit`, and `build_time`.
+The complete development key is returned only in its create response; SQLite stores only its digest. Revocation and `palpanel admin reset-password` invalidate credentials immediately. `GET /api/health`, `GET /api/ready`, `GET /api/auth/status`, `POST /api/auth/register`, and `POST /api/auth/login` are public as required by startup and login flows.
 
-Optional role tokens:
-
-- `PANEL_TOKEN`: admin, full access.
-- `PANEL_OPERATOR_TOKEN`: operator, server/config/mod/player operations.
-- `PANEL_VIEWER_TOKEN`: viewer, read-only.
-
-`GET /api/auth/me` returns the authenticated role and permission names without returning any token. The destructive `world:reset` and `ai:config` permissions belong only to the admin role; Workshop translation uses the operator-compatible `mods:write` permission.
+`GET /api/auth/me` returns the authenticated role and permission names without returning credentials. The destructive `world:reset` and `ai:config` permissions belong only to the admin role; Workshop translation uses the operator-compatible `mods:write` permission.
 
 Set `PALPANEL_REQUIRE_AUTH=false` only for isolated local development.
 
 ## Production Web Serving
 
-Build the frontend with `npm run build`, then set `PALPANEL_FRONTEND_DIST` to the frontend `dist` directory. The backend serves the SPA from this directory and falls back to `index.html` for routes such as `/dashboard`. For reverse proxies, forward `/api/*` to the backend and serve the frontend dist with HTTPS.
+Release builds use the `embed_webui` build tag and serve the embedded SPA, including route fallback and immutable asset caching, from the API port. Normal development builds may set `PALPANEL_FRONTEND_DIST` to an external frontend `dist` directory; without either source, API routes continue to work and return JSON 404 responses. For reverse proxies, forward the single backend origin over HTTPS.
 
 ## Configuration And CLI
 
-The backend accepts `--config <path>`, `--init-config`, and `--version`. Config files use strict `KEY=VALUE` parsing and are never sourced or executed. Process environment values take precedence over file values. Initial configuration uses a cryptographically random admin token and Unix mode `0600`.
+The backend accepts `--config <path>`, `--init-config`, and `--version`. Config files use strict `KEY=VALUE` parsing and are never sourced or executed. Process environment values take precedence over file values. Initial configuration uses Unix mode `0600` and does not contain authentication credentials. Use `palpanel admin reset-password [--username NAME]` for local account recovery; it revokes that account's sessions and development keys.
+
+Static authentication variables from older releases are ignored. After upgrading such an installation, register the first administrator in the browser; existing configuration, SQLite data, Palworld server data, saves and Mods remain in place.
 
 Named provider settings are `PALPANEL_STEAM_API_BASE_URL`, `PALPANEL_STEAM_API_TIMEOUT_SECONDS` (15 seconds), and `PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS` (90 seconds). Optional `PALPANEL_LOG_LEVEL` accepts `debug`, `info`, `warn`, or `error`.
 
@@ -71,13 +65,23 @@ Startup arguments are managed separately from `PalWorldSettings.ini` through `GE
 
 ## Steam Workshop
 
-Workshop search uses a backend-only Steam Web API key read exclusively from `STEAM_WEB_API_KEY`; no key is embedded in the binary. When the variable is absent, the status endpoint reports Workshop search as unconfigured. The key is never returned by API responses. `PALPANEL_WORKSHOP_APP_ID` defaults to `1623730` and is used by both Workshop search metadata and the existing SteamCMD `workshop_download_item` flow.
+Workshop search uses a byte-wise XOR-obfuscated key bundled in release binaries by default. `STEAM_WEB_API_KEY` overrides it at runtime. Item details use the public `ISteamRemoteStorage/GetPublishedFileDetails` endpoint without a key. API responses expose only the `bundled` or `environment` source and never the key itself. XOR obfuscation is not encryption; a bundled value remains recoverable from a public binary. `PALPANEL_WORKSHOP_APP_ID` defaults to `1623730` and is used by search metadata and the SteamCMD `workshop_download_item` flow.
+
+Unified Mod import accepts a Workshop ID/URL, a public GitHub repository or Release URL, a public HTTPS ZIP, or a local ZIP. Every source is inspected before installation. Remote downloads ignore proxy variables and reject credentials, redirects to non-public addresses, oversized payloads, unsafe ZIP paths, links, special files, multiple `Info.json` files, and missing `PackageName`. New Mods install disabled; updates preserve record identity and enabled state, and enabled updates set `pending_restart` without restarting PalServer.
 
 ## AI Translation
 
 Admins configure an OpenAI-compatible Base URL, model, and API key from Settings. Base URLs must use HTTPS; HTTP is accepted only for loopback addresses. Embedded URL credentials, redirects, and oversized responses are rejected. The API key is atomically stored in `data/secrets/ai-translation.key` with mode `0600` and is never returned by APIs, application logs, or audit records.
 
 Workshop detail translation always fetches the authoritative description from Steam instead of accepting arbitrary browser text. Cached translations are keyed by Workshop ID, source SHA-256, target language, provider URL, and model, so source or model changes invalidate the cache automatically.
+
+## PalDefender 1.8.1 And GM
+
+The release binary embeds `PalDefender.dll` 1.8.1 with SHA-256 `18b9f63eea2dd407f29b77a262f9d33b1dcd4b744328892c13d5822701418d03`. The official v1.8.1 Release publishes `d3d9.dll`, `PalDefender.dll`, and `PalDefender.zip`. Installation obtains the `d3d9.dll` loader from that Release, using the ZIP when present, but always installs the local embedded, hash-pinned `PalDefender.dll` instead of the DLL published in the Release.
+
+The `/gm` frontend uses typed PalPanel DTOs instead of calling PalDefender from the browser. The backend proxy covers version/status, players, six inventory containers, batches of up to 100 item grants, direct messages, broadcasts, alerts, kick, ban, IP-ban and unban operations. The local catalog contains 2,455 ItemIDs with Chinese names and item-identification WebP artwork for search suggestions.
+
+GM reads require `read`; item grants, messages and punishments require `players:write`. PalDefender installation, configuration and REST Token creation require `security:write`, which is admin-only. The REST API defaults to `http://127.0.0.1:17993`. In Wine Docker mode it listens on the container interface, while Docker publishes it only on the host loopback address; the official Palworld REST port is loopback-only as well. Game and query UDP ports remain publicly published. Never publish the PalDefender Bearer Token in source, logs, screenshots, proxy configuration or browser code. The backend HTTP client disables proxy inheritance, rejects redirects and does not expose the Token to the frontend GM client.
 
 ## World Reset
 
@@ -98,9 +102,13 @@ Read-only Palworld REST calls use a short timeout so offline save pages can fall
 ```bash
 PALPANEL_PALWORLD_REST_READ_TIMEOUT_MS=1200
 PALPANEL_PERF_SLOW_REQUEST_MS=500
+PALPANEL_MONITOR_RETENTION_DAYS=7
 ```
 
 `PALPANEL_PERF_SLOW_REQUEST_MS` controls slow-request logging. API responses also include `Server-Timing` and `X-Palpanel-Cache` headers where cached read paths are used.
+Monitor samples are pruned hourly after seven days by default. Set `PALPANEL_MONITOR_RETENTION_DAYS=0` to disable monitor history persistence.
+
+`GET /api/ready` is the public readiness probe. It verifies SQLite, the applied schema version, and required data directories; `GET /api/health` remains a process liveness probe.
 
 ## Save Indexer
 
@@ -121,7 +129,7 @@ PALPANEL_SAVE_INDEXER_URL=http://127.0.0.1:8090
 PALPANEL_SAVE_INDEX_CACHE_DIR=../data/save-index
 ```
 
-The sidecar is the self-developed Go `sav-cli` in `sav-cli/` and never writes back to `.sav`. It reports unsupported save containers or schema changes as `parser_incompatible`; the backend keeps the last successful cache when available and does not block other panel features.
+The sidecar is the self-developed Go `sav-cli` in `sav-cli/` and never writes back to `.sav`. Packaged launchers start it automatically with the panel. It reads per-player `Players/*.sav` files and associates `InventoryInfo` container IDs with `OwnerType=player`; a missing or damaged individual player save adds a warning while the rest of the world index continues. Unsupported world containers or schema changes are reported as `parser_incompatible`; the backend keeps the last successful cache when available and does not block other panel features.
 
 ## Version Checks
 
@@ -140,16 +148,17 @@ Metrics retain the existing frontend fields and additionally map `basecampnum` t
 - Lifecycle: `POST /api/server/install`, `POST /api/server/update`, `POST /api/server/update-if-needed`, `POST /api/server/start`, `POST /api/server/stop`, `POST /api/server/restart`, `POST /api/server/bootstrap`
 - Safe restart: `POST /api/server/safe-restart`
 - Setup: `GET /api/server/prerequisites`, `GET/PUT /api/server/runtime`, `GET/PUT /api/server/startup`, `POST /api/server/initialize-config`
-- Session: `GET /api/auth/me`
+- Authentication: `GET /api/auth/status`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET/POST/DELETE /api/auth/api-keys`
 - Status/logs/jobs: `GET /api/server/status`, `GET /api/server/version`, `POST /api/server/version/check`, `GET /api/server/metrics`, `GET /api/server/game-data`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
 - World reset: `GET /api/server/world`, `POST /api/server/world/reset`
 - Backups: `POST /api/server/backup`, `GET /api/backups`, `POST /api/backups/{name}/restore`
 - Audit: `GET /api/audit-logs`
 - Player access: `GET/POST/DELETE /api/players/bans`, `GET/PUT /api/players/whitelist`, `POST /api/players/{id}/kick`
 - Palworld config: `GET /api/config/palworld`, `PUT /api/config/palworld`, `GET /api/config/palworld/schema`, `POST /api/config/palworld/validate`
-- Mods: `GET /api/mods`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/workshop/{id}/translate`, `POST /api/mods/upload`, `POST /api/mods/workshop`, `POST /api/mods/{id}/enable`, `POST /api/mods/{id}/disable`, `DELETE /api/mods/{id}`
+- Mods: `GET /api/mods`, `POST /api/mods/import/inspect`, `POST /api/mods/import/inspect/{id}/select`, `POST /api/mods/import`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/workshop/{id}/translate`, plus compatible `/api/mods/upload` and `/api/mods/workshop` endpoints
 - AI translation: `GET/PUT /api/ai/translation/config`, `POST /api/ai/translation/test`
 - PalDefender: `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
+- PalDefender GM: `GET /api/security/paldefender/gm/status`, `GET /api/security/paldefender/gm/players`, `GET /api/security/paldefender/gm/items`, `GET /api/security/paldefender/gm/players/{id}/inventory`, item/message/kick/ban/unban writes under `/api/security/paldefender/gm/players/{id}`, and `POST /api/security/paldefender/gm/broadcast`
 
 ## Paths
 

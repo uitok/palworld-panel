@@ -2,11 +2,11 @@ import { createContext } from 'react';
 import type { Job, ServerMetrics, ServerStatus, SessionInfo } from '../types';
 
 export interface ServerStoreContextType {
-  panelToken: string;
-  setPanelToken: (token: string) => void;
-  authError: boolean;
-  clearAuthError: () => void;
+  authState: 'loading' | 'register' | 'login' | 'authenticated' | 'unavailable';
   session: SessionInfo | null;
+  completeAuthentication: (session: SessionInfo) => void;
+  refreshAuthentication: () => Promise<void>;
+  logout: () => Promise<void>;
   autoRefresh: boolean;
   setAutoRefresh: (auto: boolean) => void;
   refreshKey: number;

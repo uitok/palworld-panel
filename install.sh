@@ -8,6 +8,7 @@ listen_addr="${PALPANEL_LISTEN_ADDR:-127.0.0.1:8080}"
 listen_explicit=0
 [[ -v PALPANEL_LISTEN_ADDR ]] && listen_explicit=1
 docker_mode="auto"
+proxy_url="${PALPANEL_PROXY:-}"
 github_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 fail() {
@@ -26,6 +27,7 @@ Options:
   --listen HOST:PORT   panel listener (default: 127.0.0.1:8080)
   --docker             grant the service account Docker socket access
   --no-docker          do not grant Docker socket access
+  --proxy URL          proxy for GitHub downloads (for example socks5h://127.0.0.1:10808)
   --repo OWNER/REPO    GitHub repository (default: uitok/palworld-panel)
   -h, --help           show this help
 EOF
@@ -48,6 +50,12 @@ while [[ $# -gt 0 ]]; do
     --listen=*) listen_addr="${1#*=}"; listen_explicit=1; shift ;;
     --docker) docker_mode="enabled"; shift ;;
     --no-docker) docker_mode="disabled"; shift ;;
+    --proxy)
+      [[ $# -ge 2 ]] || fail "--proxy requires a URL"
+      proxy_url="$2"
+      shift 2
+      ;;
+    --proxy=*) proxy_url="${1#*=}"; shift ;;
     --repo)
       [[ $# -ge 2 ]] || fail "--repo requires OWNER/REPO"
       repo="$2"
@@ -67,6 +75,9 @@ esac
 [[ "${PALPANEL_TEST_MODE:-0}" == "1" || "$(id -u)" -eq 0 ]] || fail "run this installer as root (for example: curl ... | sudo bash)"
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "invalid GitHub repository: $repo"
 [[ "$listen_addr" =~ ^[^[:space:]#=]+:[0-9]+$ ]] || fail "invalid listen address: $listen_addr"
+if [[ -n "$proxy_url" ]]; then
+  [[ "$proxy_url" =~ ^(socks5h?|https?)://[^[:space:]]+$ ]] || fail "invalid proxy URL: $proxy_url"
+fi
 listen_host="${listen_addr%:*}"
 listen_port="${listen_addr##*:}"
 [[ -n "$listen_host" && "$listen_host" != *'/'* ]] || fail "invalid listen host: $listen_host"
@@ -74,7 +85,7 @@ listen_port="${listen_addr##*:}"
 listen_port_number=$((10#$listen_port))
 (( listen_port_number >= 1 && listen_port_number <= 65535 )) || fail "listen port must be between 1 and 65535"
 
-for command_name in curl sha256sum tar awk mktemp; do
+for command_name in curl sha256sum tar awk sed head mktemp seq sleep hostname; do
   command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
 done
 
@@ -82,21 +93,26 @@ curl_headers=(-H 'Accept: application/vnd.github+json')
 if [[ -n "$github_token" ]]; then
   curl_headers+=(-H "Authorization: Bearer $github_token")
 fi
+curl_proxy=()
+if [[ -n "$proxy_url" ]]; then
+  # An explicit proxy must win over a broad NO_PROXY inherited from the shell.
+  curl_proxy=(--proxy "$proxy_url" --noproxy '')
+fi
 
 resolve_latest_version() {
   local resolved=""
   local effective_url=""
   local response=""
-  if command -v gh >/dev/null 2>&1; then
+  if [[ -z "$proxy_url" ]] && command -v gh >/dev/null 2>&1; then
     resolved="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null || true)"
   fi
   if [[ -z "$resolved" && -n "$github_token" ]]; then
-    response="$(curl --fail --silent --show-error --location --retry 3 "${curl_headers[@]}" \
+    response="$(curl --fail --silent --show-error --location --retry 3 "${curl_proxy[@]}" "${curl_headers[@]}" \
       "https://api.github.com/repos/$repo/releases/latest")"
     resolved="$(printf '%s\n' "$response" | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   fi
   if [[ -z "$resolved" ]]; then
-    effective_url="$(curl --fail --silent --show-error --location --retry 3 -o /dev/null -w '%{url_effective}' \
+    effective_url="$(curl --fail --silent --show-error --location --retry 3 "${curl_proxy[@]}" -o /dev/null -w '%{url_effective}' \
       "https://github.com/$repo/releases/latest")"
     resolved="${effective_url##*/}"
   fi
@@ -127,6 +143,7 @@ download_asset() {
   local name="$1"
   printf 'Downloading %s\n' "$name"
   curl --fail --silent --show-error --location --retry 3 --connect-timeout 15 \
+    "${curl_proxy[@]}" \
     "${curl_headers[@]}" "$release_base_url/$name" -o "$temporary_dir/$name"
 }
 
@@ -235,11 +252,10 @@ if [[ "$panel_host" == *:* && "$panel_host" != \[*\] ]]; then
   panel_host="[$panel_host]"
 fi
 panel_url="http://$panel_host:$listen_port/"
-admin_token="$($installed_ctl token)"
 
 printf '\nPalPanel installation completed.\n'
 printf 'Panel URL: %s\n' "$panel_url"
-printf 'Admin Token: %s\n' "$admin_token"
+printf 'Open the panel URL to register the first administrator.\n'
 printf 'Status: sudo %s status\n' "$installed_ctl"
 printf 'Logs: sudo %s logs -f\n' "$installed_ctl"
 if (( docker_access )); then

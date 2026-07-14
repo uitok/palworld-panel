@@ -15,6 +15,7 @@ const DefaultPalDefenderRESTPort = 17993
 const DefaultSteamAPIBaseURL = "https://api.steampowered.com"
 const DefaultSteamAPITimeoutSeconds = 15
 const DefaultAITranslationTimeoutSeconds = 90
+const DefaultMonitorRetentionDays = 7
 
 var DefaultDockerRunnerBaseImageMirrorPrefixes = []string{
 	"docker.m.daocloud.io",
@@ -38,9 +39,6 @@ type Config struct {
 	BackupsDir                   string
 	LogsDir                      string
 	DBPath                       string
-	PanelToken                   string
-	OperatorToken                string
-	ViewerToken                  string
 	RequireAuth                  bool
 	CORSOrigins                  []string
 	FrontendDist                 string
@@ -71,6 +69,7 @@ type Config struct {
 	SaveIndexCacheDir            string
 	SaveIndexTimeoutSeconds      int
 	PerfSlowRequestMS            int
+	MonitorRetentionDays         int
 	AITranslationTimeoutSeconds  int
 	LogLevel                     string
 	RunnerDir                    string
@@ -115,9 +114,6 @@ func Load() (Config, error) {
 		BackupsDir:                   env("PALPANEL_BACKUPS_DIR", filepath.Join(dataDir, "backups")),
 		LogsDir:                      env("PALPANEL_LOGS_DIR", filepath.Join(dataDir, "logs")),
 		DBPath:                       env("PALPANEL_DB_PATH", filepath.Join(dataDir, "palpanel.db")),
-		PanelToken:                   env("PANEL_TOKEN", ""),
-		OperatorToken:                env("PANEL_OPERATOR_TOKEN", ""),
-		ViewerToken:                  env("PANEL_VIEWER_TOKEN", ""),
 		RequireAuth:                  envBool("PALPANEL_REQUIRE_AUTH", true),
 		CORSOrigins:                  envList("PALPANEL_CORS_ORIGINS", []string{"http://127.0.0.1:3000", "http://localhost:3000"}),
 		FrontendDist:                 env("PALPANEL_FRONTEND_DIST", filepath.Join(root, "frontend", "dist")),
@@ -148,18 +144,10 @@ func Load() (Config, error) {
 		SaveIndexCacheDir:            env("PALPANEL_SAVE_INDEX_CACHE_DIR", filepath.Join(dataDir, "save-index")),
 		SaveIndexTimeoutSeconds:      envInt("PALPANEL_SAVE_INDEX_TIMEOUT_SECONDS", 120),
 		PerfSlowRequestMS:            envInt("PALPANEL_PERF_SLOW_REQUEST_MS", 500),
+		MonitorRetentionDays:         envInt("PALPANEL_MONITOR_RETENTION_DAYS", DefaultMonitorRetentionDays),
 		AITranslationTimeoutSeconds:  envInt("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS", DefaultAITranslationTimeoutSeconds),
 		LogLevel:                     strings.ToLower(env("PALPANEL_LOG_LEVEL", "info")),
 		RunnerDir:                    env("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner")),
-	}
-	if cfg.RequireAuth && isWeakToken(cfg.PanelToken) {
-		return Config{}, fmt.Errorf("PANEL_TOKEN must be set to a strong non-default value when PALPANEL_REQUIRE_AUTH is enabled")
-	}
-	if cfg.RequireAuth && cfg.OperatorToken != "" && isWeakToken(cfg.OperatorToken) {
-		return Config{}, fmt.Errorf("PANEL_OPERATOR_TOKEN must be strong when configured")
-	}
-	if cfg.RequireAuth && cfg.ViewerToken != "" && isWeakToken(cfg.ViewerToken) {
-		return Config{}, fmt.Errorf("PANEL_VIEWER_TOKEN must be strong when configured")
 	}
 	if err := validateListenAddress(cfg.ListenAddr); err != nil {
 		return Config{}, err
@@ -172,6 +160,9 @@ func Load() (Config, error) {
 	}
 	if cfg.AITranslationTimeoutSeconds < 1 || cfg.AITranslationTimeoutSeconds > 600 {
 		return Config{}, fmt.Errorf("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS must be between 1 and 600")
+	}
+	if cfg.MonitorRetentionDays < 0 || cfg.MonitorRetentionDays > 3650 {
+		return Config{}, fmt.Errorf("PALPANEL_MONITOR_RETENTION_DAYS must be between 0 and 3650")
 	}
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
@@ -258,7 +249,10 @@ func (c Config) AITranslationKeyPath() string {
 }
 
 func (c Config) EffectiveSteamWebAPIKey() string {
-	return strings.TrimSpace(c.SteamWebAPIKey)
+	if key := strings.TrimSpace(c.SteamWebAPIKey); key != "" {
+		return key
+	}
+	return bundledSteamWebAPIKey()
 }
 
 func (c Config) SteamWebAPIKeyConfigured() bool {
@@ -266,8 +260,14 @@ func (c Config) SteamWebAPIKeyConfigured() bool {
 }
 
 func (c Config) SteamWebAPIKeySourceName() string {
-	if strings.TrimSpace(c.SteamWebAPIKey) == "" {
+	if strings.TrimSpace(c.EffectiveSteamWebAPIKey()) == "" {
 		return ""
+	}
+	if source := strings.TrimSpace(c.SteamWebAPIKeySource); source != "" {
+		return source
+	}
+	if strings.TrimSpace(c.SteamWebAPIKey) == "" {
+		return "bundled"
 	}
 	return "environment"
 }
@@ -276,7 +276,7 @@ func resolveSteamWebAPIKey() (string, string) {
 	if key := strings.TrimSpace(os.Getenv("STEAM_WEB_API_KEY")); key != "" {
 		return key, "environment"
 	}
-	return "", ""
+	return bundledSteamWebAPIKey(), "bundled"
 }
 
 func validateHTTPBaseURL(name, raw string) error {
@@ -323,6 +323,7 @@ func validateScalarEnvironment() error {
 		"PALPANEL_GAME_DATA_MAX_MB",
 		"PALPANEL_SAVE_INDEX_TIMEOUT_SECONDS",
 		"PALPANEL_PERF_SLOW_REQUEST_MS",
+		"PALPANEL_MONITOR_RETENTION_DAYS",
 		"PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS",
 	} {
 		raw := strings.TrimSpace(os.Getenv(name))
@@ -399,9 +400,4 @@ func envList(key string, fallback []string) []string {
 		return fallback
 	}
 	return out
-}
-
-func isWeakToken(token string) bool {
-	token = strings.TrimSpace(token)
-	return token == "" || token == "change-me" || token == "changeme" || len(token) < 16
 }

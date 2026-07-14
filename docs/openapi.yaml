@@ -1,0 +1,786 @@
+openapi: 3.1.0
+info:
+  title: PalPanel API
+  version: 1.0.0
+  description: Stable HTTP contract for the PalPanel 1.x management API.
+servers:
+  - url: /api
+security:
+  - sessionCookie: []
+  - developmentKey: []
+tags:
+  - {name: auth}
+  - {name: system}
+  - {name: server}
+  - {name: content}
+  - {name: security}
+  - {name: world}
+x-success: &success
+  description: Successful response wrapped in an API envelope.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SuccessEnvelope'}
+x-accepted: &accepted
+  description: Asynchronous job accepted.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/JobEnvelope'}
+x-error: &error
+  description: Request failed.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+x-auth-status: &authStatus
+  description: Authentication initialization and current session state.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/AuthStatusEnvelope'}
+x-session: &session
+  description: Authenticated account and permissions.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SessionEnvelope'}
+x-development-key: &developmentKey
+  description: Development key metadata. The complete token is returned only when created.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/DevelopmentKeyEnvelope'}
+x-development-keys: &developmentKeys
+  description: Development keys owned by the authenticated account.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/DevelopmentKeyListEnvelope'}
+x-import-inspection: &importInspection
+  description: Validated Mod source and candidate metadata.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ImportInspectionEnvelope'}
+x-read-responses: &readResponses
+  '200': *success
+  '401': *error
+  '404': *error
+x-write-responses: &writeResponses
+  '200': *success
+  '201': *success
+  '202': *accepted
+  '400': *error
+  '401': *error
+  '403': *error
+  '409': *error
+  '422': *error
+  '500': *error
+x-id-parameter: &idParameter
+  name: id
+  in: path
+  required: true
+  schema: {type: string}
+x-name-parameter: &nameParameter
+  name: name
+  in: path
+  required: true
+  schema: {type: string}
+x-json-request: &jsonRequest
+  required: true
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/JsonObject'}
+paths:
+  /health:
+    get: {operationId: getHealth, tags: [system], security: [], x-palpanel-permission: public, responses: {'200': *success}}
+  /ready:
+    get: {operationId: getReadiness, tags: [system], security: [], x-palpanel-permission: public, responses: {'200': *success, '503': *error}}
+  /auth/status:
+    get:
+      operationId: getAuthenticationStatus
+      tags: [auth]
+      security: []
+      x-palpanel-permission: public
+      responses: {'200': *authStatus, '500': *error}
+  /auth/register:
+    post:
+      operationId: registerInitialAdministrator
+      tags: [auth]
+      security: []
+      x-palpanel-permission: public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AuthCredentials'}
+      responses: {'201': *session, '400': *error, '409': *error, '422': *error, '429': *error, '500': *error}
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      security: []
+      x-palpanel-permission: public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AuthCredentials'}
+      responses: {'200': *session, '400': *error, '401': *error, '429': *error, '500': *error}
+  /auth/me:
+    get: {operationId: getCurrentPrincipal, tags: [auth], x-palpanel-permission: read, responses: {'200': *session, '401': *error}}
+  /auth/logout:
+    post: {operationId: logout, tags: [auth], x-palpanel-permission: read, responses: *writeResponses}
+  /auth/api-keys:
+    get: {operationId: listDevelopmentKeys, tags: [auth], x-palpanel-permission: read, responses: {'200': *developmentKeys, '401': *error, '500': *error}}
+    post:
+      operationId: createDevelopmentKey
+      tags: [auth]
+      x-palpanel-permission: 'security:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DevelopmentKeyInput'}
+      responses: {'201': *developmentKey, '400': *error, '401': *error, '403': *error, '422': *error, '500': *error}
+  /auth/api-keys/{id}:
+    parameters: [*idParameter]
+    delete: {operationId: revokeDevelopmentKey, tags: [auth], x-palpanel-permission: 'security:write', responses: *writeResponses}
+  /jobs:
+    get: {operationId: listJobs, tags: [system], x-palpanel-permission: read, responses: *readResponses}
+  /jobs/{id}:
+    parameters: [*idParameter]
+    get: {operationId: getJob, tags: [system], x-palpanel-permission: read, responses: *readResponses}
+  /audit-logs:
+    get: {operationId: listAuditLogs, tags: [system], x-palpanel-permission: 'audit:read', responses: *readResponses}
+  /alerts:
+    get: {operationId: listAlerts, tags: [system], x-palpanel-permission: read, responses: *readResponses}
+  /alerts/{id}/ack:
+    parameters: [*idParameter]
+    post: {operationId: acknowledgeAlert, tags: [system], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /schedules:
+    get: {operationId: listSchedules, tags: [system], x-palpanel-permission: read, responses: *readResponses}
+    post:
+      operationId: createSchedule
+      tags: [system]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ScheduleInput'}
+      responses: *writeResponses
+  /schedules/{id}:
+    parameters: [*idParameter]
+    put:
+      operationId: updateSchedule
+      tags: [system]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ScheduleInput'}
+      responses: *writeResponses
+    delete: {operationId: deleteSchedule, tags: [system], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /schedules/{id}/run:
+    parameters: [*idParameter]
+    post: {operationId: runSchedule, tags: [system], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/status:
+    get: {operationId: getServerStatus, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/prerequisites:
+    get: {operationId: getServerPrerequisites, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/host:
+    get: {operationId: getHostCapabilities, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/runtime:
+    get: {operationId: getRuntime, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    put: {operationId: updateRuntime, tags: [server], x-palpanel-permission: 'config:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/docker/plan:
+    get: {operationId: getDockerInstallPlan, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/docker/install:
+    post: {operationId: installDocker, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/docker/mirrors/plan:
+    get: {operationId: getDockerMirrorPlan, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/docker/mirrors/configure:
+    post: {operationId: configureDockerMirrors, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/bootstrap:
+    post: {operationId: bootstrapServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/logs:
+    get: {operationId: getServerLogs, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/world:
+    get: {operationId: getWorld, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/world/reset:
+    post: {operationId: resetWorld, tags: [server], x-palpanel-permission: 'world:reset', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/install:
+    post: {operationId: installServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/update:
+    post: {operationId: updateServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/update-if-needed:
+    post: {operationId: updateServerIfNeeded, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/version:
+    get: {operationId: getServerVersion, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/version/check:
+    post: {operationId: checkServerVersion, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/start:
+    post: {operationId: startServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/stop:
+    post: {operationId: stopServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/restart:
+    post: {operationId: restartServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/safe-restart:
+    post: {operationId: safeRestartServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/force-stop:
+    post: {operationId: forceStopServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/startup:
+    get: {operationId: getServerStartup, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    put: {operationId: updateServerStartup, tags: [server], x-palpanel-permission: 'config:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/initialize-config:
+    post: {operationId: initializeServerConfig, tags: [server], x-palpanel-permission: 'config:write', responses: *writeResponses}
+  /monitor/snapshot:
+    get: {operationId: getMonitorSnapshot, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /monitor/history:
+    get: {operationId: getMonitorHistory, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/backup:
+    post: {operationId: createBackup, tags: [server], x-palpanel-permission: 'backup:write', responses: *writeResponses}
+  /backups:
+    get: {operationId: listBackups, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /backups/{name}/restore:
+    parameters: [*nameParameter]
+    post: {operationId: restoreBackup, tags: [server], x-palpanel-permission: 'backup:write', responses: *writeResponses}
+  /backups/{name}/download:
+    parameters: [*nameParameter]
+    get: {operationId: downloadBackup, tags: [server], x-palpanel-permission: 'backup:write', responses: *readResponses}
+  /backups/{name}:
+    parameters: [*nameParameter]
+    delete: {operationId: deleteBackup, tags: [server], x-palpanel-permission: 'backup:write', responses: *writeResponses}
+  /backups/{name}/verify:
+    parameters: [*nameParameter]
+    post: {operationId: verifyBackup, tags: [server], x-palpanel-permission: 'backup:write', responses: *writeResponses}
+  /server/info:
+    get: {operationId: getPalworldInfo, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/players:
+    get: {operationId: getOnlinePlayers, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/settings:
+    get: {operationId: getLiveServerSettings, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/metrics:
+    get: {operationId: getServerMetrics, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/game-data:
+    get: {operationId: getServerGameData, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+  /server/announce:
+    post: {operationId: announce, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/save:
+    post: {operationId: saveWorld, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /server/shutdown:
+    post: {operationId: shutdownServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+  /config/palworld:
+    get: {operationId: getPalworldConfig, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+    put: {operationId: updatePalworldConfig, tags: [content], x-palpanel-permission: 'config:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /config/palworld/schema:
+    get: {operationId: getPalworldConfigSchema, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+  /config/palworld/validate:
+    post: {operationId: validatePalworldConfig, tags: [content], x-palpanel-permission: read, requestBody: *jsonRequest, responses: *writeResponses}
+  /mods:
+    get: {operationId: listMods, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+  /mods/workshop/status:
+    get: {operationId: getWorkshopStatus, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+  /mods/workshop/search:
+    get: {operationId: searchWorkshop, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+  /mods/workshop/{id}:
+    parameters: [*idParameter]
+    get: {operationId: getWorkshopItem, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+  /mods/workshop/{id}/translate:
+    parameters: [*idParameter]
+    post: {operationId: translateWorkshopItem, tags: [content], x-palpanel-permission: 'mods:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /mods/import/inspect:
+    post:
+      operationId: inspectModImport
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModImportInspectRequest'}
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/ModImportUploadRequest'}
+      responses: {'200': *importInspection, '400': *error, '401': *error, '403': *error, '413': *error, '502': *error, '500': *error}
+  /mods/import/inspect/{id}/select:
+    parameters: [*idParameter]
+    post:
+      operationId: selectModImportCandidate
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModImportSelectRequest'}
+      responses: {'200': *importInspection, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '410': *error, '413': *error, '502': *error, '500': *error}
+  /mods/import:
+    post:
+      operationId: importMod
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModImportRequest'}
+      responses: {'202': *accepted, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '410': *error, '500': *error}
+  /mods/upload:
+    post: {operationId: uploadMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
+  /mods/workshop:
+    post: {operationId: downloadWorkshopItem, tags: [content], x-palpanel-permission: 'mods:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /mods/{id}/enable:
+    parameters: [*idParameter]
+    post: {operationId: enableMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
+  /mods/{id}/disable:
+    parameters: [*idParameter]
+    post: {operationId: disableMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
+  /mods/{id}:
+    parameters: [*idParameter]
+    delete: {operationId: deleteMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
+  /ai/translation/config:
+    get: {operationId: getAITranslationConfig, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+    put: {operationId: updateAITranslationConfig, tags: [content], x-palpanel-permission: 'ai:config', requestBody: *jsonRequest, responses: *writeResponses}
+  /ai/translation/test:
+    post: {operationId: testAITranslationConfig, tags: [content], x-palpanel-permission: 'ai:config', requestBody: *jsonRequest, responses: *writeResponses}
+  /security/paldefender/releases:
+    get: {operationId: listPalDefenderReleases, tags: [security], x-palpanel-permission: read, responses: *readResponses}
+  /security/paldefender/status:
+    get: {operationId: getPalDefenderStatus, tags: [security], x-palpanel-permission: read, responses: *readResponses}
+  /security/paldefender/install:
+    post: {operationId: installPalDefender, tags: [security], x-palpanel-permission: 'security:write', responses: *writeResponses}
+  /security/paldefender/update:
+    post: {operationId: updatePalDefender, tags: [security], x-palpanel-permission: 'security:write', responses: *writeResponses}
+  /security/paldefender/rollback:
+    post: {operationId: rollbackPalDefender, tags: [security], x-palpanel-permission: 'security:write', responses: *writeResponses}
+  /security/paldefender/config:
+    get: {operationId: getPalDefenderConfig, tags: [security], x-palpanel-permission: read, responses: *readResponses}
+    put: {operationId: updatePalDefenderConfig, tags: [security], x-palpanel-permission: 'security:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /security/paldefender/apply-preset:
+    post: {operationId: applyPalDefenderPreset, tags: [security], x-palpanel-permission: 'security:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /security/paldefender/rest-token:
+    post: {operationId: createPalDefenderToken, tags: [security], x-palpanel-permission: 'security:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /security/paldefender/reload-config:
+    post: {operationId: reloadPalDefenderConfig, tags: [security], x-palpanel-permission: 'security:write', responses: *writeResponses}
+  /security/paldefender/gm/status:
+    get: {operationId: getPalDefenderGMStatus, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '401': *error}}
+  /security/paldefender/gm/players:
+    get: {operationId: listPalDefenderGMPlayers, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '401': *error, '409': *error, '502': *error}}
+  /security/paldefender/gm/items:
+    get:
+      operationId: searchPalDefenderGMItems
+      tags: [security]
+      x-palpanel-permission: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+      responses: {'200': *success, '400': *error, '401': *error}
+  /security/paldefender/gm/players/{id}/inventory:
+    parameters: [*idParameter]
+    get: {operationId: getPalDefenderGMInventory, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '400': *error, '401': *error, '404': *error, '409': *error, '502': *error}}
+  /security/paldefender/gm/players/{id}/items:
+    parameters: [*idParameter]
+    post:
+      operationId: givePalDefenderGMItems
+      tags: [security]
+      x-palpanel-permission: 'players:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PalDefenderGiveItemsRequest'}
+      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}
+  /security/paldefender/gm/players/{id}/message:
+    parameters: [*idParameter]
+    post:
+      operationId: sendPalDefenderGMPlayerMessage
+      tags: [security]
+      x-palpanel-permission: 'players:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PalDefenderMessageRequest'}
+      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}
+  /security/paldefender/gm/players/{id}/kick:
+    parameters: [*idParameter]
+    post: {operationId: kickPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}}
+  /security/paldefender/gm/players/{id}/ban:
+    parameters: [*idParameter]
+    post: {operationId: banPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '409': *error, '502': *error}}
+  /security/paldefender/gm/players/{id}/unban:
+    parameters: [*idParameter]
+    post: {operationId: unbanPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}}
+  /security/paldefender/gm/broadcast:
+    post:
+      operationId: broadcastPalDefenderGMMessage
+      tags: [security]
+      x-palpanel-permission: 'players:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PalDefenderBroadcastRequest'}
+      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '409': *error, '502': *error}
+  /save/index/status:
+    get: {operationId: getSaveIndexStatus, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /save/index/rebuild:
+    post: {operationId: rebuildSaveIndex, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /players:
+    get: {operationId: listSavePlayers, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /players/{id}:
+    parameters: [*idParameter]
+    get: {operationId: getSavePlayer, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /players/{id}/inventory:
+    parameters: [*idParameter]
+    get: {operationId: getPlayerInventory, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /guilds:
+    get: {operationId: listGuilds, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /guilds/{id}:
+    parameters: [*idParameter]
+    get: {operationId: getGuild, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /bases:
+    get: {operationId: listBases, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /bases/{id}:
+    parameters: [*idParameter]
+    get: {operationId: getBase, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /bases/{id}/storage:
+    parameters: [*idParameter]
+    get: {operationId: getBaseStorage, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /pals:
+    get: {operationId: listPals, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /pals/{id}:
+    parameters: [*idParameter]
+    get: {operationId: getPal, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /map/entities:
+    get: {operationId: listMapEntities, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /players/bans:
+    get: {operationId: listPlayerBans, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    post: {operationId: addPlayerBan, tags: [world], x-palpanel-permission: 'players:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /players/bans/{steam_id}:
+    parameters:
+      - {name: steam_id, in: path, required: true, schema: {type: string}}
+    delete: {operationId: deletePlayerBan, tags: [world], x-palpanel-permission: 'players:write', responses: *writeResponses}
+  /players/whitelist:
+    get: {operationId: listPlayerWhitelist, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    put: {operationId: replacePlayerWhitelist, tags: [world], x-palpanel-permission: 'players:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /players/{id}/kick:
+    parameters: [*idParameter]
+    post: {operationId: kickPlayer, tags: [world], x-palpanel-permission: 'players:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /players/{id}/ban:
+    parameters: [*idParameter]
+    post: {operationId: banPlayer, tags: [world], x-palpanel-permission: 'players:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /players/{id}/unban:
+    parameters: [*idParameter]
+    post: {operationId: unbanPlayer, tags: [world], x-palpanel-permission: 'players:write', responses: *writeResponses}
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: palpanel_session
+      description: HttpOnly SameSite=Lax session cookie created by registration or login.
+    developmentKey:
+      type: http
+      scheme: bearer
+      bearerFormat: ppk_...
+      description: 'Revocable development key supplied as Authorization: Bearer ppk_...'
+  schemas:
+    AuthCredentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 3, maxLength: 32}
+        password: {type: string, format: password, minLength: 12, maxLength: 128}
+    SessionInfo:
+      type: object
+      required: [name, role, permissions]
+      properties:
+        name: {type: string}
+        role: {type: string, enum: [admin, operator, viewer]}
+        permissions: {type: array, items: {type: string}}
+    AuthStatus:
+      type: object
+      required: [initialized, authenticated]
+      properties:
+        initialized: {type: boolean}
+        authenticated: {type: boolean}
+        user: {$ref: '#/components/schemas/SessionInfo'}
+    DevelopmentKeyInput:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+    DevelopmentKey:
+      type: object
+      required: [id, name, prefix, created_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        prefix: {type: string}
+        token: {type: string, description: Present only in the create response.}
+        last_used_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+    ModImportInspectRequest:
+      type: object
+      required: [source]
+      properties:
+        source: {type: string}
+    ModImportUploadRequest:
+      type: object
+      required: [file]
+      properties:
+        file: {type: string, format: binary}
+    ModImportSelectRequest:
+      type: object
+      required: [candidate_id]
+      properties:
+        candidate_id: {type: string}
+    ModImportRequest:
+      type: object
+      required: [inspection_id]
+      properties:
+        inspection_id: {type: string}
+        candidate_id: {type: string}
+    ImportCandidate:
+      type: object
+      required: [id, source_type, action, ready]
+      properties:
+        id: {type: string}
+        source_type: {type: string, enum: [workshop, github_asset, https_zip, local_zip]}
+        file_name: {type: string}
+        file_size: {type: integer}
+        name: {type: string}
+        package_name: {type: string}
+        version: {type: string}
+        action: {type: string, enum: [new, update, unknown]}
+        existing_mod_id: {type: string}
+        warnings: {type: array, items: {type: string}}
+        ready: {type: boolean}
+    ImportInspection:
+      type: object
+      required: [id, source_type, source, candidates, expires_at]
+      properties:
+        id: {type: string}
+        source_type: {type: string, enum: [workshop, github_release, https_zip, local_zip]}
+        source: {type: string}
+        candidates: {type: array, items: {$ref: '#/components/schemas/ImportCandidate'}}
+        selected_candidate_id: {type: string}
+        expires_at: {type: string, format: date-time}
+    PalDefenderRESTVersion:
+      type: object
+      required: [Major, Minor, Patch, Build, Version, VersionLong, Beta]
+      properties:
+        Major: {type: integer}
+        Minor: {type: integer}
+        Patch: {type: integer}
+        Build: {type: integer}
+        Version: {type: string}
+        VersionLong: {type: string}
+        Beta: {type: boolean}
+    PalDefenderGMStatus:
+      type: object
+      required: [configured, available]
+      properties:
+        configured: {type: boolean}
+        available: {type: boolean}
+        version: {$ref: '#/components/schemas/PalDefenderRESTVersion'}
+        error: {type: string}
+    PalDefenderLocation:
+      type: object
+      required: [x, y, z]
+      properties:
+        x: {type: number}
+        y: {type: number}
+        z: {type: number}
+    PalDefenderGMPlayer:
+      type: object
+      required: [Name, IP, PlayerUID, UserId, GuildName, GuildUUID, Status, WorldLocation, MapLocation]
+      properties:
+        Name: {type: string}
+        IP: {type: string}
+        PlayerUID: {type: string}
+        UserId: {type: string}
+        GuildName: {type: string}
+        GuildUUID: {type: string}
+        Status: {type: string}
+        WorldLocation: {$ref: '#/components/schemas/PalDefenderLocation'}
+        MapLocation: {$ref: '#/components/schemas/PalDefenderLocation'}
+    PalDefenderGMPlayers:
+      type: object
+      required: [Meta, Players]
+      properties:
+        Meta:
+          type: object
+          required: [PlayerCount, OnlineCount]
+          properties:
+            PlayerCount: {type: integer}
+            OnlineCount: {type: integer}
+        Players: {type: array, items: {$ref: '#/components/schemas/PalDefenderGMPlayer'}}
+    PalDefenderInventorySlot:
+      type: object
+      required: [ItemID, Count]
+      properties:
+        ItemID: {type: string}
+        Count: {type: integer, format: int64}
+    PalDefenderInventoryContainer:
+      type: object
+      required: [Available, ContainerID, UsedSlots, MaxSlots, FreeSlots, Slots]
+      properties:
+        Available: {type: boolean}
+        ContainerID: {type: string}
+        UsedSlots: {type: integer}
+        MaxSlots: {type: integer}
+        FreeSlots: {type: integer}
+        Slots: {type: object, additionalProperties: {$ref: '#/components/schemas/PalDefenderInventorySlot'}}
+    PalDefenderInventory:
+      type: object
+      required: [Items, KeyItems, Weapons, Armor, Food, DropSlot]
+      properties:
+        Items: {$ref: '#/components/schemas/PalDefenderInventoryContainer'}
+        KeyItems: {$ref: '#/components/schemas/PalDefenderInventoryContainer'}
+        Weapons: {$ref: '#/components/schemas/PalDefenderInventoryContainer'}
+        Armor: {$ref: '#/components/schemas/PalDefenderInventoryContainer'}
+        Food: {$ref: '#/components/schemas/PalDefenderInventoryContainer'}
+        DropSlot: {$ref: '#/components/schemas/PalDefenderInventoryContainer'}
+    PalDefenderGMInventory:
+      type: object
+      required: [Meta, Inventory]
+      properties:
+        Meta:
+          type: object
+          required: [PlayerUID, Player]
+          properties:
+            PlayerUID: {type: string}
+            Player: {type: string}
+        Inventory: {$ref: '#/components/schemas/PalDefenderInventory'}
+    PalDefenderItemGrant:
+      type: object
+      required: [ItemID, Count]
+      properties:
+        ItemID: {type: string, minLength: 1, maxLength: 128}
+        Count: {type: integer, format: int64, minimum: 1, maximum: 2147483647}
+    PalDefenderItemCatalogEntry:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        icon: {type: string}
+    PalDefenderItemCatalog:
+      type: object
+      required: [items, returned]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PalDefenderItemCatalogEntry'}}
+        returned: {type: integer}
+    PalDefenderGiveItemsRequest:
+      type: object
+      required: [Items]
+      properties:
+        Items: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderItemGrant'}}
+    PalDefenderMessageRequest:
+      type: object
+      required: [Message]
+      properties:
+        SendType: {type: string, enum: [PlayerChat, PlayerGlobalChat, PlayerGuildChat, PlayerLogNormal, PlayerLogImportant, PlayerLogVeryImportant], default: PlayerLogImportant}
+        Message: {type: string, minLength: 1, maxLength: 4096}
+    PalDefenderPunishmentRequest:
+      type: object
+      properties:
+        Reason: {type: string, maxLength: 1024}
+        IP: {type: boolean, default: false}
+    PalDefenderBroadcastRequest:
+      type: object
+      required: [message]
+      properties:
+        message: {type: string, minLength: 1, maxLength: 4096}
+        alert: {type: boolean, default: false}
+    AuthStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/AuthStatus'}
+    SessionEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SessionInfo'}
+    DevelopmentKeyEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/DevelopmentKey'}
+    DevelopmentKeyListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/DevelopmentKey'}}
+    ImportInspectionEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/ImportInspection'}
+    JsonObject:
+      type: object
+      additionalProperties: true
+    SuccessEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {}
+    ErrorEnvelope:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: {type: boolean, const: false}
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+    Job:
+      type: object
+      required: [id, type, status, progress, message, created_at, updated_at]
+      properties:
+        id: {type: string}
+        type: {type: string}
+        status: {type: string, enum: [queued, waiting, running, completed, failed]}
+        progress: {type: integer, minimum: 0, maximum: 100}
+        message: {type: string}
+        error: {type: string}
+        error_code: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    JobEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/Job'}
+    ScheduleInput:
+      type: object
+      required: [type]
+      properties:
+        type: {type: string, enum: [save, backup, safe_restart, update, version_check]}
+        enabled: {type: boolean}
+        interval_minutes: {type: integer, minimum: 1}
+        time_of_day: {type: string, pattern: '^[0-2][0-9]:[0-5][0-9]$'}
+        timezone: {type: string, default: UTC}
+        waittime: {type: integer, minimum: 5, maximum: 300}
+        message: {type: string}
+    Schedule:
+      allOf:
+        - {$ref: '#/components/schemas/ScheduleInput'}
+        - type: object
+          required: [id, enabled, timezone, created_at, updated_at]
+          properties:
+            id: {type: string}
+            enabled: {type: boolean}
+            timezone: {type: string}
+            last_run_at: {type: string, format: date-time}
+            next_run_at: {type: string, format: date-time}
+            created_at: {type: string, format: date-time}
+            updated_at: {type: string, format: date-time}

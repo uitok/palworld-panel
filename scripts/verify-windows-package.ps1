@@ -20,12 +20,12 @@ try {
     "PalPanel.exe",
     "palpanel-server.exe",
     "sav-cli.exe",
-    "frontend\dist\index.html",
     "config\palpanel.env.example",
     "LICENSE",
     "THIRD_PARTY_LICENSES.txt",
     "licenses\sav-cli-LICENSE.txt",
     "licenses\pallocalize-Apache-2.0.txt",
+    "licenses\PalDefender-MIT.txt",
     "checksums.txt"
   )
   foreach ($relative in $required) {
@@ -38,6 +38,9 @@ try {
     if (Test-Path -LiteralPath (Join-Path $Package $runtimePath)) {
       throw "Windows package contains runtime path $runtimePath"
     }
+  }
+  if (Test-Path -LiteralPath (Join-Path $Package "frontend")) {
+    throw "Windows package must not contain a separate frontend directory"
   }
 
   $checksumPath = Join-Path $Package "checksums.txt"

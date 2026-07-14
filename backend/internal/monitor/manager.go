@@ -13,7 +13,6 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
-	"palpanel/internal/docker"
 	"palpanel/internal/id"
 	"palpanel/internal/palconfig"
 	"palpanel/internal/palrest"
@@ -23,16 +22,27 @@ import (
 type Manager struct {
 	cfg     appconfig.Config
 	store   *db.Store
-	server  server.Manager
+	server  Server
 	palrest palrest.Client
+	run     func(context.Context, string, ...string) ([]byte, error)
+	dial    func(string, string, time.Duration) (net.Conn, error)
+	goos    string
+	now     func() time.Time
+}
+
+type Server interface {
+	Status(context.Context) (server.Status, error)
 }
 
 type Snapshot struct {
 	Sample db.MonitorSample `json:"sample"`
 }
 
-func New(cfg appconfig.Config, store *db.Store, serverManager server.Manager, restClient palrest.Client) Manager {
-	return Manager{cfg: cfg, store: store, server: serverManager, palrest: restClient}
+func New(cfg appconfig.Config, store *db.Store, serverManager Server, restClient palrest.Client) Manager {
+	return Manager{
+		cfg: cfg, store: store, server: serverManager, palrest: restClient,
+		run: runCommand, dial: net.DialTimeout, goos: runtime.GOOS, now: time.Now,
+	}
 }
 
 func (m Manager) Start(ctx context.Context) <-chan struct{} {
@@ -40,14 +50,19 @@ func (m Manager) Start(ctx context.Context) <-chan struct{} {
 	go func() {
 		defer close(done)
 		_, _ = m.Sample(ctx)
+		_ = m.Prune(ctx)
 		ticker := time.NewTicker(15 * time.Second)
+		pruneTicker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
+		defer pruneTicker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
 				_, _ = m.Sample(ctx)
+			case <-pruneTicker.C:
+				_ = m.Prune(ctx)
 			}
 		}
 	}()
@@ -74,7 +89,7 @@ func (m Manager) History(ctx context.Context, limit int) ([]db.MonitorSample, er
 }
 
 func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
-	sample := db.MonitorSample{ID: id.New("mon"), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	sample := db.MonitorSample{ID: id.New("mon"), CreatedAt: m.currentTime().UTC().Format(time.RFC3339Nano)}
 	status, err := m.server.Status(ctx)
 	if err != nil {
 		sample.UnavailableReason = err.Error()
@@ -90,10 +105,29 @@ func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
 	m.fillDiskStats(ctx, &sample)
 	m.fillRESTStats(ctx, &sample)
 	m.fillRCONHealth(ctx, &sample)
+	if m.cfg.MonitorRetentionDays == 0 {
+		return sample, nil
+	}
 	if err := m.store.InsertMonitorSample(ctx, sample); err != nil {
 		return sample, err
 	}
 	return sample, nil
+}
+
+func (m Manager) Prune(ctx context.Context) error {
+	if m.cfg.MonitorRetentionDays <= 0 {
+		return nil
+	}
+	cutoff := m.currentTime().UTC().AddDate(0, 0, -m.cfg.MonitorRetentionDays)
+	for {
+		deleted, err := m.store.DeleteMonitorSamplesBefore(ctx, cutoff, 1000)
+		if err != nil {
+			return err
+		}
+		if deleted < 1000 {
+			return nil
+		}
+	}
 }
 
 func (m Manager) fillRESTStats(ctx context.Context, sample *db.MonitorSample) {
@@ -134,7 +168,11 @@ func (m Manager) fillRCONHealth(ctx context.Context, sample *db.MonitorSample) {
 	if strings.TrimSpace(port) == "" {
 		port = "25575"
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", port), 2*time.Second)
+	dial := m.dial
+	if dial == nil {
+		dial = net.DialTimeout
+	}
+	conn, err := dial("tcp", net.JoinHostPort("127.0.0.1", port), 2*time.Second)
 	if err != nil {
 		sample.RCONHealthy = false
 		appendReason(sample, "RCON: "+err.Error())
@@ -145,7 +183,7 @@ func (m Manager) fillRCONHealth(ctx context.Context, sample *db.MonitorSample) {
 }
 
 func (m Manager) fillDockerStats(ctx context.Context, sample *db.MonitorSample) {
-	out, err := docker.RunCommand(ctx, m.cfg.DockerBinary, "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", m.cfg.DockerContainer)
+	out, err := m.command(ctx, m.cfg.DockerBinary, "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", m.cfg.DockerContainer)
 	if err != nil {
 		appendReason(sample, "docker stats: "+err.Error())
 		return
@@ -178,8 +216,7 @@ func (m Manager) fillWindowsProcessStats(ctx context.Context, sample *db.Monitor
 		appendReason(sample, "windows process: pid unavailable")
 		return
 	}
-	cmd := exec.CommandContext(ctx, "tasklist", "/FI", "PID eq "+pid, "/FO", "CSV", "/NH")
-	out, err := cmd.CombinedOutput()
+	out, err := m.command(ctx, "tasklist", "/FI", "PID eq "+pid, "/FO", "CSV", "/NH")
 	if err != nil {
 		appendReason(sample, "tasklist: "+strings.TrimSpace(string(out)))
 		return
@@ -198,23 +235,27 @@ func (m Manager) fillWindowsProcessStats(ctx context.Context, sample *db.Monitor
 }
 
 func (m Manager) fillDiskStats(ctx context.Context, sample *db.MonitorSample) {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
+	if m.runtimeOS() == "windows" {
 		drive := "C:"
 		if len(m.cfg.DataDir) >= 2 && m.cfg.DataDir[1] == ':' {
 			drive = m.cfg.DataDir[:2]
 		}
-		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", fmt.Sprintf("(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='%s'\").FreeSpace; (Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='%s'\").Size", drive, drive))
+		out, err := m.command(ctx, "powershell", "-NoProfile", "-Command", fmt.Sprintf("(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='%s'\").FreeSpace; (Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='%s'\").Size", drive, drive))
+		m.parseDiskStats(out, err, true, sample)
+		return
 	} else {
-		cmd = exec.CommandContext(ctx, "df", "-k", m.cfg.DataDir)
+		out, err := m.command(ctx, "df", "-k", m.cfg.DataDir)
+		m.parseDiskStats(out, err, false, sample)
 	}
-	out, err := cmd.CombinedOutput()
+}
+
+func (m Manager) parseDiskStats(out []byte, err error, windows bool, sample *db.MonitorSample) {
 	if err != nil {
 		appendReason(sample, "disk: "+strings.TrimSpace(string(out)))
 		return
 	}
 	lines := nonEmptyLines(string(out))
-	if runtime.GOOS == "windows" {
+	if windows {
 		if len(lines) >= 2 {
 			free, _ := strconv.ParseInt(strings.TrimSpace(lines[0]), 10, 64)
 			total, _ := strconv.ParseInt(strings.TrimSpace(lines[1]), 10, 64)
@@ -238,6 +279,31 @@ func (m Manager) fillDiskStats(ctx context.Context, sample *db.MonitorSample) {
 			}
 		}
 	}
+}
+
+func (m Manager) command(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if m.run != nil {
+		return m.run(ctx, name, args...)
+	}
+	return runCommand(ctx, name, args...)
+}
+
+func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func (m Manager) runtimeOS() string {
+	if m.goos != "" {
+		return m.goos
+	}
+	return runtime.GOOS
+}
+
+func (m Manager) currentTime() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
 }
 
 func appendReason(sample *db.MonitorSample, reason string) {

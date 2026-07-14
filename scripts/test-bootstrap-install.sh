@@ -4,7 +4,7 @@ set -euo pipefail
 archive="${1:?usage: test-bootstrap-install.sh <linux-archive>}"
 archive="$(readlink -f -- "$archive")"
 archive_name="$(basename -- "$archive")"
-[[ "$archive_name" =~ ^palpanel_(v[0-9]+\.[0-9]+\.[0-9]+)_linux_amd64\.tar\.gz$ ]] || {
+[[ "$archive_name" =~ ^palpanel_(v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?)_linux_amd64\.tar\.gz$ ]] || {
   printf 'unexpected archive name: %s\n' "$archive_name" >&2
   exit 1
 }
@@ -32,9 +32,8 @@ export PALPANEL_SKIP_HEALTH_CHECK=1
 grep -qx 'PALPANEL_LISTEN_ADDR=127.0.0.1:18080' "$PALPANEL_ETC_DIR/palpanel.env"
 [[ -x "$PALPANEL_INSTALL_ROOT/current/bin/palpanel" ]]
 [[ -x "$PALPANEL_INSTALL_ROOT/current/bin/sav-cli" ]]
-[[ -f "$PALPANEL_INSTALL_ROOT/current/frontend/dist/index.html" ]]
 grep -q '^Panel URL: http://127.0.0.1:18080/$' "$tmp/install.out"
-grep -Eq '^Admin Token: [0-9a-f]{64}$' "$tmp/install.out"
+grep -q '^Open the panel URL to register the first administrator\.$' "$tmp/install.out"
 
 "$root_dir/install.sh" --version "$version" --no-docker >"$tmp/upgrade.out"
 grep -qx 'PALPANEL_LISTEN_ADDR=127.0.0.1:18080' "$PALPANEL_ETC_DIR/palpanel.env"

@@ -2,8 +2,6 @@ package appconfig
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -139,30 +137,23 @@ func LoadFile(path string) (Config, error) {
 	return Load()
 }
 
-// InitFile creates a minimal production configuration. created is false when
-// the file already exists; in that case no token is returned.
-func InitFile(path string) (token string, created bool, err error) {
+// InitFile creates a minimal production configuration. Authentication is
+// initialized in the browser on first visit.
+func InitFile(path string) (created bool, err error) {
 	path = filepath.Clean(path)
 	if info, statErr := os.Stat(path); statErr == nil {
 		if info.IsDir() {
-			return "", false, fmt.Errorf("config path is a directory: %s", path)
+			return false, fmt.Errorf("config path is a directory: %s", path)
 		}
 		if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
-			return "", false, chmodErr
+			return false, chmodErr
 		}
-		return "", false, nil
+		return false, nil
 	} else if !os.IsNotExist(statErr) {
-		return "", false, statErr
+		return false, statErr
 	}
-
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		return "", false, fmt.Errorf("generate panel token: %w", err)
-	}
-	token = hex.EncodeToString(random)
 	body := strings.Join([]string{
 		"# PalPanel production configuration. Parsed as data; shell syntax is not executed.",
-		"PANEL_TOKEN=" + token,
 		"PALPANEL_REQUIRE_AUTH=true",
 		"PALPANEL_LISTEN_ADDR=127.0.0.1:8080",
 		"PALPANEL_SAVE_INDEXER_ENABLED=true",
@@ -171,20 +162,20 @@ func InitFile(path string) (token string, created bool, err error) {
 		"",
 	}, "\n")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil && filepath.Dir(path) != "." {
-		return "", false, err
+		return false, err
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", false, err
+		return false, err
 	}
 	if _, err := file.WriteString(body); err != nil {
 		_ = file.Close()
 		_ = os.Remove(path)
-		return "", false, err
+		return false, err
 	}
 	if err := file.Close(); err != nil {
 		_ = os.Remove(path)
-		return "", false, err
+		return false, err
 	}
-	return token, true, nil
+	return true, nil
 }

@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestStoreJobsModsAndKV(t *testing.T) {
@@ -128,5 +130,161 @@ func TestStoreMigratesLegacyModsTable(t *testing.T) {
 	}
 	if mods[0].WorkshopID != "" || mods[0].PreviewURL != "" || mods[0].FileSize != 0 {
 		t.Fatalf("legacy mod defaults not applied: %#v", mods[0])
+	}
+	version, err := store.SchemaVersion(context.Background())
+	if err != nil || version != 4 {
+		t.Fatalf("schema version = %d, %v", version, err)
+	}
+}
+
+func TestStoreScheduleTimezoneAndMonitorPruning(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "operational.db"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	item := Schedule{ID: "schedule_1", Type: "backup", Enabled: true, TimeOfDay: "04:00", Timezone: "Asia/Shanghai"}
+	if err := store.UpsertSchedule(ctx, item); err != nil {
+		t.Fatalf("UpsertSchedule returned error: %v", err)
+	}
+	got, err := store.GetSchedule(ctx, item.ID)
+	if err != nil || got.Timezone != "Asia/Shanghai" {
+		t.Fatalf("unexpected schedule: %#v, %v", got, err)
+	}
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	for _, sample := range []MonitorSample{
+		{ID: "old", CreatedAt: old.Format(time.RFC3339Nano)},
+		{ID: "new", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)},
+	} {
+		if err := store.InsertMonitorSample(ctx, sample); err != nil {
+			t.Fatalf("InsertMonitorSample returned error: %v", err)
+		}
+	}
+	deleted, err := store.DeleteMonitorSamplesBefore(ctx, time.Now().UTC().Add(-24*time.Hour), 100)
+	if err != nil || deleted != 1 {
+		t.Fatalf("DeleteMonitorSamplesBefore = %d, %v", deleted, err)
+	}
+	samples, err := store.ListMonitorSamples(ctx, 10)
+	if err != nil || len(samples) != 1 || samples[0].ID != "new" {
+		t.Fatalf("unexpected monitor samples: %#v, %v", samples, err)
+	}
+}
+
+func TestStoreOperationalEntitiesAndErrors(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "entities.db"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	if err := store.CreateAuditLog(ctx, AuditLog{}); err == nil {
+		t.Fatal("expected empty audit id to fail")
+	}
+	if err := store.CreateAuditLog(ctx, AuditLog{ID: "audit_1", Actor: "admin", Role: "admin", Action: "PUT /api/test", Status: "success"}); err != nil {
+		t.Fatalf("CreateAuditLog returned error: %v", err)
+	}
+	audits, err := store.ListAuditLogs(ctx, 0)
+	if err != nil || len(audits) != 1 || audits[0].CreatedAt == "" {
+		t.Fatalf("unexpected audits: %#v, %v", audits, err)
+	}
+
+	if err := store.UpsertPlayerAccess(ctx, "ban", PlayerAccessEntry{}); err == nil {
+		t.Fatal("expected empty player access id to fail")
+	}
+	if err := store.UpsertPlayerAccess(ctx, "ban", PlayerAccessEntry{SteamID: "123", Nickname: "Player"}); err != nil {
+		t.Fatalf("UpsertPlayerAccess returned error: %v", err)
+	}
+	entries, err := store.ListPlayerAccess(ctx, "ban")
+	if err != nil || len(entries) != 1 || entries[0].Nickname != "Player" {
+		t.Fatalf("unexpected player entries: %#v, %v", entries, err)
+	}
+	if err := store.ReplacePlayerAccess(ctx, "ban", []PlayerAccessEntry{{}}); err == nil {
+		t.Fatal("expected invalid replacement to fail")
+	}
+	entries, _ = store.ListPlayerAccess(ctx, "ban")
+	if len(entries) != 1 {
+		t.Fatalf("failed replacement should roll back: %#v", entries)
+	}
+	if err := store.ReplacePlayerAccess(ctx, "ban", []PlayerAccessEntry{{SteamID: "456", Reason: "test"}}); err != nil {
+		t.Fatalf("ReplacePlayerAccess returned error: %v", err)
+	}
+	if err := store.DeletePlayerAccess(ctx, "ban", "456"); err != nil {
+		t.Fatalf("DeletePlayerAccess returned error: %v", err)
+	}
+	if err := store.DeletePlayerAccess(ctx, "ban", "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("DeletePlayerAccess error = %v", err)
+	}
+
+	if err := store.InsertMonitorSample(ctx, MonitorSample{}); err == nil {
+		t.Fatal("expected empty monitor id to fail")
+	}
+	if err := store.UpsertSchedule(ctx, Schedule{}); err == nil {
+		t.Fatal("expected empty schedule id to fail")
+	}
+	if err := store.UpsertSchedule(ctx, Schedule{ID: "schedule"}); err == nil {
+		t.Fatal("expected empty schedule type to fail")
+	}
+	if err := store.UpsertSchedule(ctx, Schedule{ID: "schedule", Type: "backup", Enabled: true, IntervalMinutes: 5, Timezone: "UTC"}); err != nil {
+		t.Fatalf("UpsertSchedule returned error: %v", err)
+	}
+	schedules, err := store.ListSchedules(ctx)
+	if err != nil || len(schedules) != 1 || !schedules[0].Enabled {
+		t.Fatalf("unexpected schedules: %#v, %v", schedules, err)
+	}
+	if err := store.DeleteSchedule(ctx, "schedule"); err != nil {
+		t.Fatalf("DeleteSchedule returned error: %v", err)
+	}
+	if err := store.DeleteSchedule(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("DeleteSchedule error = %v", err)
+	}
+
+	if err := store.CreateAlert(ctx, Alert{}); err == nil {
+		t.Fatal("expected empty alert id to fail")
+	}
+	if err := store.CreateAlert(ctx, Alert{ID: "alert", Severity: "warning", Title: "title", Message: "message", Source: "test"}); err != nil {
+		t.Fatalf("CreateAlert returned error: %v", err)
+	}
+	alerts, err := store.ListAlerts(ctx, 0)
+	if err != nil || len(alerts) != 1 || alerts[0].Status != "open" {
+		t.Fatalf("unexpected alerts: %#v, %v", alerts, err)
+	}
+	if err := store.AckAlert(ctx, "alert"); err != nil {
+		t.Fatalf("AckAlert returned error: %v", err)
+	}
+	if err := store.AckAlert(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("AckAlert error = %v", err)
+	}
+
+	mod := Mod{ID: "mod", Name: "Mod", Source: "upload", PackageName: "Pkg", Path: "/tmp/mod"}
+	if err := store.UpsertMod(ctx, mod); err != nil {
+		t.Fatalf("UpsertMod returned error: %v", err)
+	}
+	gotMod, err := store.GetMod(ctx, mod.ID)
+	if err != nil || gotMod.ID != mod.ID {
+		t.Fatalf("GetMod = %#v, %v", gotMod, err)
+	}
+	if err := store.SetModEnabled(ctx, mod.ID, true); err != nil {
+		t.Fatalf("SetModEnabled returned error: %v", err)
+	}
+	if err := store.SetModEnabled(ctx, "missing", true); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("SetModEnabled error = %v", err)
+	}
+	if err := store.DeleteMod(ctx, mod.ID); err != nil {
+		t.Fatalf("DeleteMod returned error: %v", err)
+	}
+	if err := store.DeleteMod(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("DeleteMod error = %v", err)
+	}
+
+	if _, ok, err := store.GetKV(ctx, "missing"); err != nil || ok {
+		t.Fatalf("missing KV = %v, %v", ok, err)
+	}
+	if _, err := store.GetAITranslation(ctx, "missing", "hash", "zh-CN", "provider", "model"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetAITranslation error = %v", err)
+	}
+	if err := store.UpdateJob(ctx, "missing", "failed", 0, "missing", "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("UpdateJob error = %v", err)
 	}
 }

@@ -10,6 +10,7 @@ const mapSchedule = (raw: unknown): Schedule => {
     enabled: Boolean(data.enabled),
     interval_minutes: data.interval_minutes ? Number(data.interval_minutes) : undefined,
     time_of_day: data.time_of_day ? String(data.time_of_day) : undefined,
+    timezone: data.timezone ? String(data.timezone) : 'UTC',
     waittime: data.waittime ? Number(data.waittime) : undefined,
     message: data.message ? String(data.message) : undefined,
     last_run_at: data.last_run_at ? String(data.last_run_at) : undefined,

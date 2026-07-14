@@ -61,30 +61,26 @@ func TestSteamClientQueryFilesParameters(t *testing.T) {
 
 func TestSteamClientPublishedFileDetailsForm(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/IPublishedFileService/GetDetails/v1/" {
+		if r.URL.Path != "/ISteamRemoteStorage/GetPublishedFileDetails/v1/" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		if r.Method != http.MethodGet {
+		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s", r.Method)
 		}
-		query := r.URL.Query()
-		if query.Get("key") != "detail-key" {
-			t.Fatalf("key = %q", query.Get("key"))
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
 		}
-		if query.Get("appid") != "1623730" {
-			t.Fatalf("appid = %q", query.Get("appid"))
+		if r.Form.Get("itemcount") != "1" || r.Form.Get("publishedfileids[0]") != "999" {
+			t.Fatalf("detail form = %#v", r.Form)
 		}
-		if query.Get("publishedfileids[0]") != "999" {
-			t.Fatalf("publishedfileids[0] = %q", query.Get("publishedfileids[0]"))
+		if r.Form.Get("key") != "" || r.URL.Query().Get("key") != "" {
+			t.Fatal("public detail request included a Steam API key")
 		}
-		if query.Get("return_tags") != "1" || query.Get("return_short_description") != "1" || query.Get("return_metadata") != "1" {
-			t.Fatalf("missing detail return params: %#v", query)
-		}
-		_, _ = w.Write([]byte(`{"response":{"result":1,"publishedfiledetails":[{"publishedfileid":"999","result":1,"title":"Detail","short_description":"Short","file_description":"Complete description with paragraphs\n\n[url=https://example.com]Docs[/url]","lifetime_subscriptions":"33","time_updated":"44"}]}}`))
+		_, _ = w.Write([]byte(`{"response":{"result":1,"resultcount":1,"publishedfiledetails":[{"publishedfileid":"999","result":1,"title":"Detail","description":"Complete description with paragraphs\n\n[url=https://example.com]Docs[/url]","lifetime_subscriptions":"33","time_updated":"44"}]}}`))
 	}))
 	defer server.Close()
 
-	client := NewSteamClient("detail-key", "1623730")
+	client := NewSteamClient("", "1623730")
 	client.baseURL = server.URL
 
 	items, err := client.GetDetails(context.Background(), []string{"999"})
@@ -131,6 +127,37 @@ func TestSteamClientTimeoutMapping(t *testing.T) {
 	var steamErr SteamAPIError
 	if !errors.As(err, &steamErr) || steamErr.Code != "steam_timeout" {
 		t.Fatalf("expected timeout mapping, got %#v", err)
+	}
+}
+
+func TestSteamClientErrorsNeverExposeAPIKey(t *testing.T) {
+	const apiKey = "sensitive-steam-key"
+	client := NewSteamClient(apiKey, "1623730")
+	client.httpClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, errors.New("transport rejected " + request.URL.String())
+	})
+
+	_, err := client.QueryFiles(context.Background(), WorkshopSearchParams{})
+	var steamErr SteamAPIError
+	if !errors.As(err, &steamErr) || steamErr.Code != "steam_unreachable" {
+		t.Fatalf("unexpected transport error mapping: %#v", err)
+	}
+	if strings.Contains(err.Error(), apiKey) || strings.Contains(err.Error(), "key=") {
+		t.Fatalf("transport error exposed credentials: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "upstream echoed key="+apiKey, http.StatusBadGateway)
+	}))
+	defer server.Close()
+	client = NewSteamClient(apiKey, "1623730")
+	client.baseURL = server.URL
+	_, err = client.QueryFiles(context.Background(), WorkshopSearchParams{})
+	if !errors.As(err, &steamErr) || steamErr.Code != "steam_http_error" {
+		t.Fatalf("unexpected HTTP error mapping: %#v", err)
+	}
+	if strings.Contains(err.Error(), apiKey) || strings.Contains(err.Error(), "key=") {
+		t.Fatalf("HTTP error exposed credentials: %v", err)
 	}
 }
 

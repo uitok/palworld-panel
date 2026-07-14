@@ -82,17 +82,17 @@ func TestWorldResetRechecksDedicatedServerNameAfterQueue(t *testing.T) {
 	m, cleanup := newVersionTestManager(t, "100")
 	defer cleanup()
 	writeWorldFixture(t, m, "world-one")
-	m.lifecycleMu.Lock()
+	m.operationMu.Lock()
 	job, err := m.ResetWorld(t.Context(), "world-one", worldResetConfirmation, WorldResetHooks{})
 	if err != nil {
-		m.lifecycleMu.Unlock()
+		m.operationMu.Unlock()
 		t.Fatal(err)
 	}
 	if err := palconfig.Write(m.cfg.PalWorldSettingsPath(), palconfig.Settings{"DedicatedServerName": "world-two"}); err != nil {
-		m.lifecycleMu.Unlock()
+		m.operationMu.Unlock()
 		t.Fatal(err)
 	}
-	m.lifecycleMu.Unlock()
+	m.operationMu.Unlock()
 	done := waitForJob(t, m.store, job.ID)
 	if done.Status != "failed" || !strings.Contains(done.Error, "world-two") {
 		t.Fatalf("stale world request was not rejected: %#v", done)

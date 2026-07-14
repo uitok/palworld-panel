@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,7 +24,7 @@ import (
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
 	"palpanel/internal/docker"
-	"palpanel/internal/id"
+	"palpanel/internal/jobs"
 	"palpanel/internal/palconfig"
 )
 
@@ -40,7 +41,8 @@ type Manager struct {
 	runner              docker.Runner
 	remoteBuildIDFunc   func(context.Context) (string, string, error)
 	installOrUpdateFunc func(context.Context, string) error
-	lifecycleMu         *sync.Mutex
+	jobs                *jobs.Executor
+	operationMu         *sync.Mutex
 	worldResetTimeout   time.Duration
 	worldResetPoll      time.Duration
 }
@@ -113,10 +115,15 @@ type LogResult struct {
 
 type RestartNotifier func(ctx context.Context, wait int, message string) error
 
-func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner) Manager {
+func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, executors ...*jobs.Executor) Manager {
+	executor := jobs.New(store, 4)
+	if len(executors) > 0 && executors[0] != nil {
+		executor = executors[0]
+	}
 	return Manager{
 		cfg: cfg, store: store, runner: runner,
-		lifecycleMu:       &sync.Mutex{},
+		jobs:              executor,
+		operationMu:       &sync.Mutex{},
 		worldResetTimeout: 180 * time.Second,
 		worldResetPoll:    time.Second,
 	}
@@ -203,8 +210,8 @@ func (m Manager) Prerequisites(ctx context.Context) ([]Prerequisite, error) {
 }
 
 func (m Manager) Install(ctx context.Context) (db.Job, error) {
-	return m.startLifecycleJob(ctx, "install", "queued install", func(jobID string) {
-		if m.runInstallOrUpdateJob(jobID, false, false, nil) {
+	return m.startLifecycleJob(ctx, "install", "queued install", func(jobCtx context.Context, jobID string) {
+		if m.runInstallOrUpdateJob(jobCtx, jobID, false, false, nil) {
 			m.update(jobID, "completed", 100, "install completed", "")
 		}
 	})
@@ -215,21 +222,21 @@ func (m Manager) Update(ctx context.Context) (db.Job, error) {
 }
 
 func (m Manager) UpdateWithPreUpdate(ctx context.Context, preUpdate func(context.Context) error) (db.Job, error) {
-	return m.startLifecycleJob(ctx, "update", "queued update", func(jobID string) {
-		if m.runInstallOrUpdateJob(jobID, true, true, preUpdate) {
-			info, _ := m.VersionInfo(context.Background())
+	return m.startLifecycleJob(ctx, "update", "queued update", func(jobCtx context.Context, jobID string) {
+		if m.runInstallOrUpdateJob(jobCtx, jobID, true, true, preUpdate) {
+			info, _ := m.VersionInfo(jobCtx)
 			m.update(jobID, "completed", 100, "update completed; current build "+info.CurrentBuildID, "")
 		}
 	})
 }
 
 func (m Manager) Bootstrap(ctx context.Context) (db.Job, error) {
-	return m.startLifecycleJob(ctx, "bootstrap", "queued bootstrap", func(jobID string) {
-		if !m.runInstallOrUpdateJob(jobID, false, false, nil) {
+	return m.startLifecycleJob(ctx, "bootstrap", "queued bootstrap", func(jobCtx context.Context, jobID string) {
+		if !m.runInstallOrUpdateJob(jobCtx, jobID, false, false, nil) {
 			return
 		}
 		m.update(jobID, "running", 80, "initializing configuration", "")
-		if err := m.InitializeConfig(context.Background()); err != nil {
+		if err := m.InitializeConfig(jobCtx); err != nil {
 			m.update(jobID, "failed", 80, "config initialization failed", err.Error())
 			return
 		}
@@ -237,8 +244,8 @@ func (m Manager) Bootstrap(ctx context.Context) (db.Job, error) {
 	})
 }
 
-func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bool, preUpdate func(context.Context) error) bool {
-	mode, err := m.RuntimeMode(context.Background())
+func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backupFirst bool, update bool, preUpdate func(context.Context) error) bool {
+	mode, err := m.RuntimeMode(ctx)
 	if err != nil {
 		m.update(jobID, "failed", 10, "runtime mode read failed", err.Error())
 		return false
@@ -249,7 +256,7 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 	}
 	wasRunning := false
 	if update {
-		status, err := m.Status(context.Background())
+		status, err := m.Status(ctx)
 		if err != nil {
 			m.update(jobID, "failed", 5, "server status read failed", err.Error())
 			return false
@@ -258,13 +265,13 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 		if wasRunning {
 			if preUpdate != nil {
 				m.update(jobID, "running", 5, "announcing update and saving world", "")
-				if err := preUpdate(context.Background()); err != nil {
+				if err := preUpdate(ctx); err != nil {
 					m.update(jobID, "failed", 5, "pre-update notification/save failed", err.Error())
 					return false
 				}
 			}
 			m.update(jobID, "running", 10, "stopping server before update", "")
-			if err := m.stopUnlocked(context.Background()); err != nil {
+			if err := m.stopUnlocked(ctx); err != nil {
 				m.update(jobID, "failed", 10, "stop before update failed", err.Error())
 				return false
 			}
@@ -301,26 +308,26 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 	if mode == RuntimeWindowsSteamCMD {
 		m.update(jobID, "running", 25, "preparing SteamCMD", "")
 		if m.installOrUpdateFunc == nil {
-			if err := m.ensureSteamCMD(context.Background()); err != nil {
+			if err := m.ensureSteamCMD(ctx); err != nil {
 				m.update(jobID, "failed", 25, "steamcmd setup failed", err.Error())
 				return false
 			}
 		}
 		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.installOrUpdateRuntime(context.Background(), mode); err != nil {
+		if err := m.installOrUpdateRuntime(ctx, mode); err != nil {
 			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
 			return false
 		}
 	} else {
 		m.update(jobID, "running", 20, "building wine runner image", "")
 		if m.installOrUpdateFunc == nil {
-			if err := m.runner.BuildImage(context.Background()); err != nil {
+			if err := m.runner.BuildImage(ctx); err != nil {
 				m.update(jobID, "failed", 20, "build failed", err.Error())
 				return false
 			}
 		}
 		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.installOrUpdateRuntime(context.Background(), mode); err != nil {
+		if err := m.installOrUpdateRuntime(ctx, mode); err != nil {
 			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
 			return false
 		}
@@ -335,7 +342,7 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 			return false
 		}
 		m.update(jobID, "running", 75, "verifying installed build against Steam public branch", "")
-		version, err := m.refreshVersion(context.Background(), false)
+		version, err := m.refreshVersion(ctx, false)
 		if err != nil {
 			m.update(jobID, "failed", 75, "post-update version verification failed", err.Error()+retainedBackupMessage(backup))
 			return false
@@ -345,10 +352,13 @@ func (m Manager) runInstallOrUpdateJob(jobID string, backupFirst bool, update bo
 			return false
 		}
 	}
-	_ = m.store.SetKV(context.Background(), kvInstalled, "true")
+	if err := m.store.SetKV(ctx, kvInstalled, "true"); err != nil {
+		m.update(jobID, "failed", 80, "install state persistence failed", err.Error())
+		return false
+	}
 	if update && wasRunning {
 		m.update(jobID, "running", 85, "starting server after update", "")
-		if err := m.startUnlocked(context.Background()); err != nil {
+		if err := m.startUnlocked(ctx); err != nil {
 			m.update(jobID, "failed", 85, "restart after update failed", err.Error())
 			return false
 		}
@@ -409,8 +419,8 @@ func (m Manager) ValidateStartup(ctx context.Context) []ValidationIssue {
 }
 
 func (m Manager) Start(ctx context.Context) error {
-	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	return m.startUnlocked(ctx)
 }
 
@@ -456,8 +466,8 @@ func validationIssueSummary(issues []ValidationIssue) string {
 }
 
 func (m Manager) Stop(ctx context.Context) error {
-	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	return m.stopUnlocked(ctx)
 }
 
@@ -473,8 +483,8 @@ func (m Manager) stopUnlocked(ctx context.Context) error {
 }
 
 func (m Manager) Restart(ctx context.Context) error {
-	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	return m.restartUnlocked(ctx)
 }
 
@@ -506,22 +516,27 @@ func (m Manager) SafeRestart(ctx context.Context, waitSeconds int, message strin
 	if strings.TrimSpace(message) == "" {
 		message = "Server maintenance restart"
 	}
-	return m.startLifecycleJob(ctx, "safe_restart", "queued safe restart", func(jobID string) {
+	return m.startLifecycleJob(ctx, "safe_restart", "queued safe restart", func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 10, "saving world and notifying players", "")
 		if notify != nil {
-			if err := notify(context.Background(), waitSeconds, message); err != nil {
+			if err := notify(jobCtx, waitSeconds, message); err != nil {
 				m.update(jobID, "running", 20, "notification failed; continuing with managed restart", err.Error())
 			}
 		}
 		m.update(jobID, "running", 35, "waiting for player countdown", "")
-		time.Sleep(time.Duration(waitSeconds) * time.Second)
+		select {
+		case <-time.After(time.Duration(waitSeconds) * time.Second):
+		case <-jobCtx.Done():
+			m.update(jobID, "failed", 35, "restart interrupted", jobCtx.Err().Error())
+			return
+		}
 		m.update(jobID, "running", 55, "stopping server", "")
-		if err := m.stopUnlocked(context.Background()); err != nil {
+		if err := m.stopUnlocked(jobCtx); err != nil {
 			m.update(jobID, "failed", 55, "stop failed", err.Error())
 			return
 		}
 		m.update(jobID, "running", 75, "starting server", "")
-		if err := m.startUnlocked(context.Background()); err != nil {
+		if err := m.startUnlocked(jobCtx); err != nil {
 			m.update(jobID, "failed", 75, "start failed", err.Error())
 			return
 		}
@@ -649,7 +664,7 @@ func (m Manager) MarkPendingRestart(ctx context.Context) error {
 }
 
 func (m Manager) Backup(ctx context.Context) (db.Job, error) {
-	return m.startLifecycleJob(ctx, "backup", "queued backup", func(jobID string) {
+	return m.startLifecycleJob(ctx, "backup", "queued backup", func(_ context.Context, jobID string) {
 		m.update(jobID, "running", 20, "creating backup archive", "")
 		backup, err := m.createBackupArchive("manual")
 		if err != nil {
@@ -695,7 +710,7 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 	if !fileExists(pathAbs) {
 		return db.Job{}, fmt.Errorf("backup not found")
 	}
-	return m.startLifecycleJob(ctx, "restore", "queued backup restore", func(jobID string) {
+	return m.startLifecycleJob(ctx, "restore", "queued backup restore", func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 5, "verifying backup archive", "")
 		result, err := verifyBackupArchive(pathAbs, name)
 		if err != nil {
@@ -707,7 +722,7 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 			return
 		}
 		m.update(jobID, "running", 10, "stopping server before restore", "")
-		if err := m.stopUnlocked(context.Background()); err != nil {
+		if err := m.stopUnlocked(jobCtx); err != nil {
 			m.update(jobID, "failed", 10, "stop failed", err.Error())
 			return
 		}
@@ -721,7 +736,10 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 			m.update(jobID, "failed", 65, "restore failed", err.Error())
 			return
 		}
-		_ = m.store.SetKV(context.Background(), "pending_restart", "true")
+		if err := m.store.SetKV(jobCtx, "pending_restart", "true"); err != nil {
+			m.update(jobID, "failed", 90, "restore state persistence failed", err.Error())
+			return
+		}
 		m.update(jobID, "completed", 100, "backup restored; start the server after verifying files", "")
 	})
 }
@@ -759,25 +777,22 @@ func (m Manager) VerifyBackup(name string) (BackupVerifyResult, error) {
 	return verifyBackupArchive(path, cleanName)
 }
 
-func (m Manager) startJob(ctx context.Context, typ, message string, fn func(jobID string)) (db.Job, error) {
-	j, err := m.store.CreateJob(ctx, id.New("job"), typ, message)
-	if err != nil {
-		return db.Job{}, err
-	}
-	go fn(j.ID)
-	return j, nil
+func (m Manager) startJob(ctx context.Context, typ, message string, fn func(context.Context, string)) (db.Job, error) {
+	return m.jobs.Submit(ctx, jobs.ClassGeneral, typ, message, fn)
 }
 
-func (m Manager) startLifecycleJob(ctx context.Context, typ, message string, fn func(jobID string)) (db.Job, error) {
-	return m.startJob(ctx, typ, message, func(jobID string) {
-		m.lifecycleMu.Lock()
-		defer m.lifecycleMu.Unlock()
-		fn(jobID)
+func (m Manager) startLifecycleJob(ctx context.Context, typ, message string, fn func(context.Context, string)) (db.Job, error) {
+	return m.jobs.Submit(ctx, jobs.ClassLifecycle, typ, message, func(jobCtx context.Context, jobID string) {
+		m.operationMu.Lock()
+		defer m.operationMu.Unlock()
+		fn(jobCtx, jobID)
 	})
 }
 
 func (m Manager) update(jobID, status string, progress int, message, errText string) {
-	_ = m.store.UpdateJob(context.Background(), jobID, status, progress, message, errText)
+	if err := m.jobs.Update(jobID, status, progress, message, errText); err != nil {
+		log.Printf("job %s update failed: %v", jobID, err)
+	}
 }
 
 func (m Manager) ensureSteamCMD(ctx context.Context) error {

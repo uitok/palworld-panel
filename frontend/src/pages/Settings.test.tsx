@@ -3,17 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsApi } from '../api/settings';
 import { serverApi } from '../api/server';
 import { ServerStoreProvider } from '../store/ServerStoreProvider';
-import { storageKeys } from '../config/defaults';
 import { Settings } from './Settings';
 
 const auxiliaryMocks = vi.hoisted(() => ({
+	authStatus: vi.fn(),
   authMe: vi.fn(),
+	listKeys: vi.fn(),
+	createKey: vi.fn(),
+	revokeKey: vi.fn(),
+	clipboardWrite: vi.fn(),
   getAIConfig: vi.fn(),
   updateAIConfig: vi.fn(),
   testAIConfig: vi.fn(),
 }));
 
-vi.mock('../api/auth', () => ({ authApi: { me: auxiliaryMocks.authMe } }));
+vi.mock('../api/auth', () => ({ authApi: {
+	status: auxiliaryMocks.authStatus,
+	me: auxiliaryMocks.authMe,
+	listKeys: auxiliaryMocks.listKeys,
+	createKey: auxiliaryMocks.createKey,
+	revokeKey: auxiliaryMocks.revokeKey,
+} }));
 vi.mock('../api/aiTranslation', () => ({
   aiTranslationApi: {
     getConfig: auxiliaryMocks.getAIConfig,
@@ -50,8 +60,15 @@ describe('Settings page', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.setItem(storageKeys.token, 'test-token');
+	Object.defineProperty(navigator, 'clipboard', {
+	  configurable: true,
+	  value: { writeText: auxiliaryMocks.clipboardWrite },
+	});
+	auxiliaryMocks.authStatus.mockResolvedValue({ initialized: true, authenticated: true, user: { name: 'admin', role: 'admin', permissions: ['read', 'ai:config', 'security:write'] } });
     auxiliaryMocks.authMe.mockResolvedValue({ name: 'admin', role: 'admin', permissions: ['read', 'ai:config'] });
+	auxiliaryMocks.listKeys.mockResolvedValue([]);
+	auxiliaryMocks.createKey.mockResolvedValue({ id: 'key_1', name: '本机自动化', prefix: 'ppk_example', token: 'ppk_full-once', created_at: '2026-07-14T00:00:00Z' });
+	auxiliaryMocks.revokeKey.mockResolvedValue({ revoked: true });
     auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: false, base_url: '', model: '', api_key_present: false });
     auxiliaryMocks.updateAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'translate-model', api_key_present: true });
     auxiliaryMocks.testAIConfig.mockResolvedValue({ ok: true, base_url: 'https://ai.example/v1', model: 'translate-model', message: 'ok' });
@@ -177,5 +194,19 @@ describe('Settings page', () => {
         model: 'translate-model',
       });
     });
+  });
+
+  it('shows a development key once, copies it, and revokes it', async () => {
+	renderSettings();
+
+	await screen.findByText('开发密钥');
+	fireEvent.click(screen.getByRole('button', { name: '创建' }));
+	expect(await screen.findByText('ppk_full-once')).toBeInTheDocument();
+	fireEvent.click(screen.getByRole('button', { name: '复制开发密钥' }));
+	expect(auxiliaryMocks.clipboardWrite).toHaveBeenCalledWith('ppk_full-once');
+	fireEvent.click(screen.getByRole('button', { name: '撤销 本机自动化' }));
+
+	await waitFor(() => expect(auxiliaryMocks.revokeKey).toHaveBeenCalledWith('key_1'));
+	expect((await screen.findAllByText(/已撤销/)).length).toBeGreaterThan(0);
   });
 });

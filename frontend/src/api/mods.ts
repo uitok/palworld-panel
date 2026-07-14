@@ -1,5 +1,5 @@
 import { apiClient, handleRequest } from './client';
-import type { AITranslation, Job, ModItem, WorkshopItem, WorkshopSearchResponse, WorkshopStatus } from '../types';
+import type { AITranslation, ImportCandidate, ImportInspection, Job, ModItem, WorkshopItem, WorkshopSearchResponse, WorkshopStatus } from '../types';
 import { mapJob } from './tasks';
 import { AI_OPERATION_TIMEOUT_MS } from './requestTimeouts';
 
@@ -39,6 +39,38 @@ const mapMod = (raw: unknown): ModItem => {
 const mapMods = (raw: unknown): ModItem[] => {
   if (!Array.isArray(raw)) return [];
   return raw.map(mapMod);
+};
+
+const mapImportCandidate = (raw: unknown): ImportCandidate => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const sourceType = String(data.source_type || 'local_zip');
+  const action = String(data.action || 'unknown');
+  return {
+    id: String(data.id || ''),
+    source_type: (['workshop', 'github_asset', 'https_zip', 'local_zip'].includes(sourceType) ? sourceType : 'local_zip') as ImportCandidate['source_type'],
+    file_name: data.file_name ? String(data.file_name) : undefined,
+    file_size: numberValue(data.file_size),
+    name: data.name ? String(data.name) : undefined,
+    package_name: data.package_name ? String(data.package_name) : undefined,
+    version: data.version ? String(data.version) : undefined,
+    action: (['new', 'update', 'unknown'].includes(action) ? action : 'unknown') as ImportCandidate['action'],
+    existing_mod_id: data.existing_mod_id ? String(data.existing_mod_id) : undefined,
+    warnings: stringArray(data.warnings),
+    ready: Boolean(data.ready),
+  };
+};
+
+const mapImportInspection = (raw: unknown): ImportInspection => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const sourceType = String(data.source_type || 'local_zip');
+  return {
+    id: String(data.id || ''),
+    source_type: (['workshop', 'github_release', 'https_zip', 'local_zip'].includes(sourceType) ? sourceType : 'local_zip') as ImportInspection['source_type'],
+    source: String(data.source || ''),
+    candidates: Array.isArray(data.candidates) ? data.candidates.map(mapImportCandidate) : [],
+    selected_candidate_id: data.selected_candidate_id ? String(data.selected_candidate_id) : undefined,
+    expires_at: String(data.expires_at || ''),
+  };
 };
 
 export const mapWorkshopItem = (raw: unknown): WorkshopItem => {
@@ -87,9 +119,9 @@ const mapWorkshopSearchResponse = (raw: unknown): WorkshopSearchResponse => {
 
 export const mapWorkshopStatus = (raw: unknown): WorkshopStatus => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const keySource = data.key_source === 'environment' ? 'environment' : '';
+  const keySource = data.key_source === 'environment' || data.key_source === 'bundled' ? data.key_source : '';
   return {
-    configured: Boolean(data.configured) && keySource === 'environment',
+    configured: Boolean(data.configured) && keySource !== '',
     key_source: keySource,
     app_id: String(data.app_id || '1623730'),
   };
@@ -132,6 +164,37 @@ export const modsApi = {
       { map: mapMod, quiet: true, fallbackOnError: false },
     );
   },
+
+  inspectImport: (input: { source?: string; file?: File }) => {
+    if (input.file) {
+      const form = new FormData();
+      form.append('file', input.file);
+      return handleRequest<unknown, ImportInspection>(
+        () => apiClient.post('/mods/import/inspect', form, { headers: { 'Content-Type': 'multipart/form-data' } }),
+        { id: '', source_type: 'local_zip', source: input.file.name, candidates: [], expires_at: '' },
+        { map: mapImportInspection, quiet: true, fallbackOnError: false },
+      );
+    }
+    return handleRequest<unknown, ImportInspection>(
+      () => apiClient.post('/mods/import/inspect', { source: input.source || '' }),
+      { id: '', source_type: 'https_zip', source: input.source || '', candidates: [], expires_at: '' },
+      { map: mapImportInspection, quiet: true, fallbackOnError: false },
+    );
+  },
+
+  selectImportCandidate: (inspectionId: string, candidateId: string) =>
+    handleRequest<unknown, ImportInspection>(
+      () => apiClient.post(`/mods/import/inspect/${encodeURIComponent(inspectionId)}/select`, { candidate_id: candidateId }),
+      { id: inspectionId, source_type: 'github_release', source: '', candidates: [], expires_at: '' },
+      { map: mapImportInspection, quiet: true, fallbackOnError: false },
+    ),
+
+  importInspected: (inspectionId: string, candidateId?: string) =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post('/mods/import', { inspection_id: inspectionId, candidate_id: candidateId || undefined }),
+      fallbackJob('mod_import', '已提交 Mod 导入任务'),
+      { map: mapJob, quiet: true, fallbackOnError: false },
+    ),
 
   workshopStatus: () =>
     handleRequest<unknown, WorkshopStatus>(

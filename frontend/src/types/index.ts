@@ -1,3 +1,5 @@
+import type { components } from '../api/generated/contracts';
+
 export type RuntimeMode = 'wine_docker' | 'windows_steamcmd';
 export type Role = 'admin' | 'operator' | 'viewer';
 export type Permission =
@@ -16,6 +18,22 @@ export interface SessionInfo {
   name: string;
   role: Role;
   permissions: Permission[];
+}
+
+export interface AuthStatus {
+	initialized: boolean;
+	authenticated: boolean;
+	user?: SessionInfo;
+}
+
+export interface DevelopmentKey {
+	id: string;
+	name: string;
+	prefix: string;
+	created_at: string;
+	last_used_at?: string;
+	revoked_at?: string;
+	token?: string;
 }
 
 export type ServerProcessStatus = 'running' | 'stopped' | 'starting' | 'stopping' | 'updating' | 'error';
@@ -300,7 +318,9 @@ export interface PalworldValidateResponse {
   issues: ValidationIssue[];
 }
 
-export interface Job {
+type JobContract = components['schemas']['Job'];
+
+export interface Job extends Omit<JobContract, 'type' | 'status' | 'message' | 'updated_at'> {
   id: string;
   type:
     | 'backup'
@@ -323,6 +343,7 @@ export interface Job {
   progress: number;
   message?: string;
   error?: string;
+  error_code?: string;
   created_at: string;
   updated_at?: string;
   finished_at?: string;
@@ -348,6 +369,10 @@ export interface ModItem {
   created_at?: string;
   updated_at?: string;
 }
+
+export type ImportCandidate = components['schemas']['ImportCandidate'];
+export type ImportInspection = components['schemas']['ImportInspection'];
+export type ModImportRequest = components['schemas']['ModImportRequest'];
 
 export interface WorkshopItem {
   id: string;
@@ -405,7 +430,7 @@ export interface WorkshopSearchResponse {
 
 export interface WorkshopStatus {
   configured: boolean;
-  key_source?: 'environment' | '';
+  key_source?: 'environment' | 'bundled' | '';
   app_id: string;
 }
 
@@ -460,12 +485,15 @@ export interface Alert {
 
 export type ScheduleType = 'save' | 'backup' | 'safe_restart' | 'update' | 'version_check';
 
-export interface Schedule {
+type ScheduleContract = components['schemas']['Schedule'];
+
+export interface Schedule extends Omit<ScheduleContract, 'type'> {
   id: string;
   type: ScheduleType | string;
   enabled: boolean;
   interval_minutes?: number;
   time_of_day?: string;
+  timezone: string;
   waittime?: number;
   message?: string;
   last_run_at?: string;
@@ -511,11 +539,35 @@ export interface PalDefenderRelease {
 export interface PalDefenderStatus {
   installed: boolean;
   version?: string;
+  bundled: {
+    version: string;
+    sha256: string;
+    size: number;
+  };
   needs_first_start: boolean;
   files: Record<string, boolean>;
   paths: Record<string, string>;
   rest_api_enabled: boolean;
   warnings: string[];
+}
+
+export type PalDefenderGMStatus = components['schemas']['PalDefenderGMStatus'];
+export type PalDefenderGMPlayer = components['schemas']['PalDefenderGMPlayer'];
+export type PalDefenderGMPlayers = components['schemas']['PalDefenderGMPlayers'];
+export type PalDefenderGMInventory = components['schemas']['PalDefenderGMInventory'];
+export type PalDefenderInventory = components['schemas']['PalDefenderInventory'];
+export type PalDefenderInventoryContainer = components['schemas']['PalDefenderInventoryContainer'];
+export type PalDefenderInventorySlot = components['schemas']['PalDefenderInventorySlot'];
+export type PalDefenderItemGrant = components['schemas']['PalDefenderItemGrant'];
+export type PalDefenderItemCatalogEntry = components['schemas']['PalDefenderItemCatalogEntry'];
+export type PalDefenderItemCatalog = components['schemas']['PalDefenderItemCatalog'];
+export type PalDefenderMessageRequest = components['schemas']['PalDefenderMessageRequest'];
+export type PalDefenderPunishmentRequest = components['schemas']['PalDefenderPunishmentRequest'];
+
+export interface PalDefenderGiveItemsResult {
+  Granted: {
+    Items: number;
+  };
 }
 
 export interface TokenResult {

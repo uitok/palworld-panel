@@ -148,13 +148,32 @@ wait_for_health() {
   local url="$1"
   local pid_file="$2"
   local attempts="${3:-60}"
+  local stable_attempts=5
   local attempt
+  local healthy_attempts=0
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    http_ready "$url" && return 0
     pid_running "$pid_file" || return 1
+    if http_ready "$url"; then
+      pid_running "$pid_file" || return 1
+      healthy_attempts=$((healthy_attempts + 1))
+      if (( healthy_attempts >= stable_attempts )); then
+        return 0
+      fi
+    else
+      healthy_attempts=0
+    fi
     sleep 0.5
   done
   return 1
+}
+
+require_unused_health_endpoint() {
+  local name="$1"
+  local url="$2"
+  if http_ready "$url"; then
+    printf '%s health endpoint is already responding before startup: %s\n' "$name" "$url" >&2
+    return 1
+  fi
 }
 
 backend_health_url() {
@@ -183,6 +202,11 @@ supervise() {
   if pid_running "$runtime_dir/supervisor.pid"; then
     fail "portable instance is already running"
   fi
+  local sav_health_url="http://127.0.0.1:$sidecar_port/health"
+  local panel_health_url
+  panel_health_url="$(backend_health_url)"
+  require_unused_health_endpoint "sav-cli" "$sav_health_url" || return 1
+  require_unused_health_endpoint "palpanel" "$panel_health_url" || return 1
   printf '%s\n' "$BASHPID" >"$runtime_dir/supervisor.pid"
   rm -f "$runtime_dir/ready"
   trap 'exit 0' INT TERM HUP
@@ -191,13 +215,12 @@ supervise() {
   rotate_log "$log_dir/sav-cli.log"
   "$sav_bin" serve --host 127.0.0.1 --port "$sidecar_port" >>"$log_dir/sav-cli.log" 2>&1 &
   printf '%s\n' "$!" >"$runtime_dir/sav-cli.pid"
-  if ! wait_for_health "http://127.0.0.1:$sidecar_port/health" "$runtime_dir/sav-cli.pid"; then
+  if ! wait_for_health "$sav_health_url" "$runtime_dir/sav-cli.pid"; then
     printf 'sav-cli failed its health check\n' >&2
     return 1
   fi
 
   rotate_log "$log_dir/palpanel.log"
-  PALPANEL_FRONTEND_DIST="$package_dir/frontend/dist" \
   PALPANEL_BACKEND_DIR="$package_dir/backend" \
   PALPANEL_DATA_DIR="$portable_data" \
   PALPANEL_RUNNER_DIR="$package_dir/backend/deployments/wine-runner" \
@@ -205,7 +228,7 @@ supervise() {
   PALPANEL_SAVE_INDEXER_URL="http://127.0.0.1:$sidecar_port" \
     "$backend_bin" --config "$portable_config" >>"$log_dir/palpanel.log" 2>&1 &
   printf '%s\n' "$!" >"$runtime_dir/backend.pid"
-  if ! wait_for_health "$(backend_health_url)" "$runtime_dir/backend.pid"; then
+  if ! wait_for_health "$panel_health_url" "$runtime_dir/backend.pid"; then
     printf 'palpanel failed its health check\n' >&2
     return 1
   fi
@@ -233,8 +256,12 @@ portable_start() {
   local supervisor_pid="$!"
   for _ in $(seq 1 80); do
     if [[ -f "$runtime_dir/ready" ]]; then
-      printf 'PalPanel started: %s\n' "$(backend_health_url | sed 's|/api/health$|/|')"
-      return 0
+      if kill -0 "$supervisor_pid" 2>/dev/null &&
+        pid_running "$runtime_dir/backend.pid" &&
+        pid_running "$runtime_dir/sav-cli.pid"; then
+        printf 'PalPanel started: %s\n' "$(backend_health_url | sed 's|/api/health$|/|')"
+        return 0
+      fi
     fi
     if ! kill -0 "$supervisor_pid" 2>/dev/null; then
       tail -n 40 "$log_dir/controller.log" >&2 || true
@@ -280,20 +307,6 @@ show_logs() {
     exec tail -n 100 -F "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
   fi
   tail -n 100 "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
-}
-
-show_token() {
-  if [[ -n "${PANEL_TOKEN:-}" ]]; then
-    printf '%s\n' "$PANEL_TOKEN"
-    return 0
-  fi
-  local path
-  path="$(config_path)"
-  [[ -r "$path" ]] || fail "cannot read config: $path"
-  local token
-  token="$(read_config_value PANEL_TOKEN "$path")"
-  [[ -n "$token" ]] || fail "PANEL_TOKEN is not configured"
-  printf '%s\n' "$token"
 }
 
 show_config() {
@@ -382,7 +395,7 @@ install_system() {
   chmod 755 "$opt_root"
   chmod 750 "$etc_dir" "$system_data_dir"
   local item
-  for item in bin frontend backend systemd config licenses LICENSE README.md THIRD_PARTY_LICENSES.txt palpanelctl; do
+  for item in bin backend systemd config licenses LICENSE README.md THIRD_PARTY_LICENSES.txt palpanelctl; do
     [[ -e "$package_dir/$item" ]] && cp -a "$package_dir/$item" "$staging/"
   done
   rm -f "$staging/config/palpanel.env"
@@ -428,9 +441,8 @@ install_system() {
   chmod 644 "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service"
   if service_control_enabled; then
     systemctl daemon-reload
-    systemctl enable palpanel.service
-    systemctl restart palpanel-sav-cli.service
-    systemctl restart palpanel.service
+    systemctl enable palpanel-sav-cli.service palpanel.service
+    systemctl restart palpanel-sav-cli.service palpanel.service
   fi
   printf 'installed PalPanel %s in %s\n' "$version" "$version_dir"
 }
@@ -472,7 +484,6 @@ Commands:
   status               show process or systemd status
   logs [-f]            show or follow bounded logs
   config [edit]        print or edit the active config path
-  token                print the configured admin token
   install [--docker] [--listen HOST:PORT]
                        install under /opt and enable systemd services
   uninstall [--purge]  remove programs; preserve config/data unless purged
@@ -492,13 +503,13 @@ case "$command" in
     ;;
   run)
     if system_mode; then
-      systemctl start palpanel.service
+      systemctl start palpanel-sav-cli.service palpanel.service
       exec journalctl -u palpanel.service -u palpanel-sav-cli.service -f
     fi
     supervise
     ;;
   start)
-    if system_mode; then systemctl start palpanel.service; else portable_start; fi
+    if system_mode; then systemctl start palpanel-sav-cli.service palpanel.service; else portable_start; fi
     ;;
   stop)
     if system_mode; then systemctl stop palpanel.service palpanel-sav-cli.service; else portable_stop; fi
@@ -511,7 +522,6 @@ case "$command" in
     ;;
   logs) show_logs "$@" ;;
   config) show_config "$@" ;;
-  token) show_token ;;
   install) install_system "$@" ;;
   uninstall) uninstall_system "$@" ;;
   -h|--help|help) usage ;;

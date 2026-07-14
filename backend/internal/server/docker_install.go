@@ -238,9 +238,9 @@ func (m Manager) InstallDocker(ctx context.Context, req DockerInstallRequest) (d
 		return db.Job{}, dockerInstallErr(http.StatusConflict, "sudo_required", "Docker installation requires root or passwordless sudo; run the manual script as an administrator")
 	}
 
-	return m.startJob(ctx, "docker_install", "queued Docker Engine install", func(jobID string) {
+	return m.startJob(ctx, "docker_install", "queued Docker Engine install", func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 10, "probing Docker package source", "")
-		plan, err := m.DockerInstallPlan(context.Background(), req.Source)
+		plan, err := m.DockerInstallPlan(jobCtx, req.Source)
 		if err != nil {
 			m.update(jobID, "failed", 10, "Docker install planning failed", err.Error())
 			return
@@ -262,21 +262,21 @@ func (m Manager) InstallDocker(ctx context.Context, req DockerInstallRequest) (d
 		}
 
 		m.update(jobID, "running", 35, "configuring repository and installing Docker packages", "")
-		if err := runDockerInstallScript(context.Background(), scriptPath, plan.Host.Sudo.IsRoot, req.AddCurrentUserToDockerGroup); err != nil {
+		if err := runDockerInstallScript(jobCtx, scriptPath, plan.Host.Sudo.IsRoot, req.AddCurrentUserToDockerGroup); err != nil {
 			m.update(jobID, "failed", 35, "Docker package installation failed", err.Error())
 			return
 		}
 
 		m.update(jobID, "running", 80, "starting Docker service", "")
-		_ = tryStartDockerService(context.Background(), plan.Host.Sudo.IsRoot)
+		_ = tryStartDockerService(jobCtx, plan.Host.Sudo.IsRoot)
 
 		m.update(jobID, "running", 90, "verifying Docker daemon", "")
-		host := m.HostCapabilities(context.Background())
+		host := m.HostCapabilities(jobCtx)
 		if host.Docker.DaemonReachable {
 			m.update(jobID, "completed", 100, "Docker Engine installed and reachable", "")
 			return
 		}
-		if sudoDockerVersion(context.Background()) == nil {
+		if sudoDockerVersion(jobCtx) == nil {
 			m.update(jobID, "completed", 100, "Docker Engine installed; restart PalPanel backend or re-login to refresh docker group access", "")
 			return
 		}

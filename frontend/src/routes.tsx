@@ -4,6 +4,7 @@ import {
   Archive,
   ClipboardList,
   Home,
+  Gamepad2,
   LayoutDashboard,
   ListTodo,
   Network,
@@ -28,6 +29,7 @@ const Guilds = lazyPage(() => import('./pages/Guilds'), 'Guilds');
 const Mods = lazyPage(() => import('./pages/Mods'), 'Mods');
 const Monitor = lazyPage(() => import('./pages/Monitor'), 'Monitor');
 const Pals = lazyPage(() => import('./pages/Pals'), 'Pals');
+const PalDefenderGM = lazyPage(() => import('./pages/PalDefenderGM'), 'PalDefenderGM');
 const Players = lazyPage(() => import('./pages/Players'), 'Players');
 const Security = lazyPage(() => import('./pages/Security'), 'Security');
 const Settings = lazyPage(() => import('./pages/Settings'), 'Settings');
@@ -80,6 +82,15 @@ export const appRoutes: AppRoute[] = [
     navGroup: 'server',
     icon: <Users size={18} />,
     element: <Players />,
+  },
+  {
+    id: 'paldefender-gm',
+    path: '/gm',
+    title: 'PalDefender GM',
+    navLabel: 'GM 工具',
+    navGroup: 'server',
+    icon: <Gamepad2 size={18} />,
+    element: <PalDefenderGM />,
   },
   {
     id: 'banlist',

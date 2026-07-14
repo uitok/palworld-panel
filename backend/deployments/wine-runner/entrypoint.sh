@@ -188,6 +188,18 @@ forward_server_signal() {
   fi
 }
 
+palpanel_wine_dll_overrides() {
+  local configured="${1:-}"
+  configured="${configured%;}"
+  if [[ ";$configured;" != *';dwmapi=n,b;'* ]]; then
+    configured="${configured:+$configured;}dwmapi=n,b"
+  fi
+  if [[ ";$configured;" != *';d3d9=n,b;'* ]]; then
+    configured="${configured:+$configured;}d3d9=n,b"
+  fi
+  printf '%s\n' "$configured"
+}
+
 start_server() {
   mkdir -p /data/server /data/wineprefix /data/logs
   cd /data/server
@@ -195,9 +207,9 @@ start_server() {
     echo "PalServer.exe not found. Run install first." >&2
     exit 3
   fi
-  # Prefer a game-local proxy DLL (used by UE4SS) while retaining Wine's
-  # builtin fallback for installations that do not provide one.
-  export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-dwmapi=n,b}"
+  # PalDefender's game-local d3d9 loader and UE4SS's dwmapi proxy must win
+  # over Wine's builtins while retaining any unrelated caller overrides.
+  export WINEDLLOVERRIDES="$(palpanel_wine_dll_overrides "${WINEDLLOVERRIDES:-}")"
   export HOME="${HOME:-/data/wineprefix}"
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/palpanel-runtime-$(id -u)}"
   mkdir -p "$XDG_RUNTIME_DIR"
@@ -229,6 +241,10 @@ start_server() {
   rm -f "$fifo"
   return "$status"
 }
+
+if [[ "${PALPANEL_ENTRYPOINT_SOURCE_ONLY:-0}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 case "$cmd" in
   install|update)

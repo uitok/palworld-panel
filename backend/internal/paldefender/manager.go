@@ -11,30 +11,62 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
-	"palpanel/internal/id"
+	"palpanel/internal/jobs"
 )
 
 const (
-	releasesURL = "https://api.github.com/repos/Ultimeit/PalDefender/releases"
-	latestURL   = "https://api.github.com/repos/Ultimeit/PalDefender/releases/latest"
-	kvVersion   = "paldefender_version"
-	kvRESTToken = "paldefender_rest_token"
+	releasesURL     = "https://api.github.com/repos/Ultimeit/PalDefender/releases"
+	latestURL       = "https://api.github.com/repos/Ultimeit/PalDefender/releases/latest"
+	kvVersion       = "paldefender_version"
+	kvRESTToken     = "paldefender_rest_token"
+	kvRuntimeMode   = "runtime_mode"
+	panelRESTOrigin = "http://palpanel.local"
+
+	runtimeWineDocker      = "wine_docker"
+	runtimeWindowsSteamCMD = "windows_steamcmd"
 )
+
+var panelRESTPermissions = []string{
+	"REST.Version.Read",
+	"REST.Players.Read",
+	"REST.Items.Read",
+	"REST.Items.Give",
+	"REST.Messages.Send.PlayerChat",
+	"REST.Messages.Send.GlobalChat",
+	"REST.Messages.Send.GuildChat",
+	"REST.Messages.Send.Log.Normal",
+	"REST.Messages.Send.Log.Important",
+	"REST.Messages.Send.Log.VeryImportant",
+	"REST.Messages.Broadcast",
+	"REST.Messages.Alert",
+	"REST.Punishments.Kick",
+	"REST.Punishments.Ban",
+	"REST.Punishments.Unban",
+	"REST.Reload.Config",
+}
+
+func PanelRESTPermissions() []string {
+	return append([]string(nil), panelRESTPermissions...)
+}
 
 type Manager struct {
 	cfg         appconfig.Config
 	store       *db.Store
 	client      *http.Client
+	restClient  *http.Client
 	restBaseURL string
+	jobs        *jobs.Executor
 }
 
 type Release struct {
@@ -54,6 +86,7 @@ type Asset struct {
 type Status struct {
 	Installed       bool              `json:"installed"`
 	Version         string            `json:"version,omitempty"`
+	Bundled         BundledAssetInfo  `json:"bundled"`
 	NeedsFirstStart bool              `json:"needs_first_start"`
 	Files           map[string]bool   `json:"files"`
 	Paths           map[string]string `json:"paths"`
@@ -68,8 +101,12 @@ type TokenResult struct {
 	Path        string   `json:"path"`
 }
 
-func NewManager(cfg appconfig.Config, store *db.Store) Manager {
-	return Manager{cfg: cfg, store: store, client: &http.Client{Timeout: 60 * time.Second}, restBaseURL: cfg.EffectivePalDefenderRESTBaseURL()}
+func NewManager(cfg appconfig.Config, store *db.Store, executors ...*jobs.Executor) Manager {
+	executor := jobs.New(store, 4)
+	if len(executors) > 0 && executors[0] != nil {
+		executor = executors[0]
+	}
+	return Manager{cfg: cfg, store: store, client: &http.Client{Timeout: 60 * time.Second}, restClient: newRESTHTTPClient(), restBaseURL: cfg.EffectivePalDefenderRESTBaseURL(), jobs: executor}
 }
 
 func (m Manager) Releases(ctx context.Context) ([]Release, error) {
@@ -108,6 +145,7 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 	return Status{
 		Installed:       installed,
 		Version:         version,
+		Bundled:         BundledInfo(),
 		NeedsFirstStart: installed && !dirExists(m.cfg.PalDefenderDir()),
 		Files:           files,
 		Paths: map[string]string{
@@ -205,7 +243,7 @@ func (m Manager) CreateRESTToken(ctx context.Context, name string, permissions [
 		name = "AdminPanel"
 	}
 	if len(permissions) == 0 {
-		permissions = []string{"REST.*"}
+		permissions = PanelRESTPermissions()
 	}
 	token, err := randomToken()
 	if err != nil {
@@ -223,7 +261,7 @@ func (m Manager) CreateRESTToken(ctx context.Context, name string, permissions [
 	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
 		return TokenResult{}, err
 	}
-	if err := m.enableRESTConfig(); err != nil {
+	if err := m.enableRESTConfig(ctx); err != nil {
 		return TokenResult{}, err
 	}
 	_ = m.store.SetKV(ctx, kvRESTToken, token)
@@ -231,17 +269,10 @@ func (m Manager) CreateRESTToken(ctx context.Context, name string, permissions [
 }
 
 func (m Manager) ReloadConfig(ctx context.Context) error {
-	token, _, err := m.store.GetKV(ctx, kvRESTToken)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(token) == "" {
-		return fmt.Errorf("PalDefender REST token has not been generated")
-	}
-	paths := []string{"/ReloadConfig", "/v1/pdapi/ReloadConfig"}
+	paths := []string{"/v1/pdapi/ReloadConfig", "/ReloadConfig"}
 	var lastErr error
 	for _, path := range paths {
-		if err := m.postREST(ctx, path, token); err == nil {
+		if err := m.doREST(ctx, http.MethodPost, path, nil, nil); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -250,28 +281,11 @@ func (m Manager) ReloadConfig(ctx context.Context) error {
 	return lastErr
 }
 
-func (m Manager) postREST(ctx context.Context, path, token string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(m.restBaseURL, "/")+path, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("PalDefender REST API %s returned status %d", path, resp.StatusCode)
-	}
-	return nil
-}
-
 func BalancedPreset() map[string]any {
 	return map[string]any{
 		"version":                      "1.0.0",
 		"MOTD":                         []string{"Welcome to {ServerName}", "PvP: {IsPvP} | Death penalty: {DeathPenalty}"},
-		"exitServerOnStartupFailure":   true,
+		"exitServerOnStartupFailure":   false,
 		"preventAdminPasswordInChat":   true,
 		"shouldWarnCheaters":           true,
 		"shouldWarnCheatersReason":     true,
@@ -312,26 +326,25 @@ func BalancedPreset() map[string]any {
 }
 
 func (m Manager) installJob(ctx context.Context, typ, message string) (db.Job, error) {
-	j, err := m.store.CreateJob(ctx, id.New("job"), typ, message)
-	if err != nil {
-		return db.Job{}, err
-	}
-	go func() {
-		m.update(j.ID, "running", 10, "fetching latest PalDefender release", "")
-		release, err := m.Latest(context.Background())
+	return m.jobs.Submit(ctx, jobs.ClassLifecycle, typ, message, func(jobCtx context.Context, jobID string) {
+		m.update(jobID, "running", 10, "fetching latest PalDefender release", "")
+		release, err := m.Latest(jobCtx)
 		if err != nil {
-			m.update(j.ID, "failed", 10, "release lookup failed", err.Error())
+			m.update(jobID, "failed", 10, "release lookup failed", err.Error())
 			return
 		}
-		m.update(j.ID, "running", 30, "downloading PalDefender assets", "")
-		if err := m.installRelease(context.Background(), release); err != nil {
-			m.update(j.ID, "failed", 30, "install failed", err.Error())
+		m.update(jobID, "running", 30, "downloading PalDefender assets", "")
+		if err := m.installRelease(jobCtx, release); err != nil {
+			m.update(jobID, "failed", 30, "install failed", err.Error())
 			return
 		}
-		_ = m.store.SetKV(context.Background(), kvVersion, release.TagName)
-		m.update(j.ID, "completed", 100, "PalDefender "+release.TagName+" installed", "")
-	}()
-	return j, nil
+		installedVersion := BundledPalDefenderVersion + "+bundled"
+		if err := m.store.SetKV(jobCtx, kvVersion, installedVersion); err != nil {
+			m.update(jobID, "failed", 90, "installed version persistence failed", err.Error())
+			return
+		}
+		m.update(jobID, "completed", 100, "PalDefender "+installedVersion+" installed", "")
+	})
 }
 
 func (m Manager) installRelease(ctx context.Context, release Release) error {
@@ -354,29 +367,25 @@ func (m Manager) installRelease(ctx context.Context, release Release) error {
 		}
 		return m.copyInstalledFiles(tmp)
 	}
-	for _, name := range []string{"PalDefender.dll", "d3d9.dll"} {
-		asset := findAsset(release.Assets, name)
-		if asset.BrowserDownloadURL == "" {
-			return fmt.Errorf("release asset %s not found", name)
-		}
-		if err := m.downloadAsset(ctx, asset, filepath.Join(m.cfg.Win64Dir(), name)); err != nil {
-			return err
-		}
+	asset := findAsset(release.Assets, "d3d9.dll")
+	if asset.BrowserDownloadURL == "" {
+		return fmt.Errorf("release asset d3d9.dll not found")
 	}
-	return nil
+	if err := m.downloadAsset(ctx, asset, filepath.Join(m.cfg.Win64Dir(), "d3d9.dll")); err != nil {
+		return err
+	}
+	return m.installBundledDLL()
 }
 
 func (m Manager) copyInstalledFiles(root string) error {
-	for _, name := range []string{"PalDefender.dll", "d3d9.dll"} {
-		path, err := findFile(root, name)
-		if err != nil {
-			return err
-		}
-		if err := copyFile(path, filepath.Join(m.cfg.Win64Dir(), name)); err != nil {
-			return err
-		}
+	path, err := findFile(root, "d3d9.dll")
+	if err != nil {
+		return err
 	}
-	return nil
+	if err := copyFile(path, filepath.Join(m.cfg.Win64Dir(), "d3d9.dll")); err != nil {
+		return err
+	}
+	return m.installBundledDLL()
 }
 
 func (m Manager) downloadAsset(ctx context.Context, asset Asset, dst string) error {
@@ -475,7 +484,9 @@ func (m Manager) getJSON(ctx context.Context, url string, out any) error {
 }
 
 func (m Manager) update(jobID, status string, progress int, message, errText string) {
-	_ = m.store.UpdateJob(context.Background(), jobID, status, progress, message, errText)
+	if err := m.jobs.Update(jobID, status, progress, message, errText); err != nil {
+		log.Printf("job %s update failed: %v", jobID, err)
+	}
 }
 
 func (m Manager) configPath() string {
@@ -503,10 +514,14 @@ func (m Manager) restEnabled() bool {
 	return enabled
 }
 
-func (m Manager) enableRESTConfig() error {
+func (m Manager) enableRESTConfig(ctx context.Context) error {
 	path := m.restConfigPath()
 	restPort := m.cfg.EffectivePalDefenderRESTPort()
-	cfg := map[string]any{"Enabled": true, "Port": restPort}
+	address, err := m.restAddress(ctx)
+	if err != nil {
+		return err
+	}
+	cfg := map[string]any{"Enabled": true, "Address": address, "Port": restPort}
 	if fileExists(path) {
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -514,10 +529,20 @@ func (m Manager) enableRESTConfig() error {
 		}
 		_ = json.Unmarshal(b, &cfg)
 		cfg["Enabled"] = true
+		cfg["Address"] = address
 		if _, ok := cfg["Port"]; !ok {
 			cfg["Port"] = restPort
 		}
 	}
+	cors, _ := cfg["Cors"].(map[string]any)
+	if cors == nil {
+		cors = map[string]any{}
+	}
+	cors["Allowed-Origins"] = appendPanelRESTOrigin(cors["Allowed-Origins"])
+	if _, ok := cors["Max-Age"]; !ok {
+		cors["Max-Age"] = 86400
+	}
+	cfg["Cors"] = cors
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -526,6 +551,56 @@ func (m Manager) enableRESTConfig() error {
 		return err
 	}
 	return os.WriteFile(path, append(b, '\n'), 0o644)
+}
+
+func appendPanelRESTOrigin(value any) []string {
+	origins := make([]string, 0, 2)
+	add := func(origin string) {
+		origin = strings.TrimSpace(origin)
+		if origin == "" || origin == "*" {
+			return
+		}
+		for _, existing := range origins {
+			if existing == origin {
+				return
+			}
+		}
+		origins = append(origins, origin)
+	}
+	switch configured := value.(type) {
+	case string:
+		add(configured)
+	case []string:
+		for _, origin := range configured {
+			add(origin)
+		}
+	case []any:
+		for _, raw := range configured {
+			if origin, ok := raw.(string); ok {
+				add(origin)
+			}
+		}
+	}
+	add(panelRESTOrigin)
+	return origins
+}
+
+func (m Manager) restAddress(ctx context.Context) (string, error) {
+	mode, _, err := m.store.GetKV(ctx, kvRuntimeMode)
+	if err != nil {
+		return "", err
+	}
+	switch strings.TrimSpace(mode) {
+	case runtimeWindowsSteamCMD:
+		return "127.0.0.1", nil
+	case runtimeWineDocker:
+		return "0.0.0.0", nil
+	default:
+		if runtime.GOOS == "windows" {
+			return "127.0.0.1", nil
+		}
+		return "0.0.0.0", nil
+	}
 }
 
 func findAsset(assets []Asset, name string) Asset {

@@ -3,7 +3,7 @@ set -euo pipefail
 
 archive="${1:?usage: smoke-linux.sh <linux-archive>}"
 archive_name="$(basename -- "$archive")"
-[[ "$archive_name" =~ ^palpanel_(v[0-9]+\.[0-9]+\.[0-9]+)_linux_amd64\.tar\.gz$ ]] || {
+[[ "$archive_name" =~ ^palpanel_(v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?)_linux_amd64\.tar\.gz$ ]] || {
   printf 'unexpected archive name: %s\n' "$archive_name" >&2
   exit 1
 }
@@ -33,8 +33,6 @@ export PALPANEL_SAVE_INDEXER_PORT="$sav_port"
 "$package_dir/bin/sav-cli" --version | grep -F "$version"
 "$package_dir/palpanelctl" init >"$tmp/init.txt"
 [[ "$(stat -c '%a' "$package_dir/config/palpanel.env")" == "600" ]]
-token="$("$package_dir/palpanelctl" token)"
-[[ ${#token} -ge 32 ]]
 
 "$package_dir/palpanelctl" start
 "$package_dir/palpanelctl" status
@@ -42,10 +40,16 @@ curl --fail --silent "http://127.0.0.1:$panel_port/api/health" | grep -F "\"vers
 curl --fail --silent "http://127.0.0.1:$sav_port/health" | grep -F "\"build_version\":\"$version\""
 unauthorized="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$panel_port/api/auth/me")"
 [[ "$unauthorized" == "401" ]]
-curl --fail --silent -H "Authorization: Bearer $token" "http://127.0.0.1:$panel_port/api/auth/me" | grep -F '"role":"admin"'
+curl --fail --silent --cookie-jar "$tmp/cookies.txt" \
+  -H 'Content-Type: application/json' \
+  -H "Origin: http://127.0.0.1:$panel_port" \
+  --data '{"username":"smoke-admin","password":"smoke-password-123"}' \
+  "http://127.0.0.1:$panel_port/api/auth/register" | grep -F '"role":"admin"'
+curl --fail --silent --cookie "$tmp/cookies.txt" "http://127.0.0.1:$panel_port/api/auth/me" | grep -F '"role":"admin"'
 "$package_dir/palpanelctl" logs >/dev/null
 "$package_dir/palpanelctl" restart
 curl --fail --silent "http://127.0.0.1:$panel_port/api/health" >/dev/null
+curl --fail --silent --cookie "$tmp/cookies.txt" "http://127.0.0.1:$panel_port/api/auth/me" | grep -F '"role":"admin"'
 "$package_dir/palpanelctl" stop
 
 [[ ! -e "$package_dir/run/backend.pid" && ! -e "$package_dir/run/sav-cli.pid" ]]

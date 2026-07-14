@@ -162,9 +162,9 @@ func (m Manager) ConfigureDockerMirrors(ctx context.Context, req DockerMirrorReq
 		return db.Job{}, dockerInstallErr(http.StatusConflict, "sudo_required", "Docker mirror configuration requires root or passwordless sudo; run the manual script as an administrator")
 	}
 
-	return m.startJob(ctx, "docker_mirror_configure", "queued Docker mirror configuration", func(jobID string) {
+	return m.startJob(ctx, "docker_mirror_configure", "queued Docker mirror configuration", func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 10, "probing Docker Hub mirrors", "")
-		plan, err := m.DockerMirrorPlan(context.Background(), req.Mirror)
+		plan, err := m.DockerMirrorPlan(jobCtx, req.Mirror)
 		if err != nil {
 			m.update(jobID, "failed", 10, "Docker mirror planning failed", err.Error())
 			return
@@ -190,13 +190,13 @@ func (m Manager) ConfigureDockerMirrors(ctx context.Context, req DockerMirrorReq
 		}
 
 		m.update(jobID, "running", 60, "updating Docker daemon registry mirrors", "")
-		if err := runDockerMirrorScript(context.Background(), scriptPath, plan.Host.Sudo.IsRoot); err != nil {
+		if err := runDockerMirrorScript(jobCtx, scriptPath, plan.Host.Sudo.IsRoot); err != nil {
 			m.update(jobID, "failed", 60, "Docker mirror configuration failed", err.Error())
 			return
 		}
 
 		m.update(jobID, "running", 90, "verifying Docker daemon", "")
-		host := m.HostCapabilities(context.Background())
+		host := m.HostCapabilities(jobCtx)
 		if host.Docker.DaemonReachable {
 			m.update(jobID, "completed", 100, "Docker mirror acceleration configured", "")
 			return

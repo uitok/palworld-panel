@@ -1,6 +1,7 @@
 import { apiClient, handleRequest } from './client';
 import { emptySummary, entityListQuery, mapSummary } from './entityList';
 import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
+import { palDefenderGMApi } from './paldefenderGM';
 import type { EntityListParams, EntityListResponse, Player, PlayerAccessEntry, UnsupportedActionResult } from '../types';
 
 const mapPlayers = (raw: unknown): Player[] => {
@@ -143,9 +144,6 @@ export const playersApi = {
     unsupported: true,
     message: '当前后端未提供玩家传送接口',
   }),
-  giveItem: async (): Promise<UnsupportedActionResult> => ({
-    ok: false,
-    unsupported: true,
-    message: '当前后端未提供发放物品接口',
-  }),
+  giveItem: (playerId: string, itemId: string, count: number) =>
+    palDefenderGMApi.giveItems(playerId, [{ ItemID: itemId, Count: count }]),
 };

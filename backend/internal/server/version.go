@@ -174,9 +174,9 @@ func appendUniqueString(values []string, value string) []string {
 }
 
 func (m Manager) CheckVersion(ctx context.Context) (db.Job, error) {
-	return m.startJob(ctx, versionCheckJobType, "queued version check", func(jobID string) {
+	return m.startJob(ctx, versionCheckJobType, "queued version check", func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 10, "checking local and latest build ids", "")
-		info, err := m.refreshVersion(context.Background(), true)
+		info, err := m.refreshVersion(jobCtx, true)
 		if err != nil {
 			m.update(jobID, "failed", 20, "version check failed", err.Error())
 			return
@@ -190,9 +190,9 @@ func (m Manager) CheckVersion(ctx context.Context) (db.Job, error) {
 }
 
 func (m Manager) UpdateIfNeeded(ctx context.Context, preUpdate func(context.Context) error) (db.Job, error) {
-	return m.startLifecycleJob(ctx, smartUpdateJobType, "queued smart update", func(jobID string) {
+	return m.startLifecycleJob(ctx, smartUpdateJobType, "queued smart update", func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 5, "checking whether update is needed", "")
-		info, err := m.refreshVersion(context.Background(), false)
+		info, err := m.refreshVersion(jobCtx, false)
 		if err != nil {
 			m.update(jobID, "failed", 10, "version check failed", err.Error())
 			return
@@ -202,10 +202,10 @@ func (m Manager) UpdateIfNeeded(ctx context.Context, preUpdate func(context.Cont
 			return
 		}
 		m.update(jobID, "running", 20, fmt.Sprintf("update available: %s -> %s", info.CurrentBuildID, info.LatestBuildID), "")
-		if !m.runInstallOrUpdateJob(jobID, true, true, preUpdate) {
+		if !m.runInstallOrUpdateJob(jobCtx, jobID, true, true, preUpdate) {
 			return
 		}
-		refreshed, err := m.VersionInfo(context.Background())
+		refreshed, err := m.VersionInfo(jobCtx)
 		if err != nil {
 			m.update(jobID, "completed", 100, "smart update completed; version read failed: "+err.Error(), "")
 			return

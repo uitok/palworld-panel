@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Compass, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
+import { Compass, LogOut, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 import { useServerStore } from '../../store/useServerStore';
 import { navGroups } from '../../routes';
 import { appConfig } from '../../config/defaults';
@@ -11,7 +11,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) => {
-  const { isSidebarCollapsed, setIsSidebarCollapsed } = useServerStore();
+  const { isSidebarCollapsed, setIsSidebarCollapsed, session, logout } = useServerStore();
   const collapsed = !mobile && isSidebarCollapsed;
 
   return (
@@ -112,10 +112,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
         </div>
         {!collapsed && (
           <div className="min-w-0 flex-1">
-            <h4 className="truncate text-xs font-semibold text-slate-700">Admin</h4>
-            <p className="truncate text-[9px] text-slate-400">Bearer token auth</p>
+            <h4 className="truncate text-xs font-semibold text-slate-700">{session?.name || 'Admin'}</h4>
+            <p className="truncate text-[9px] text-slate-400">管理员会话</p>
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => void logout()}
+          title="退出登录"
+          aria-label="退出登录"
+          className={`shrink-0 rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500 ${collapsed ? 'absolute bottom-4 right-2' : ''}`}
+        >
+          <LogOut size={15} />
+        </button>
       </div>
     </aside>
   );

@@ -3,6 +3,7 @@ package pallocalize
 import (
 	_ "embed"
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -10,15 +11,23 @@ import (
 var catalogJSON []byte
 
 type catalog struct {
-	Pals     map[string]string `json:"pals"`
-	Items    map[string]string `json:"items"`
-	Passives map[string]string `json:"passives"`
+	Pals      map[string]string `json:"pals"`
+	Items     map[string]string `json:"items"`
+	ItemIcons map[string]string `json:"item_icons"`
+	Passives  map[string]string `json:"passives"`
 }
 
 type normalizedCatalog struct {
 	pals     map[string]string
 	items    map[string]string
 	passives map[string]string
+	itemList []ItemEntry
+}
+
+type ItemEntry struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"`
 }
 
 var names = loadCatalog()
@@ -28,10 +37,22 @@ func loadCatalog() normalizedCatalog {
 	if err := json.Unmarshal(catalogJSON, &source); err != nil {
 		panic("decode embedded Palworld localization catalog: " + err.Error())
 	}
+	itemList := make([]ItemEntry, 0, len(source.Items))
+	for id, name := range source.Items {
+		id = strings.TrimSpace(id)
+		name = strings.TrimSpace(name)
+		if id != "" && name != "" {
+			itemList = append(itemList, ItemEntry{ID: id, Name: name, Icon: strings.TrimSpace(source.ItemIcons[id])})
+		}
+	}
+	sort.Slice(itemList, func(i, j int) bool {
+		return strings.ToLower(itemList[i].ID) < strings.ToLower(itemList[j].ID)
+	})
 	return normalizedCatalog{
 		pals:     normalizeKeys(source.Pals),
 		items:    normalizeKeys(source.Items),
 		passives: normalizeKeys(source.Passives),
+		itemList: itemList,
 	}
 }
 
@@ -68,6 +89,27 @@ func PalName(characterID string) string {
 
 func ItemName(itemID string) string {
 	return lookup(names.items, itemID)
+}
+
+func SearchItems(query string, limit int) []ItemEntry {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	query = normalize(query)
+	results := make([]ItemEntry, 0, min(limit, len(names.itemList)))
+	for _, item := range names.itemList {
+		if query != "" && !strings.Contains(normalize(item.ID), query) && !strings.Contains(normalize(item.Name), query) {
+			continue
+		}
+		results = append(results, item)
+		if len(results) == limit {
+			break
+		}
+	}
+	return results
 }
 
 func PassiveName(passiveID string) string {

@@ -1,0 +1,214 @@
+package api
+
+import (
+	"bytes"
+	"io/fs"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+func (s Server) registerRoutes(router *gin.Engine) {
+	router.GET("/api/health", s.health)
+	router.GET("/api/ready", s.ready)
+	authPublic := router.Group("/api/auth")
+	authPublic.Use(SameOriginWrite())
+	authPublic.GET("/status", s.authStatus)
+	authPublic.POST("/register", s.registerAdmin)
+	authPublic.POST("/login", s.login)
+
+	api := router.Group("/api")
+	api.Use(Auth(s.cfg, s.auth), AuditMiddleware(s.store))
+	s.registerSystemRoutes(api)
+	s.registerServerRoutes(api)
+	s.registerContentRoutes(api)
+	s.registerSecurityRoutes(api)
+	s.registerWorldRoutes(api)
+	s.registerFrontendRoutes(router)
+}
+
+func (s Server) registerSystemRoutes(api *gin.RouterGroup) {
+	api.GET("/auth/me", s.authMe)
+	api.POST("/auth/logout", s.logout)
+	api.GET("/auth/api-keys", s.listAPIKeys)
+	api.POST("/auth/api-keys", Require(PermSecurityWrite), s.createAPIKey)
+	api.DELETE("/auth/api-keys/:id", Require(PermSecurityWrite), s.revokeAPIKey)
+	api.GET("/jobs", s.listJobs)
+	api.GET("/jobs/:id", s.getJob)
+	api.GET("/audit-logs", Require(PermAuditRead), s.listAuditLogs)
+	api.GET("/alerts", s.listAlerts)
+	api.POST("/alerts/:id/ack", Require(PermServerControl), s.ackAlert)
+	api.GET("/schedules", s.listSchedules)
+	api.POST("/schedules", Require(PermServerControl), s.createSchedule)
+	api.PUT("/schedules/:id", Require(PermServerControl), s.updateSchedule)
+	api.DELETE("/schedules/:id", Require(PermServerControl), s.deleteSchedule)
+	api.POST("/schedules/:id/run", Require(PermServerControl), s.runSchedule)
+}
+
+func (s Server) registerServerRoutes(api *gin.RouterGroup) {
+	api.GET("/server/status", s.serverStatus)
+	api.GET("/server/prerequisites", s.serverPrerequisites)
+	api.GET("/server/host", s.serverHost)
+	api.GET("/server/runtime", s.getRuntime)
+	api.PUT("/server/runtime", Require(PermConfigWrite), s.putRuntime)
+	api.GET("/server/docker/plan", s.serverDockerPlan)
+	api.POST("/server/docker/install", Require(PermServerControl), s.serverDockerInstall)
+	api.GET("/server/docker/mirrors/plan", s.serverDockerMirrorsPlan)
+	api.POST("/server/docker/mirrors/configure", Require(PermServerControl), s.serverDockerMirrorsConfigure)
+	api.POST("/server/bootstrap", Require(PermServerControl), s.serverBootstrap)
+	api.GET("/server/logs", s.serverLogs)
+	api.GET("/server/world", s.serverWorld)
+	api.POST("/server/world/reset", Require(PermWorldReset), s.serverWorldReset)
+	api.POST("/server/install", Require(PermServerControl), s.serverInstall)
+	api.POST("/server/update", Require(PermServerControl), s.serverUpdate)
+	api.POST("/server/update-if-needed", Require(PermServerControl), s.serverUpdateIfNeeded)
+	api.GET("/server/version", s.serverVersion)
+	api.POST("/server/version/check", Require(PermServerControl), s.serverVersionCheck)
+	api.POST("/server/start", Require(PermServerControl), s.serverStart)
+	api.POST("/server/stop", Require(PermServerControl), s.serverStop)
+	api.POST("/server/restart", Require(PermServerControl), s.serverRestart)
+	api.POST("/server/safe-restart", Require(PermServerControl), s.serverSafeRestart)
+	api.POST("/server/force-stop", Require(PermServerControl), s.serverForceStop)
+	api.GET("/server/startup", s.getStartup)
+	api.PUT("/server/startup", Require(PermConfigWrite), s.putStartup)
+	api.POST("/server/initialize-config", Require(PermConfigWrite), s.initializeConfig)
+	api.GET("/monitor/snapshot", s.monitorSnapshot)
+	api.GET("/monitor/history", s.monitorHistory)
+	api.POST("/server/backup", Require(PermBackupWrite), s.serverBackup)
+	api.GET("/backups", s.listBackups)
+	api.POST("/backups/:name/restore", Require(PermBackupWrite), s.restoreBackup)
+	api.GET("/backups/:name/download", Require(PermBackupWrite), s.downloadBackup)
+	api.DELETE("/backups/:name", Require(PermBackupWrite), s.deleteBackup)
+	api.POST("/backups/:name/verify", Require(PermBackupWrite), s.verifyBackup)
+	api.GET("/server/info", s.palGet("info"))
+	api.GET("/server/players", s.palGet("players"))
+	api.GET("/server/settings", s.palGet("settings"))
+	api.GET("/server/metrics", s.serverMetrics)
+	api.GET("/server/game-data", s.serverGameData)
+	api.POST("/server/announce", Require(PermServerControl), s.palPost("announce"))
+	api.POST("/server/save", Require(PermServerControl), s.palPost("save"))
+	api.POST("/server/shutdown", Require(PermServerControl), s.palPost("shutdown"))
+}
+
+func (s Server) registerContentRoutes(api *gin.RouterGroup) {
+	api.GET("/config/palworld", s.getPalworldConfig)
+	api.PUT("/config/palworld", Require(PermConfigWrite), s.updatePalworldConfig)
+	api.GET("/config/palworld/schema", s.getPalworldConfigSchema)
+	api.POST("/config/palworld/validate", s.validatePalworldConfig)
+	api.GET("/mods", s.listMods)
+	api.GET("/mods/workshop/status", s.workshopStatus)
+	api.GET("/mods/workshop/search", s.searchWorkshopMods)
+	api.GET("/mods/workshop/:id", s.getWorkshopMod)
+	api.POST("/mods/workshop/:id/translate", Require(PermModsWrite), s.translateWorkshopMod)
+	api.POST("/mods/import/inspect", Require(PermModsWrite), s.inspectModImport)
+	api.POST("/mods/import/inspect/:id/select", Require(PermModsWrite), s.selectModImportCandidate)
+	api.POST("/mods/import", Require(PermModsWrite), s.startModImport)
+	api.POST("/mods/upload", Require(PermModsWrite), s.uploadMod)
+	api.POST("/mods/workshop", Require(PermModsWrite), s.downloadWorkshop)
+	api.POST("/mods/:id/enable", Require(PermModsWrite), s.enableMod)
+	api.POST("/mods/:id/disable", Require(PermModsWrite), s.disableMod)
+	api.DELETE("/mods/:id", Require(PermModsWrite), s.deleteMod)
+	api.GET("/ai/translation/config", s.getAITranslationConfig)
+	api.PUT("/ai/translation/config", Require(PermAIConfig), s.putAITranslationConfig)
+	api.POST("/ai/translation/test", Require(PermAIConfig), s.testAITranslationConfig)
+}
+
+func (s Server) registerSecurityRoutes(api *gin.RouterGroup) {
+	api.GET("/security/paldefender/releases", s.palDefenderReleases)
+	api.GET("/security/paldefender/status", s.palDefenderStatus)
+	api.POST("/security/paldefender/install", Require(PermSecurityWrite), s.palDefenderInstall)
+	api.POST("/security/paldefender/update", Require(PermSecurityWrite), s.palDefenderUpdate)
+	api.POST("/security/paldefender/rollback", Require(PermSecurityWrite), s.palDefenderRollback)
+	api.GET("/security/paldefender/config", s.palDefenderGetConfig)
+	api.PUT("/security/paldefender/config", Require(PermSecurityWrite), s.palDefenderPutConfig)
+	api.POST("/security/paldefender/apply-preset", Require(PermSecurityWrite), s.palDefenderApplyPreset)
+	api.POST("/security/paldefender/rest-token", Require(PermSecurityWrite), s.palDefenderRESTToken)
+	api.POST("/security/paldefender/reload-config", Require(PermSecurityWrite), s.palDefenderReloadConfig)
+	api.GET("/security/paldefender/gm/status", s.palDefenderGMStatus)
+	api.GET("/security/paldefender/gm/players", s.palDefenderGMPlayers)
+	api.GET("/security/paldefender/gm/items", s.palDefenderGMItems)
+	api.GET("/security/paldefender/gm/players/:id/inventory", s.palDefenderGMInventory)
+	api.POST("/security/paldefender/gm/players/:id/items", Require(PermPlayersWrite), s.palDefenderGMGiveItems)
+	api.POST("/security/paldefender/gm/players/:id/message", Require(PermPlayersWrite), s.palDefenderGMSendMessage)
+	api.POST("/security/paldefender/gm/players/:id/kick", Require(PermPlayersWrite), s.palDefenderGMKick)
+	api.POST("/security/paldefender/gm/players/:id/ban", Require(PermPlayersWrite), s.palDefenderGMBan)
+	api.POST("/security/paldefender/gm/players/:id/unban", Require(PermPlayersWrite), s.palDefenderGMUnban)
+	api.POST("/security/paldefender/gm/broadcast", Require(PermPlayersWrite), s.palDefenderGMBroadcast)
+}
+
+func (s Server) registerWorldRoutes(api *gin.RouterGroup) {
+	api.GET("/save/index/status", s.saveIndexStatus)
+	api.POST("/save/index/rebuild", Require(PermServerControl), s.saveIndexRebuild)
+	api.GET("/players", s.listSavePlayers)
+	api.GET("/guilds", s.listSaveGuilds)
+	api.GET("/guilds/:id", s.getSaveGuild)
+	api.GET("/bases", s.listSaveBases)
+	api.GET("/bases/:id", s.getSaveBase)
+	api.GET("/bases/:id/storage", s.getSaveBaseStorage)
+	api.GET("/pals", s.listSavePals)
+	api.GET("/pals/:id", s.getSavePal)
+	api.GET("/map/entities", s.listMapEntities)
+	api.GET("/players/bans", s.listPlayerBans)
+	api.POST("/players/bans", Require(PermPlayersWrite), s.addPlayerBan)
+	api.DELETE("/players/bans/:steam_id", Require(PermPlayersWrite), s.deletePlayerBan)
+	api.GET("/players/whitelist", s.listPlayerWhitelist)
+	api.PUT("/players/whitelist", Require(PermPlayersWrite), s.putPlayerWhitelist)
+	api.POST("/players/:id/kick", Require(PermPlayersWrite), s.kickPlayer)
+	api.POST("/players/:id/ban", Require(PermPlayersWrite), s.banPlayer)
+	api.POST("/players/:id/unban", Require(PermPlayersWrite), s.unbanPlayer)
+	api.GET("/players/:id/inventory", s.getSavePlayerInventory)
+	api.GET("/players/:id", s.getSavePlayer)
+}
+
+func (s Server) registerFrontendRoutes(router *gin.Engine) {
+	registerFrontendFilesystem(router, s.webUI)
+}
+
+func registerFrontendFilesystem(router *gin.Engine, files fs.FS) {
+	serve := func(name, cacheControl string) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			body, err := fs.ReadFile(files, name)
+			if err != nil {
+				c.Status(http.StatusNotFound)
+				return
+			}
+			c.Header("Cache-Control", cacheControl)
+			http.ServeContent(c.Writer, c.Request, name, time.Time{}, bytes.NewReader(body))
+		}
+	}
+	available := files != nil
+	if available {
+		index := serve("index.html", "no-cache")
+		router.GET("/", index)
+		router.HEAD("/", index)
+		asset := func(c *gin.Context) {
+			requested := strings.TrimPrefix(c.Param("path"), "/")
+			name := "assets/" + requested
+			if requested == "" || !fs.ValidPath(name) {
+				c.Status(http.StatusNotFound)
+				return
+			}
+			serve(name, "public, max-age=31536000, immutable")(c)
+		}
+		router.GET("/assets/*path", asset)
+		router.HEAD("/assets/*path", asset)
+		if info, err := fs.Stat(files, "favicon.ico"); err == nil && !info.IsDir() {
+			favicon := serve("favicon.ico", "public, max-age=3600")
+			router.GET("/favicon.ico", favicon)
+			router.HEAD("/favicon.ico", favicon)
+		}
+	}
+	router.NoRoute(func(c *gin.Context) {
+		if c.Request.URL.Path == "/api" || strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			fail(c, http.StatusNotFound, "not_found", "api route not found")
+			return
+		}
+		if !available || (c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		serve("index.html", "no-cache")(c)
+	})
+}

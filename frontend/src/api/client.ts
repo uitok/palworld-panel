@@ -1,7 +1,6 @@
 import axios, { AxiosError, AxiosResponse } from 'axios';
 import {
   appEvents,
-  readAppStorage,
 } from '../config/defaults';
 
 interface ApiEnvelope<T = unknown> {
@@ -22,13 +21,6 @@ interface HandleRequestOptions<R> {
 const fallbackDelayMs = 120;
 const sameOriginApiBaseUrl = '/api';
 
-const readToken = () => {
-  if (typeof localStorage === 'undefined') {
-    return '';
-  }
-  return readAppStorage('token') || '';
-};
-
 export const currentApiBaseUrl = () => sameOriginApiBaseUrl;
 
 export class ApiError extends Error {
@@ -45,6 +37,7 @@ export class ApiError extends Error {
 
 export const apiClient = axios.create({
   baseURL: currentApiBaseUrl(),
+  withCredentials: true,
   timeout: 8000,
   headers: {
     'Content-Type': 'application/json',
@@ -53,10 +46,6 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use((config) => {
   config.baseURL = currentApiBaseUrl();
-  const token = readToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
   return config;
 });
 
@@ -100,7 +89,7 @@ const apiErrorFrom = (error: unknown): ApiError => {
     return new ApiError('当前面板后端响应超时，请稍后重试。');
   }
   if (status === 401) {
-    return new ApiError('面板 Token 无效或权限不足，请重新输入。', status, 'unauthorized');
+    return new ApiError('登录状态已失效，请重新登录。', status, 'unauthorized');
   }
   if (payload?.error) {
     if (typeof payload.error === 'string') {

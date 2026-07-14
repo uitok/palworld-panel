@@ -11,11 +11,14 @@
 /frontend/dist/
 /frontend/.playwright-cli/
 /frontend/output/
+/frontend/playwright-report/
+/frontend/test-results/
 
 # Local environment overrides
 *.local
 .env
 .env.*.local
+/.palpanel-restconfig-*.json
 
 # OS/editor files
 .DS_Store

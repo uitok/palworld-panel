@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CI_PACKAGE_VERSION: v0.0.0-ci
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
@@ -34,16 +37,20 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Go tests
         run: |
-          (cd backend && go test ./...)
-          (cd sav-cli && CGO_ENABLED=1 go test ./...)
+          (cd backend && go test -p=1 ./...)
+          (cd sav-cli && CGO_ENABLED=1 go test -p=1 ./...)
+          (cd backend && go test -p=1 -race ./...)
+          scripts/check-go-coverage.sh
       - name: Frontend checks
         run: |
           cd frontend
           npm ci
           npm run check
+          npx playwright install --with-deps chromium
+          npm run test:e2e
       - name: Source and shell checks
         run: |
-          shellcheck install.sh scripts/package.sh scripts/palpanelctl scripts/start.sh scripts/scan-secrets.sh scripts/verify-release-contents.sh scripts/smoke-linux.sh scripts/test-install.sh scripts/test-bootstrap-install.sh
+          shellcheck install.sh scripts/package.sh scripts/palpanelctl scripts/start.sh scripts/scan-secrets.sh scripts/verify-release-contents.sh scripts/smoke-linux.sh scripts/test-install.sh scripts/test-bootstrap-install.sh scripts/test-upgrade.sh scripts/check-go-coverage.sh
           scripts/scan-secrets.sh
           gitleaks dir . --config .gitleaks.toml --redact --no-banner
           git diff --check
@@ -55,14 +62,15 @@ jobs:
           systemd-analyze verify "$tmp/palpanel.service" "$tmp/palpanel-sav-cli.service"
       - name: Build and smoke Linux package
         run: |
-          scripts/package.sh --version v1.0.2 --targets linux-amd64 --skip-tests --clean
+          scripts/package.sh --version "$CI_PACKAGE_VERSION" --targets linux-amd64 --skip-tests --clean
           scripts/verify-release-contents.sh \
-            dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz \
-            dist/packages/palpanel-sav-cli_v1.0.2_source.tar.gz \
-            dist/packages/palpanel_v1.0.2_source.tar.gz
-          scripts/smoke-linux.sh dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz
-          sudo scripts/test-install.sh dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz
-          sudo scripts/test-bootstrap-install.sh dist/packages/palpanel_v1.0.2_linux_amd64.tar.gz
+            "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz" \
+            "dist/packages/palpanel-sav-cli_${CI_PACKAGE_VERSION}_source.tar.gz" \
+            "dist/packages/palpanel_${CI_PACKAGE_VERSION}_source.tar.gz"
+          scripts/smoke-linux.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
+          sudo scripts/test-install.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
+          sudo scripts/test-bootstrap-install.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
+          sudo scripts/test-upgrade.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz" v1.0.2
 
   windows:
     runs-on: windows-2025
@@ -88,20 +96,20 @@ jobs:
         run: |
           $gcc = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\gcc.exe"
           if (-not (Test-Path $gcc)) { throw "MinGW gcc not found: $gcc" }
-          ./scripts/package.ps1 -Version v1.0.2 -Clean -MingwGcc $gcc
+          ./scripts/package.ps1 -Version $env:CI_PACKAGE_VERSION -Clean -MingwGcc $gcc
       - name: Launcher and process smoke test
         shell: pwsh
         run: |
           $objdump = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\objdump.exe"
-          ./scripts/verify-windows-package.ps1 -Archive "dist\packages\palpanel_v1.0.2_windows_amd64.zip" -ObjdumpPath $objdump
-          ./scripts/smoke-windows.ps1 -PackageDir "dist\packages\palpanel_v1.0.2_windows_amd64" -Version v1.0.2
+          ./scripts/verify-windows-package.ps1 -Archive "dist\packages\palpanel_$($env:CI_PACKAGE_VERSION)_windows_amd64.zip" -ObjdumpPath $objdump
+          ./scripts/smoke-windows.ps1 -PackageDir "dist\packages\palpanel_$($env:CI_PACKAGE_VERSION)_windows_amd64" -Version $env:CI_PACKAGE_VERSION
       - name: Upload Windows CI package
         uses: actions/upload-artifact@v4
         with:
           name: palpanel-windows-amd64-${{ github.sha }}
           if-no-files-found: error
           retention-days: 7
-          path: dist/packages/palpanel_v1.0.2_windows_amd64.zip
+          path: dist/packages/palpanel_${{ env.CI_PACKAGE_VERSION }}_windows_amd64.zip
 
   vulnerability:
     runs-on: ubuntu-24.04

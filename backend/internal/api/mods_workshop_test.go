@@ -18,7 +18,7 @@ import (
 	"palpanel/internal/server"
 )
 
-func TestWorkshopStatusReportsUnconfiguredWhenEnvUnset(t *testing.T) {
+func TestWorkshopStatusReportsBundledKeyWithoutExposingIt(t *testing.T) {
 	root := t.TempDir()
 	cfg := appconfig.Config{
 		DataDir:         root,
@@ -30,7 +30,6 @@ func TestWorkshopStatusReportsUnconfiguredWhenEnvUnset(t *testing.T) {
 		BackupsDir:      filepath.Join(root, "backups"),
 		LogsDir:         filepath.Join(root, "logs"),
 		DBPath:          filepath.Join(root, "test.db"),
-		PanelToken:      "secret",
 		RequireAuth:     true,
 		DockerBinary:    "docker",
 		DockerImage:     "test-image",
@@ -45,6 +44,7 @@ func TestWorkshopStatusReportsUnconfiguredWhenEnvUnset(t *testing.T) {
 		t.Fatalf("db.Open returned error: %v", err)
 	}
 	defer store.Close()
+	provisionTestPrincipal(t, store, RoleAdmin)
 
 	runner := docker.NewRunner(cfg)
 	serverManager := server.NewManager(cfg, store, runner)
@@ -61,7 +61,7 @@ func TestWorkshopStatusReportsUnconfiguredWhenEnvUnset(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/mods/workshop/status", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -69,7 +69,7 @@ func TestWorkshopStatusReportsUnconfiguredWhenEnvUnset(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `"configured":false`) || !strings.Contains(body, `"key_source":""`) {
+	if !strings.Contains(body, `"configured":true`) || !strings.Contains(body, `"key_source":"bundled"`) || strings.Contains(body, `"key":`) {
 		t.Fatalf("unexpected status response: %s", body)
 	}
 }
@@ -86,7 +86,6 @@ func TestWorkshopStatusDoesNotExposeSteamAPIKey(t *testing.T) {
 		BackupsDir:      filepath.Join(root, "backups"),
 		LogsDir:         filepath.Join(root, "logs"),
 		DBPath:          filepath.Join(root, "test.db"),
-		PanelToken:      "secret",
 		RequireAuth:     true,
 		DockerBinary:    "docker",
 		DockerImage:     "test-image",
@@ -102,6 +101,7 @@ func TestWorkshopStatusDoesNotExposeSteamAPIKey(t *testing.T) {
 		t.Fatalf("db.Open returned error: %v", err)
 	}
 	defer store.Close()
+	provisionTestPrincipal(t, store, RoleAdmin)
 
 	runner := docker.NewRunner(cfg)
 	serverManager := server.NewManager(cfg, store, runner)
@@ -118,7 +118,7 @@ func TestWorkshopStatusDoesNotExposeSteamAPIKey(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/mods/workshop/status", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 

@@ -26,3 +26,17 @@ func TestChineseCatalogAndFallbacks(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchItemsUsesIDsAndChineseNamesWithLimits(t *testing.T) {
+	byID := SearchItems("ExplosiveBullet", 10)
+	if len(byID) != 1 || byID[0].ID != "ExplosiveBullet" || byID[0].Name != "火箭弹" || byID[0].Icon != "explosivebullet" {
+		t.Fatalf("ID search = %#v", byID)
+	}
+	byName := SearchItems("金币", 10)
+	if len(byName) != 1 || byName[0].ID != "Money" {
+		t.Fatalf("name search = %#v", byName)
+	}
+	if got := SearchItems("", 2); len(got) != 2 || got[0].ID > got[1].ID {
+		t.Fatalf("limited catalog = %#v", got)
+	}
+}

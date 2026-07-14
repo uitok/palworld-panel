@@ -5,12 +5,15 @@
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
+    "generate:api-types": "cd ../backend && go run ./cmd/openapi-types --spec ../docs/openapi.yaml --output ../frontend/src/api/generated/contracts.ts",
+    "check:api-types": "npm run generate:api-types && git diff --exit-code -- src/api/generated/contracts.ts",
     "dev": "vite",
     "typecheck": "tsc -b",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "test:e2e": "playwright test",
+    "check": "npm run check:api-types && npm run typecheck && npm run lint && npm run test && npm run build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -24,6 +27,7 @@
     "recharts": "^3.9.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.3.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

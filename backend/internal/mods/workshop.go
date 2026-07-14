@@ -161,24 +161,15 @@ func (c *SteamClient) GetDetails(ctx context.Context, ids []string) ([]WorkshopI
 	if len(cleanIDs) == 0 {
 		return nil, nil
 	}
-	if strings.TrimSpace(c.apiKey) == "" {
-		return nil, ErrSteamAPIKeyMissing
-	}
-
 	values := url.Values{}
-	values.Set("key", c.apiKey)
 	values.Set("format", "json")
-	values.Set("appid", c.appID)
-	values.Set("return_tags", "1")
-	values.Set("return_previews", "1")
-	values.Set("return_short_description", "1")
-	values.Set("return_metadata", "1")
+	values.Set("itemcount", strconv.Itoa(len(cleanIDs)))
 	for i, id := range cleanIDs {
 		values.Set(fmt.Sprintf("publishedfileids[%d]", i), id)
 	}
 
 	var payload publishedFileDetailsResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/IPublishedFileService/GetDetails/v1/", values, nil, &payload); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/ISteamRemoteStorage/GetPublishedFileDetails/v1/", nil, values, &payload); err != nil {
 		return nil, err
 	}
 	if payload.Response.Result != 0 && payload.Response.Result != 1 {
@@ -199,7 +190,7 @@ func (c *SteamClient) doJSON(ctx context.Context, method, path string, query url
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
-		return err
+		return SteamAPIError{Code: "steam_request_invalid", Message: "Steam API request could not be created"}
 	}
 	if len(form) > 0 {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -214,16 +205,12 @@ func (c *SteamClient) doJSON(ctx context.Context, method, path string, query url
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			return SteamAPIError{Code: "steam_timeout", Message: "Steam API request timed out"}
 		}
-		return SteamAPIError{Code: "steam_unreachable", Message: err.Error()}
+		return SteamAPIError{Code: "steam_unreachable", Message: "Steam API is unreachable"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		msg := strings.TrimSpace(string(limited))
-		if msg == "" {
-			msg = resp.Status
-		}
-		return SteamAPIError{Status: resp.StatusCode, Code: "steam_http_error", Message: fmt.Sprintf("Steam API returned HTTP %d: %s", resp.StatusCode, msg)}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		return SteamAPIError{Status: resp.StatusCode, Code: "steam_http_error", Message: fmt.Sprintf("Steam API returned HTTP %d", resp.StatusCode)}
 	}
 
 	decoder := json.NewDecoder(resp.Body)
@@ -371,6 +358,7 @@ type steamFileDetail struct {
 	Result                int         `json:"result"`
 	Title                 string      `json:"title"`
 	FileDescription       string      `json:"file_description"`
+	Description           string      `json:"description"`
 	ShortDescription      string      `json:"short_description"`
 	PreviewURL            string      `json:"preview_url"`
 	FileSize              json.Number `json:"file_size"`
@@ -430,11 +418,17 @@ func summaryFor(detail steamFileDetail, fullDescription bool) string {
 		if text := strings.TrimSpace(detail.FileDescription); text != "" {
 			return text
 		}
+		if text := strings.TrimSpace(detail.Description); text != "" {
+			return text
+		}
 	}
 	if text := strings.TrimSpace(detail.ShortDescription); text != "" {
 		return text
 	}
 	text := strings.TrimSpace(detail.FileDescription)
+	if text == "" {
+		text = strings.TrimSpace(detail.Description)
+	}
 	const limit = 500
 	if len(text) > limit {
 		return strings.TrimSpace(text[:limit]) + "..."

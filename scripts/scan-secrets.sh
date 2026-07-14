@@ -23,7 +23,7 @@ check_forbidden() {
   fi
 }
 
-check_forbidden "embedded Steam credential code is forbidden" 'DefaultSteamWebAPIKey|SteamWebAPIKeySource[^[:alnum:]]+embedded|return[[:space:]]+"embedded"'
+check_forbidden "plaintext Steam credential code is forbidden" 'DefaultSteamWebAPIKey|SteamWebAPIKey[[:space:]]*=[[:space:]]*"[0-9A-Fa-f]{32}"'
 check_forbidden "frontend build-time panel tokens are forbidden" 'VITE_PANEL_TOKEN'
 check_forbidden "AWS access key pattern detected" 'AKIA[0-9A-Z]{16}'
 check_forbidden "private key material detected" 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY'

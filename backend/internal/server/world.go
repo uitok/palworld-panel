@@ -86,12 +86,12 @@ func (m Manager) ResetWorld(ctx context.Context, expectedWorldID, confirmation s
 		return db.Job{}, fmt.Errorf("world reset is unavailable: %s", preview.ResetUnavailableReason)
 	}
 
-	return m.startLifecycleJob(ctx, "world_reset", "queued world reset", func(jobID string) {
-		m.runWorldReset(jobID, expectedWorldID, hooks)
+	return m.startLifecycleJob(ctx, "world_reset", "queued world reset", func(jobCtx context.Context, jobID string) {
+		m.runWorldReset(jobCtx, jobID, expectedWorldID, hooks)
 	})
 }
 
-func (m Manager) runWorldReset(jobID, expectedWorldID string, hooks WorldResetHooks) {
+func (m Manager) runWorldReset(ctx context.Context, jobID, expectedWorldID string, hooks WorldResetHooks) {
 	worldID, err := m.activeWorldID()
 	if err != nil {
 		m.update(jobID, "failed", 2, "active world read failed", err.Error())
@@ -111,7 +111,7 @@ func (m Manager) runWorldReset(jobID, expectedWorldID string, hooks WorldResetHo
 		return
 	}
 
-	status, err := m.Status(context.Background())
+	status, err := m.Status(ctx)
 	if err != nil {
 		m.update(jobID, "failed", 3, "server status read failed", err.Error())
 		return
@@ -120,13 +120,13 @@ func (m Manager) runWorldReset(jobID, expectedWorldID string, hooks WorldResetHo
 	if wasRunning {
 		m.update(jobID, "running", 5, "saving world and notifying players", "")
 		if hooks.Prepare != nil {
-			if err := hooks.Prepare(context.Background()); err != nil {
+			if err := hooks.Prepare(ctx); err != nil {
 				m.update(jobID, "failed", 5, "save or notification failed", err.Error())
 				return
 			}
 		}
 		m.update(jobID, "running", 12, "stopping server before world reset", "")
-		if err := m.stopUnlocked(context.Background()); err != nil {
+		if err := m.stopUnlocked(ctx); err != nil {
 			m.update(jobID, "failed", 12, "stop before world reset failed", err.Error())
 			return
 		}
@@ -135,7 +135,7 @@ func (m Manager) runWorldReset(jobID, expectedWorldID string, hooks WorldResetHo
 	m.update(jobID, "running", 25, "creating verified pre-world-reset backup", "")
 	backup, err := m.createBackupArchive("pre-world-reset")
 	if err != nil {
-		m.failBeforeWorldMove(jobID, wasRunning, 25, "backup failed", err.Error())
+		m.failBeforeWorldMove(ctx, jobID, wasRunning, 25, "backup failed", err.Error())
 		return
 	}
 	verified, err := verifyBackupArchive(backup.Path, backup.Name)
@@ -146,27 +146,27 @@ func (m Manager) runWorldReset(jobID, expectedWorldID string, hooks WorldResetHo
 		} else if len(verified.Errors) > 0 {
 			detail += ": " + strings.Join(verified.Errors, "; ")
 		}
-		m.failBeforeWorldMove(jobID, wasRunning, 30, "backup verification failed", detail+"; backup retained at "+backup.Path)
+		m.failBeforeWorldMove(ctx, jobID, wasRunning, 30, "backup verification failed", detail+"; backup retained at "+backup.Path)
 		return
 	}
 
 	stagingRoot := filepath.Join(m.cfg.ServerDir, "Pal", "Saved", ".palpanel-world-reset")
 	stagedPath := filepath.Join(stagingRoot, jobID)
 	if err := os.MkdirAll(stagingRoot, 0o700); err != nil {
-		m.failBeforeWorldMove(jobID, wasRunning, 38, "world staging setup failed", err.Error()+"; verified backup retained at "+backup.Path)
+		m.failBeforeWorldMove(ctx, jobID, wasRunning, 38, "world staging setup failed", err.Error()+"; verified backup retained at "+backup.Path)
 		return
 	}
 	if _, err := os.Stat(stagedPath); err == nil {
-		m.failBeforeWorldMove(jobID, wasRunning, 38, "world staging path already exists", stagedPath+"; verified backup retained at "+backup.Path)
+		m.failBeforeWorldMove(ctx, jobID, wasRunning, 38, "world staging path already exists", stagedPath+"; verified backup retained at "+backup.Path)
 		return
 	} else if !os.IsNotExist(err) {
-		m.failBeforeWorldMove(jobID, wasRunning, 38, "world staging path check failed", err.Error()+"; verified backup retained at "+backup.Path)
+		m.failBeforeWorldMove(ctx, jobID, wasRunning, 38, "world staging path check failed", err.Error()+"; verified backup retained at "+backup.Path)
 		return
 	}
 
 	m.update(jobID, "running", 45, "moving old world to reset staging", "")
 	if err := os.Rename(worldPath, stagedPath); err != nil {
-		m.failBeforeWorldMove(jobID, wasRunning, 45, "world staging move failed", err.Error()+"; verified backup retained at "+backup.Path)
+		m.failBeforeWorldMove(ctx, jobID, wasRunning, 45, "world staging move failed", err.Error()+"; verified backup retained at "+backup.Path)
 		return
 	}
 	m.invalidateSaveIndexCache()
@@ -176,14 +176,14 @@ func (m Manager) runWorldReset(jobID, expectedWorldID string, hooks WorldResetHo
 
 	if wasRunning {
 		m.update(jobID, "running", 60, "starting server to generate a new world", "")
-		if err := m.startUnlocked(context.Background()); err != nil {
-			_ = m.stopUnlocked(context.Background())
+		if err := m.startUnlocked(ctx); err != nil {
+			_ = m.stopUnlocked(ctx)
 			m.failAfterWorldMove(jobID, 60, "new world start failed", err, backup.Path, stagedPath)
 			return
 		}
 		m.update(jobID, "running", 72, "waiting for new Level.sav", "")
-		if err := m.waitForNewWorld(worldPath); err != nil {
-			_ = m.stopUnlocked(context.Background())
+		if err := m.waitForNewWorld(ctx, worldPath); err != nil {
+			_ = m.stopUnlocked(ctx)
 			m.failAfterWorldMove(jobID, 72, "new world generation failed", err, backup.Path, stagedPath)
 			return
 		}
@@ -201,9 +201,9 @@ func (m Manager) runWorldReset(jobID, expectedWorldID string, hooks WorldResetHo
 	m.update(jobID, "completed", 100, "world reset completed; verified backup retained at "+backup.Path, "")
 }
 
-func (m Manager) failBeforeWorldMove(jobID string, wasRunning bool, progress int, message, detail string) {
+func (m Manager) failBeforeWorldMove(ctx context.Context, jobID string, wasRunning bool, progress int, message, detail string) {
 	if wasRunning {
-		if err := m.startUnlocked(context.Background()); err != nil {
+		if err := m.startUnlocked(ctx); err != nil {
 			detail += "; original world was not moved, but restarting the previous server failed: " + err.Error()
 		}
 	}
@@ -216,7 +216,7 @@ func (m Manager) failAfterWorldMove(jobID string, progress int, message string, 
 	m.update(jobID, "failed", progress, message, detail)
 }
 
-func (m Manager) waitForNewWorld(worldPath string) error {
+func (m Manager) waitForNewWorld(ctx context.Context, worldPath string) error {
 	timeout := m.worldResetTimeout
 	if timeout <= 0 {
 		timeout = 180 * time.Second
@@ -231,14 +231,18 @@ func (m Manager) waitForNewWorld(worldPath string) error {
 		if levelSaveReady(levelPath) {
 			return nil
 		}
-		status, err := m.Status(context.Background())
+		status, err := m.Status(ctx)
 		if err == nil && status.Container.Status != "running" && status.Container.Status != "starting" && status.Container.Status != "restarting" {
 			return fmt.Errorf("server exited before creating a non-empty Level.sav")
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s waiting for a non-empty Level.sav", timeout.Round(time.Second))
 		}
-		time.Sleep(poll)
+		select {
+		case <-time.After(poll):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 

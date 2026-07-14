@@ -34,6 +34,7 @@ export const mapJob = (raw: unknown): Job => {
     progress: Number.isFinite(progress) ? progress : status === 'success' ? 100 : 0,
     message: data.message ? String(data.message) : undefined,
     error: data.error ? String(data.error) : undefined,
+    error_code: data.error_code ? String(data.error_code) : undefined,
     created_at: String(data.created_at || data.createdAt || ''),
     updated_at: data.updated_at ? String(data.updated_at) : data.updatedAt ? String(data.updatedAt) : undefined,
     finished_at:

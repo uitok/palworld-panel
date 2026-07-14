@@ -54,7 +54,7 @@ func TestServerMetricsNormalizesPalworldRESTResponse(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/server/metrics", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -135,7 +135,7 @@ func TestServerGameDataRejectsOversizedResponse(t *testing.T) {
 	defer cleanup.Close()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/server/game-data", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "palworld_game_data_too_large") {
 		t.Fatalf("expected bounded game-data failure, got %d: %s", rec.Code, rec.Body.String())
@@ -156,7 +156,7 @@ func TestServerGameDataUsesDedicatedShortTimeout(t *testing.T) {
 	started := time.Now()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/server/game-data", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "palworld_game_data_failed") {
 		t.Fatalf("expected timed out game-data failure, got %d: %s", rec.Code, rec.Body.String())
@@ -189,7 +189,7 @@ func TestServerMetricsFallsBackToMonitorSampleWhenRESTUnavailable(t *testing.T) 
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/server/metrics", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -233,7 +233,6 @@ func newMetricsTestRouterWithConfig(t *testing.T, restClient palrest.Client, mut
 		BackupsDir:      filepath.Join(root, "backups"),
 		LogsDir:         filepath.Join(root, "logs"),
 		DBPath:          filepath.Join(root, "test.db"),
-		PanelToken:      "secret",
 		RequireAuth:     true,
 		DockerBinary:    "docker",
 		DockerImage:     "test-image",
@@ -252,6 +251,7 @@ func newMetricsTestRouterWithConfig(t *testing.T, restClient palrest.Client, mut
 	if err != nil {
 		t.Fatalf("db.Open returned error: %v", err)
 	}
+	provisionTestPrincipal(t, store, RoleAdmin)
 	runner := docker.NewRunner(cfg)
 	serverManager := server.NewManager(cfg, store, runner)
 	monitorManager := monitor.New(cfg, store, serverManager, restClient)
@@ -271,7 +271,7 @@ func requestMetricsTestRoute(t *testing.T, router *gin.Engine, path string) *htt
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(req)
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("%s expected 200, got %d: %s", path, rec.Code, rec.Body.String())

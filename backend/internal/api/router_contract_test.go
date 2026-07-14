@@ -1,11 +1,16 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/goccy/go-yaml"
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
@@ -30,8 +35,6 @@ func TestNewContractRoutes(t *testing.T) {
 		BackupsDir:      filepath.Join(root, "backups"),
 		LogsDir:         filepath.Join(root, "logs"),
 		DBPath:          filepath.Join(root, "test.db"),
-		PanelToken:      "secret",
-		ViewerToken:     "viewer",
 		RequireAuth:     true,
 		DockerBinary:    "docker",
 		DockerImage:     "test-image",
@@ -48,6 +51,7 @@ func TestNewContractRoutes(t *testing.T) {
 		t.Fatalf("db.Open returned error: %v", err)
 	}
 	defer store.Close()
+	provisionTestPrincipal(t, store, RoleViewer)
 	runner := docker.NewRunner(cfg)
 	serverManager := server.NewManager(cfg, store, runner)
 	restClient := palrest.New("", "", "")
@@ -61,6 +65,7 @@ func TestNewContractRoutes(t *testing.T) {
 		monitor.New(cfg, store, serverManager, restClient),
 		scheduler.New(store, serverManager, restClient),
 	)
+	assertOpenAPIContract(t, router)
 	healthRequest := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	healthRecorder := httptest.NewRecorder()
 	router.ServeHTTP(healthRecorder, healthRequest)
@@ -70,6 +75,12 @@ func TestNewContractRoutes(t *testing.T) {
 		!strings.Contains(healthRecorder.Body.String(), `"build_time":"unknown"`) {
 		t.Fatalf("unexpected health response: %d %s", healthRecorder.Code, healthRecorder.Body.String())
 	}
+	readyRequest := httptest.NewRequest(http.MethodGet, "/api/ready", nil)
+	readyRecorder := httptest.NewRecorder()
+	router.ServeHTTP(readyRecorder, readyRequest)
+	if readyRecorder.Code != http.StatusOK || !strings.Contains(readyRecorder.Body.String(), `"status":"ready"`) {
+		t.Fatalf("unexpected readiness response: %d %s", readyRecorder.Code, readyRecorder.Body.String())
+	}
 
 	for _, path := range []string{
 		"/api/config/palworld/schema",
@@ -78,7 +89,7 @@ func TestNewContractRoutes(t *testing.T) {
 		"/api/security/paldefender/status",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer secret")
+		authorizeTestRequest(req)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -140,6 +151,16 @@ func TestNewContractRoutes(t *testing.T) {
 		"GET /api/pals",
 		"GET /api/pals/:id",
 		"GET /api/map/entities",
+		"GET /api/security/paldefender/gm/status",
+		"GET /api/security/paldefender/gm/items",
+		"GET /api/security/paldefender/gm/players",
+		"GET /api/security/paldefender/gm/players/:id/inventory",
+		"POST /api/security/paldefender/gm/players/:id/items",
+		"POST /api/security/paldefender/gm/players/:id/message",
+		"POST /api/security/paldefender/gm/players/:id/kick",
+		"POST /api/security/paldefender/gm/players/:id/ban",
+		"POST /api/security/paldefender/gm/players/:id/unban",
+		"POST /api/security/paldefender/gm/broadcast",
 	} {
 		if !routes[want] {
 			t.Fatalf("missing route %s", want)
@@ -147,7 +168,7 @@ func TestNewContractRoutes(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/server/docker/install", nil)
-	req.Header.Set("Authorization", "Bearer viewer")
+	authorizeTestRequest(req)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -155,7 +176,7 @@ func TestNewContractRoutes(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/server/docker/mirrors/configure", nil)
-	req.Header.Set("Authorization", "Bearer viewer")
+	authorizeTestRequest(req)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -163,10 +184,136 @@ func TestNewContractRoutes(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/save/index/rebuild", nil)
-	req.Header.Set("Authorization", "Bearer viewer")
+	authorizeTestRequest(req)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("viewer save index rebuild expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func assertOpenAPIContract(t *testing.T, router *gin.Engine) {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read OpenAPI document: %v", err)
+	}
+	var spec struct {
+		Paths map[string]map[string]any `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(body, &spec); err != nil {
+		t.Fatalf("parse OpenAPI document: %v", err)
+	}
+	documented := map[string]bool{}
+	for path, pathItem := range spec.Paths {
+		for method, rawOperation := range pathItem {
+			switch method {
+			case "get", "post", "put", "delete", "patch":
+			default:
+				continue
+			}
+			operation, ok := rawOperation.(map[string]any)
+			if !ok {
+				t.Errorf("OpenAPI operation %s %s is malformed", method, path)
+				continue
+			}
+			key := strings.ToUpper(method) + " /api" + path
+			documented[key] = true
+			if strings.TrimSpace(fmt.Sprint(operation["operationId"])) == "" {
+				t.Errorf("OpenAPI operation %s has no operationId", key)
+			}
+			if strings.TrimSpace(fmt.Sprint(operation["x-palpanel-permission"])) == "" {
+				t.Errorf("OpenAPI operation %s has no permission", key)
+			}
+		}
+	}
+	actual := map[string]bool{}
+	for _, route := range router.Routes() {
+		if !strings.HasPrefix(route.Path, "/api/") {
+			continue
+		}
+		path := route.Path
+		for _, parameter := range []string{"id", "name", "steam_id"} {
+			path = strings.ReplaceAll(path, ":"+parameter, "{"+parameter+"}")
+		}
+		actual[route.Method+" "+path] = true
+	}
+	for key := range actual {
+		if !documented[key] {
+			t.Errorf("API route is missing from OpenAPI: %s", key)
+		}
+	}
+	for key := range documented {
+		if !actual[key] {
+			t.Errorf("OpenAPI operation has no API route: %s", key)
+		}
+	}
+}
+
+func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
+	type schemaReference struct {
+		Ref string `yaml:"$ref"`
+	}
+	type operation struct {
+		RequestBody struct {
+			Content map[string]struct {
+				Schema schemaReference `yaml:"schema"`
+			} `yaml:"content"`
+		} `yaml:"requestBody"`
+		Responses map[string]any `yaml:"responses"`
+	}
+	var spec struct {
+		Paths map[string]struct {
+			Post operation `yaml:"post"`
+		} `yaml:"paths"`
+		Components struct {
+			SecuritySchemes map[string]struct {
+				Type   string `yaml:"type"`
+				In     string `yaml:"in"`
+				Name   string `yaml:"name"`
+				Scheme string `yaml:"scheme"`
+			} `yaml:"securitySchemes"`
+		} `yaml:"components"`
+	}
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "openapi.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(body, &spec); err != nil {
+		t.Fatal(err)
+	}
+
+	assertRequestSchema := func(path, mediaType, want string) {
+		t.Helper()
+		got := spec.Paths[path].Post.RequestBody.Content[mediaType].Schema.Ref
+		if got != "#/components/schemas/"+want {
+			t.Errorf("%s %s request schema = %q, want %s", path, mediaType, got, want)
+		}
+	}
+	assertRequestSchema("/auth/register", "application/json", "AuthCredentials")
+	assertRequestSchema("/auth/login", "application/json", "AuthCredentials")
+	assertRequestSchema("/auth/api-keys", "application/json", "DevelopmentKeyInput")
+	assertRequestSchema("/mods/import/inspect", "application/json", "ModImportInspectRequest")
+	assertRequestSchema("/mods/import/inspect", "multipart/form-data", "ModImportUploadRequest")
+	assertRequestSchema("/mods/import/inspect/{id}/select", "application/json", "ModImportSelectRequest")
+	assertRequestSchema("/mods/import", "application/json", "ModImportRequest")
+	assertRequestSchema("/security/paldefender/gm/players/{id}/items", "application/json", "PalDefenderGiveItemsRequest")
+	assertRequestSchema("/security/paldefender/gm/players/{id}/message", "application/json", "PalDefenderMessageRequest")
+	assertRequestSchema("/security/paldefender/gm/broadcast", "application/json", "PalDefenderBroadcastRequest")
+
+	responses := spec.Paths["/mods/import"].Post.Responses
+	if _, ok := responses["202"]; !ok {
+		t.Error("POST /mods/import does not document its 202 Job response")
+	}
+	if _, ok := responses["200"]; ok {
+		t.Error("POST /mods/import must not document a synchronous 200 response")
+	}
+	cookie := spec.Components.SecuritySchemes["sessionCookie"]
+	if cookie.Type != "apiKey" || cookie.In != "cookie" || cookie.Name != "palpanel_session" {
+		t.Errorf("session cookie security scheme = %#v", cookie)
+	}
+	key := spec.Components.SecuritySchemes["developmentKey"]
+	if key.Type != "http" || key.Scheme != "bearer" {
+		t.Errorf("development key security scheme = %#v", key)
 	}
 }

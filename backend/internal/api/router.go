@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 
 	"palpanel/internal/aitranslation"
 	"palpanel/internal/appconfig"
+	panelauth "palpanel/internal/auth"
 	"palpanel/internal/buildinfo"
 	"palpanel/internal/db"
 	"palpanel/internal/id"
@@ -31,169 +33,36 @@ import (
 	"palpanel/internal/saveindex"
 	"palpanel/internal/scheduler"
 	"palpanel/internal/server"
+	"palpanel/internal/webui"
 )
 
 type Server struct {
-	cfg       appconfig.Config
-	store     *db.Store
-	server    server.Manager
-	mods      mods.Manager
-	defender  paldefender.Manager
-	palrest   palrest.Client
-	monitor   monitor.Manager
-	scheduler scheduler.Manager
-	saveIndex *saveindex.Manager
-	ai        *aitranslation.Service
-	cache     *ttlCache
+	cfg         appconfig.Config
+	store       *db.Store
+	server      server.Manager
+	mods        mods.Manager
+	defender    paldefender.Manager
+	palrest     palrest.Client
+	monitor     monitor.Manager
+	scheduler   scheduler.Manager
+	saveIndex   *saveindex.Manager
+	ai          *aitranslation.Service
+	auth        *panelauth.Service
+	authLimiter *authRateLimiter
+	cache       *ttlCache
+	webUI       fs.FS
 }
 
 func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), ai: aitranslation.New(cfg, store), cache: newTTLCache()}
+	webFiles, _ := webui.Load(cfg.FrontendDist)
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))
 	r.Use(GzipMiddleware())
 	r.Use(CORSMiddleware(cfg.CORSOrigins))
-	r.GET("/api/health", s.health)
-
-	api := r.Group("/api")
-	api.Use(Auth(cfg))
-	api.Use(AuditMiddleware(store))
-	{
-		api.GET("/auth/me", authMe)
-		api.GET("/jobs", s.listJobs)
-		api.GET("/jobs/:id", s.getJob)
-		api.GET("/audit-logs", Require(PermAuditRead), s.listAuditLogs)
-		api.GET("/alerts", s.listAlerts)
-		api.POST("/alerts/:id/ack", Require(PermServerControl), s.ackAlert)
-		api.GET("/schedules", s.listSchedules)
-		api.POST("/schedules", Require(PermServerControl), s.createSchedule)
-		api.PUT("/schedules/:id", Require(PermServerControl), s.updateSchedule)
-		api.DELETE("/schedules/:id", Require(PermServerControl), s.deleteSchedule)
-		api.POST("/schedules/:id/run", Require(PermServerControl), s.runSchedule)
-
-		api.GET("/server/status", s.serverStatus)
-		api.GET("/server/prerequisites", s.serverPrerequisites)
-		api.GET("/server/host", s.serverHost)
-		api.GET("/server/runtime", s.getRuntime)
-		api.PUT("/server/runtime", Require(PermConfigWrite), s.putRuntime)
-		api.GET("/server/docker/plan", s.serverDockerPlan)
-		api.POST("/server/docker/install", Require(PermServerControl), s.serverDockerInstall)
-		api.GET("/server/docker/mirrors/plan", s.serverDockerMirrorsPlan)
-		api.POST("/server/docker/mirrors/configure", Require(PermServerControl), s.serverDockerMirrorsConfigure)
-		api.POST("/server/bootstrap", Require(PermServerControl), s.serverBootstrap)
-		api.GET("/server/logs", s.serverLogs)
-		api.GET("/server/world", s.serverWorld)
-		api.POST("/server/world/reset", Require(PermWorldReset), s.serverWorldReset)
-		api.POST("/server/install", Require(PermServerControl), s.serverInstall)
-		api.POST("/server/update", Require(PermServerControl), s.serverUpdate)
-		api.POST("/server/update-if-needed", Require(PermServerControl), s.serverUpdateIfNeeded)
-		api.GET("/server/version", s.serverVersion)
-		api.POST("/server/version/check", Require(PermServerControl), s.serverVersionCheck)
-		api.POST("/server/start", Require(PermServerControl), s.serverStart)
-		api.POST("/server/stop", Require(PermServerControl), s.serverStop)
-		api.POST("/server/restart", Require(PermServerControl), s.serverRestart)
-		api.POST("/server/safe-restart", Require(PermServerControl), s.serverSafeRestart)
-		api.POST("/server/force-stop", Require(PermServerControl), s.serverForceStop)
-		api.GET("/server/startup", s.getStartup)
-		api.GET("/monitor/snapshot", s.monitorSnapshot)
-		api.GET("/monitor/history", s.monitorHistory)
-		api.PUT("/server/startup", Require(PermConfigWrite), s.putStartup)
-		api.POST("/server/initialize-config", Require(PermConfigWrite), s.initializeConfig)
-		api.POST("/server/backup", Require(PermBackupWrite), s.serverBackup)
-		api.GET("/backups", s.listBackups)
-		api.POST("/backups/:name/restore", Require(PermBackupWrite), s.restoreBackup)
-		api.GET("/backups/:name/download", Require(PermBackupWrite), s.downloadBackup)
-		api.DELETE("/backups/:name", Require(PermBackupWrite), s.deleteBackup)
-		api.POST("/backups/:name/verify", Require(PermBackupWrite), s.verifyBackup)
-
-		api.GET("/config/palworld", s.getPalworldConfig)
-		api.PUT("/config/palworld", Require(PermConfigWrite), s.updatePalworldConfig)
-		api.GET("/config/palworld/schema", s.getPalworldConfigSchema)
-		api.POST("/config/palworld/validate", s.validatePalworldConfig)
-
-		api.GET("/mods", s.listMods)
-		api.GET("/mods/workshop/status", s.workshopStatus)
-		api.GET("/mods/workshop/search", s.searchWorkshopMods)
-		api.GET("/mods/workshop/:id", s.getWorkshopMod)
-		api.POST("/mods/workshop/:id/translate", Require(PermModsWrite), s.translateWorkshopMod)
-		api.POST("/mods/upload", Require(PermModsWrite), s.uploadMod)
-		api.POST("/mods/workshop", Require(PermModsWrite), s.downloadWorkshop)
-		api.POST("/mods/:id/enable", Require(PermModsWrite), s.enableMod)
-		api.POST("/mods/:id/disable", Require(PermModsWrite), s.disableMod)
-		api.DELETE("/mods/:id", Require(PermModsWrite), s.deleteMod)
-
-		api.GET("/ai/translation/config", s.getAITranslationConfig)
-		api.PUT("/ai/translation/config", Require(PermAIConfig), s.putAITranslationConfig)
-		api.POST("/ai/translation/test", Require(PermAIConfig), s.testAITranslationConfig)
-
-		api.GET("/security/paldefender/releases", s.palDefenderReleases)
-		api.GET("/security/paldefender/status", s.palDefenderStatus)
-		api.POST("/security/paldefender/install", Require(PermSecurityWrite), s.palDefenderInstall)
-		api.POST("/security/paldefender/update", Require(PermSecurityWrite), s.palDefenderUpdate)
-		api.POST("/security/paldefender/rollback", Require(PermSecurityWrite), s.palDefenderRollback)
-		api.GET("/security/paldefender/config", s.palDefenderGetConfig)
-		api.PUT("/security/paldefender/config", Require(PermSecurityWrite), s.palDefenderPutConfig)
-		api.POST("/security/paldefender/apply-preset", Require(PermSecurityWrite), s.palDefenderApplyPreset)
-		api.POST("/security/paldefender/rest-token", Require(PermSecurityWrite), s.palDefenderRESTToken)
-		api.POST("/security/paldefender/reload-config", Require(PermSecurityWrite), s.palDefenderReloadConfig)
-
-		api.GET("/server/info", s.palGet("info"))
-		api.GET("/server/players", s.palGet("players"))
-		api.GET("/server/settings", s.palGet("settings"))
-		api.GET("/server/metrics", s.serverMetrics)
-		api.GET("/server/game-data", s.serverGameData)
-		api.POST("/server/announce", Require(PermServerControl), s.palPost("announce"))
-		api.POST("/server/save", Require(PermServerControl), s.palPost("save"))
-		api.POST("/server/shutdown", Require(PermServerControl), s.palPost("shutdown"))
-
-		api.GET("/save/index/status", s.saveIndexStatus)
-		api.POST("/save/index/rebuild", Require(PermServerControl), s.saveIndexRebuild)
-		api.GET("/players", s.listSavePlayers)
-		api.GET("/guilds", s.listSaveGuilds)
-		api.GET("/guilds/:id", s.getSaveGuild)
-		api.GET("/bases", s.listSaveBases)
-		api.GET("/bases/:id", s.getSaveBase)
-		api.GET("/bases/:id/storage", s.getSaveBaseStorage)
-		api.GET("/pals", s.listSavePals)
-		api.GET("/pals/:id", s.getSavePal)
-		api.GET("/map/entities", s.listMapEntities)
-
-		api.GET("/players/bans", s.listPlayerBans)
-		api.POST("/players/bans", Require(PermPlayersWrite), s.addPlayerBan)
-		api.DELETE("/players/bans/:steam_id", Require(PermPlayersWrite), s.deletePlayerBan)
-		api.GET("/players/whitelist", s.listPlayerWhitelist)
-		api.PUT("/players/whitelist", Require(PermPlayersWrite), s.putPlayerWhitelist)
-		api.POST("/players/:id/kick", Require(PermPlayersWrite), s.kickPlayer)
-		api.POST("/players/:id/ban", Require(PermPlayersWrite), s.banPlayer)
-		api.POST("/players/:id/unban", Require(PermPlayersWrite), s.unbanPlayer)
-		api.GET("/players/:id/inventory", s.getSavePlayerInventory)
-		api.GET("/players/:id", s.getSavePlayer)
-	}
-
-	if frontendDistReady(cfg.FrontendDist) {
-		assets := r.Group("/assets")
-		assets.Use(StaticCacheControl("public, max-age=31536000, immutable"))
-		assets.Static("/", filepath.Join(cfg.FrontendDist, "assets"))
-		r.GET("/", func(c *gin.Context) {
-			c.Header("Cache-Control", "no-cache")
-			c.File(filepath.Join(cfg.FrontendDist, "index.html"))
-		})
-		favicon := filepath.Join(cfg.FrontendDist, "favicon.ico")
-		if fileExists(favicon) {
-			r.StaticFile("/favicon.ico", favicon)
-		}
-		r.NoRoute(func(c *gin.Context) {
-			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-				fail(c, http.StatusNotFound, "not_found", "api route not found")
-				return
-			}
-			c.Header("Cache-Control", "no-cache")
-			c.File(filepath.Join(cfg.FrontendDist, "index.html"))
-		})
-	}
-
+	s.registerRoutes(r)
 	return r
 }
 
@@ -205,6 +74,28 @@ func (s Server) health(c *gin.Context) {
 		"commit":     info.Commit,
 		"build_time": info.BuildTime,
 	})
+}
+
+func (s Server) ready(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.store.Ping(ctx); err != nil {
+		fail(c, http.StatusServiceUnavailable, "database_unavailable", "database is unavailable")
+		return
+	}
+	for _, path := range []string{s.cfg.DataDir, s.cfg.ServerDir, s.cfg.LogsDir, s.cfg.BackupsDir} {
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			fail(c, http.StatusServiceUnavailable, "data_directory_unavailable", "a required data directory is unavailable")
+			return
+		}
+	}
+	version, err := s.store.SchemaVersion(ctx)
+	if err != nil {
+		fail(c, http.StatusServiceUnavailable, "schema_unavailable", "database schema is unavailable")
+		return
+	}
+	ok(c, gin.H{"status": "ready", "schema_version": version})
 }
 
 func (s Server) listJobs(c *gin.Context) {
@@ -1488,21 +1379,4 @@ func CORSMiddleware(origins []string) gin.HandlerFunc {
 
 		c.Next()
 	}
-}
-
-func frontendDistReady(path string) bool {
-	if strings.TrimSpace(path) == "" {
-		return false
-	}
-	return fileExists(filepath.Join(path, "index.html")) && dirExists(filepath.Join(path, "assets"))
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }

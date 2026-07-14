@@ -52,6 +52,7 @@ func Build(savePath string) (Index, error) {
 	}
 
 	index := Normalize(parsed, worldDir)
+	normalizePlayerSaves(&index, filepath.Join(snapshot, "Players"))
 	index.Snapshot = manifest
 	index.DurationMS = int(time.Since(started).Milliseconds())
 	index.Finalize()
@@ -135,11 +136,19 @@ func CopySnapshot(worldDir string) (string, error) {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return "", err
 		}
-		players, _ := filepath.Glob(filepath.Join(playerDir, "*.sav"))
-		for _, src := range players {
-			if err := copyFile(src, filepath.Join(dest, filepath.Base(src))); err != nil {
-				return "", err
+		players, readErr := os.ReadDir(playerDir)
+		if readErr != nil {
+			return "", readErr
+		}
+		for _, player := range players {
+			if player.IsDir() || !strings.EqualFold(filepath.Ext(player.Name()), ".sav") {
+				continue
 			}
+			src := filepath.Join(playerDir, player.Name())
+			// A player can disconnect or save again while the snapshot is copied.
+			// The player-save normalization stage reports the missing copy without
+			// invalidating the otherwise consistent Level.sav index.
+			_ = copyFile(src, filepath.Join(dest, player.Name()))
 		}
 	}
 	if _, err := os.Stat(filepath.Join(snapshot, "Level.sav")); err != nil {
@@ -150,11 +159,8 @@ func CopySnapshot(worldDir string) (string, error) {
 }
 
 func SnapshotManifest(snapshot string) (Snapshot, error) {
-	var files []string
-	top, _ := filepath.Glob(filepath.Join(snapshot, "*.sav"))
-	files = append(files, top...)
-	players, _ := filepath.Glob(filepath.Join(snapshot, "Players", "*.sav"))
-	files = append(files, players...)
+	files := snapshotSaveFiles(snapshot)
+	files = append(files, snapshotSaveFiles(filepath.Join(snapshot, "Players"))...)
 	sort.Strings(files)
 	h := sha256.New()
 	out := Snapshot{Files: []SnapshotFile{}}
@@ -174,6 +180,20 @@ func SnapshotManifest(snapshot string) (Snapshot, error) {
 	}
 	out.Fingerprint = hex.EncodeToString(h.Sum(nil))
 	return out, nil
+}
+
+func snapshotSaveFiles(directory string) []string {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".sav") {
+			files = append(files, filepath.Join(directory, entry.Name()))
+		}
+	}
+	return files
 }
 
 func copyFile(src, dst string) error {

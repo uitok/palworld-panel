@@ -25,7 +25,10 @@ type ContainerStatus struct {
 	Status string `json:"status"`
 }
 
-const wineBaseImageBuildArg = "PALPANEL_WINE_BASE_IMAGE"
+const (
+	wineBaseImageBuildArg = "PALPANEL_WINE_BASE_IMAGE"
+	wineDLLOverrides      = "dwmapi=n,b;d3d9=n,b"
+)
 
 func NewRunner(cfg appconfig.Config) Runner {
 	return Runner{cfg: cfg}
@@ -226,13 +229,17 @@ func (r Runner) AppInfo(ctx context.Context) (string, error) {
 }
 
 func (r Runner) DownloadWorkshop(ctx context.Context, itemID string) error {
+	return r.DownloadWorkshopTo(ctx, itemID, r.cfg.WorkshopModsDir())
+}
+
+func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot string) error {
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
 		"-e", "STEAM_USERNAME=" + os.Getenv("STEAM_USERNAME"),
 		"-e", "STEAM_PASSWORD=" + os.Getenv("STEAM_PASSWORD"),
 		"-e", "PALPANEL_WORKSHOP_APP_ID=" + r.cfg.WorkshopAppID,
-		"-v", volume(r.cfg.WorkshopModsDir(), "/data/workshop"),
+		"-v", volume(destinationRoot, "/data/workshop"),
 	}
 	args = append(args, containerProxyEnvArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
@@ -266,12 +273,14 @@ func (r Runner) StartWithArgs(ctx context.Context, serverArgs []string) error {
 		"--restart", "unless-stopped",
 		"--log-opt", "max-size=20m",
 		"--log-opt", "max-file=5",
+		"-e", "WINEDLLOVERRIDES=" + wineDLLOverrides,
 		"-v", volume(r.cfg.ServerDir, "/data/server"),
 		"-v", volume(r.cfg.WinePrefixDir, "/data/wineprefix"),
 		"-v", volume(r.cfg.LogsDir, "/data/logs"),
 		"-p", fmt.Sprintf("%d:%d/udp", gamePort, gamePort),
 		"-p", fmt.Sprintf("%d:27015/udp", r.cfg.QueryPort),
-		"-p", fmt.Sprintf("%d:8212/tcp", r.cfg.RESTPort),
+		"-p", fmt.Sprintf("127.0.0.1:%d:8212/tcp", r.cfg.RESTPort),
+		"-p", fmt.Sprintf("127.0.0.1:%d:%d/tcp", r.cfg.EffectivePalDefenderRESTPort(), r.cfg.EffectivePalDefenderRESTPort()),
 	}
 	args = append(args, hostUserRunArgs()...)
 	args = append(args, r.cfg.DockerImage, "start")

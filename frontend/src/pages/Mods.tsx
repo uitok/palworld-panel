@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+	AlertTriangle,
   CheckCircle2,
   DownloadCloud,
   ExternalLink,
@@ -19,17 +20,16 @@ import { getErrorMessage } from '../api/client';
 import { modsApi } from '../api/mods';
 import { serverApi } from '../api/server';
 import { tasksApi } from '../api/tasks';
-import type { Job, ModItem, WorkshopItem } from '../types';
+import type { ImportInspection, Job, ModItem, WorkshopItem } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { useServerStore } from '../store/useServerStore';
 
-type ModsTab = 'store' | 'installed' | 'manual';
+type ModsTab = 'store' | 'installed';
 
 const tabs: Array<{ id: ModsTab; label: string }> = [
   { id: 'store', label: 'Mod 商店' },
   { id: 'installed', label: '已安装' },
-  { id: 'manual', label: '手动安装' },
 ];
 
 const sortOptions = [
@@ -45,10 +45,7 @@ export const Mods: React.FC = () => {
   const [mods, setMods] = useState<ModItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [installedSearch, setInstalledSearch] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [enableOnUpload, setEnableOnUpload] = useState(true);
-  const [workshopId, setWorkshopId] = useState('');
-  const [enableManualWorkshop, setEnableManualWorkshop] = useState(false);
+	const [importOpen, setImportOpen] = useState(false);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -154,21 +151,6 @@ export const Mods: React.FC = () => {
     return done;
   };
 
-  const upload = async () => {
-    if (!file) {
-      setMessage('请选择一个 Mod zip 文件');
-      return;
-    }
-    try {
-      await modsApi.upload(file, enableOnUpload);
-      setFile(null);
-      setMessage('Mod 已上传并解析，重启后生效');
-      await loadInstalled();
-    } catch (error) {
-      setMessage(getErrorMessage(error));
-    }
-  };
-
   const installWorkshop = async (itemID: string, enable: boolean) => {
     if (!itemID.trim()) {
       setMessage('请输入 Steam Workshop Item ID');
@@ -183,11 +165,6 @@ export const Mods: React.FC = () => {
     } catch (error) {
       setMessage(getErrorMessage(error));
     }
-  };
-
-  const downloadManualWorkshop = async () => {
-    await installWorkshop(workshopId, enableManualWorkshop);
-    setWorkshopId('');
   };
 
   const toggleMod = async (mod: ModItem) => {
@@ -254,22 +231,27 @@ export const Mods: React.FC = () => {
   ];
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6 lg:p-8">
-      <div className="flex max-w-full items-center overflow-x-auto rounded-lg border border-slate-200 bg-white p-1">
-        {tabs.map((tab) => {
-          const active = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`shrink-0 rounded-md px-4 py-2 text-xs font-bold transition-all ${
-                active ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-              }`}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
+	  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+		<div className="flex max-w-full items-center overflow-x-auto rounded-lg border border-slate-200 bg-white p-1">
+		  {tabs.map((tab) => {
+			const active = activeTab === tab.id;
+			return (
+			  <button
+				key={tab.id}
+				type="button"
+				onClick={() => setActiveTab(tab.id)}
+				className={`shrink-0 rounded-md px-4 py-2 text-xs font-bold transition-all ${
+				  active ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+				}`}
+			  >
+				{tab.label}
+			  </button>
+			);
+		  })}
+		</div>
+		<button type="button" onClick={() => setImportOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-4 py-2.5 text-xs font-bold text-white hover:bg-sky-600">
+		  <DownloadCloud size={15} />导入 Mod
+		</button>
       </div>
 
       {pendingRestart && (
@@ -477,69 +459,16 @@ export const Mods: React.FC = () => {
         </section>
       )}
 
-      {activeTab === 'manual' && (
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <div className="rounded-lg border border-slate-100 bg-white p-5">
-            <h3 className="mb-4 flex items-center gap-2 text-[15px] font-bold text-slate-800">
-              <UploadCloud size={18} className="text-sky-500" />
-              上传 Mod Zip
-            </h3>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <input
-                type="file"
-                accept=".zip"
-                onChange={(event) => setFile(event.target.files?.[0] || null)}
-                className="min-w-0 flex-1 rounded-lg border border-slate-200 p-2 text-xs font-semibold text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-white"
-              />
-              <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={enableOnUpload}
-                  onChange={(event) => setEnableOnUpload(event.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-sky-500 focus:ring-sky-500"
-                />
-                上传后启用
-              </label>
-              <button type="button" onClick={upload} className="rounded-lg bg-sky-500 px-4 py-2 text-xs font-bold text-white hover:bg-sky-600">
-                上传
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-slate-100 bg-white p-5">
-            <h3 className="mb-4 flex items-center gap-2 text-[15px] font-bold text-slate-800">
-              <DownloadCloud size={18} className="text-indigo-500" />
-              Steam Workshop ID
-            </h3>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <input
-                type="text"
-                value={workshopId}
-                onChange={(event) => setWorkshopId(event.target.value)}
-                placeholder="Workshop Item ID"
-                className="min-w-0 flex-1 rounded-lg border border-slate-200 p-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
-              />
-              <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={enableManualWorkshop}
-                  onChange={(event) => setEnableManualWorkshop(event.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-500 focus:ring-indigo-500"
-                />
-                安装后启用
-              </label>
-              <button
-                type="button"
-                onClick={downloadManualWorkshop}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800"
-              >
-                下载
-              </button>
-            </div>
-          </div>
-        </section>
-      )}
-
+	  {importOpen && (
+		<ImportDialog
+		  onClose={() => setImportOpen(false)}
+		  onImport={async (job) => {
+			setImportOpen(false);
+			const done = await trackJob(job);
+			if (done.status === 'success' && !storeError) await loadStore(true);
+		  }}
+		/>
+	  )}
       {selectedWorkshop && (
         <WorkshopDrawer
           item={selectedWorkshop}
@@ -555,6 +484,168 @@ export const Mods: React.FC = () => {
       )}
     </div>
   );
+};
+
+const ImportDialog: React.FC<{
+	onClose: () => void;
+	onImport: (job: Job) => Promise<void>;
+}> = ({ onClose, onImport }) => {
+	const [source, setSource] = useState('');
+	const [file, setFile] = useState<File | null>(null);
+	const [inspection, setInspection] = useState<ImportInspection | null>(null);
+	const [candidateID, setCandidateID] = useState('');
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState('');
+	const selectedCandidate = inspection?.candidates.find((candidate) => candidate.id === candidateID);
+
+	const inspect = async () => {
+		if (!file && !source.trim()) {
+			setError('请选择本地 ZIP 或输入导入来源');
+			return;
+		}
+		setBusy(true);
+		setError('');
+		try {
+			const next = await modsApi.inspectImport({ source: source.trim(), file: file || undefined });
+			setInspection(next);
+			setCandidateID(next.selected_candidate_id || (next.candidates.length === 1 ? next.candidates[0].id : ''));
+		} catch (inspectError) {
+			setError(getErrorMessage(inspectError));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const chooseCandidate = async (nextID: string) => {
+		if (!inspection) return;
+		setCandidateID(nextID);
+		const candidate = inspection.candidates.find((item) => item.id === nextID);
+		if (!candidate || candidate.ready) return;
+		setBusy(true);
+		setError('');
+		try {
+			const next = await modsApi.selectImportCandidate(inspection.id, nextID);
+			setInspection(next);
+			setCandidateID(next.selected_candidate_id || nextID);
+		} catch (selectionError) {
+			setError(getErrorMessage(selectionError));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const startImport = async () => {
+		if (!inspection || !selectedCandidate?.ready) return;
+		setBusy(true);
+		setError('');
+		try {
+			const job = await modsApi.importInspected(inspection.id, selectedCandidate.id);
+			await onImport(job);
+		} catch (importError) {
+			setError(getErrorMessage(importError));
+			setBusy(false);
+		}
+	};
+
+	return (
+		<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="mod-import-title">
+			<div className="flex max-h-[min(760px,95dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
+				<div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+					<div>
+						<h2 id="mod-import-title" className="text-base font-bold text-slate-900">导入 Mod</h2>
+						<p className="mt-0.5 text-[11px] font-semibold text-slate-400">Workshop、GitHub Release、HTTPS ZIP 或本地 ZIP</p>
+					</div>
+					<button type="button" onClick={onClose} disabled={busy} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-40" aria-label="关闭导入">
+						<X size={17} />
+					</button>
+				</div>
+
+				<div className="flex flex-1 flex-col gap-5 overflow-y-auto p-5">
+					{error && <div role="alert" className="rounded-lg border border-rose-100 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{error}</div>}
+					{!inspection && (
+						<div className="grid gap-4">
+							<label className="grid gap-1.5 text-xs font-bold text-slate-700">
+								导入来源
+								<input
+									type="text"
+									value={source}
+									disabled={Boolean(file) || busy}
+									onChange={(event) => setSource(event.target.value)}
+									placeholder="Workshop ID 或 HTTPS 地址"
+									className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50"
+								/>
+							</label>
+							<div className="flex items-center gap-3 text-[10px] font-bold text-slate-300"><span className="h-px flex-1 bg-slate-100" />或<span className="h-px flex-1 bg-slate-100" /></div>
+							<label className="grid gap-1.5 text-xs font-bold text-slate-700">
+								本地 ZIP
+								<span className="flex items-center gap-2 rounded-lg border border-slate-200 p-2.5">
+									<UploadCloud size={16} className="shrink-0 text-sky-500" />
+									<input
+										type="file"
+										accept=".zip,application/zip"
+										disabled={Boolean(source.trim()) || busy}
+										onChange={(event) => setFile(event.target.files?.[0] || null)}
+										className="min-w-0 flex-1 text-xs font-semibold text-slate-500 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-[11px] file:font-bold file:text-white"
+									/>
+								</span>
+							</label>
+						</div>
+					)}
+
+					{inspection && (
+						<>
+							{inspection.candidates.length > 1 && (
+								<label className="grid gap-1.5 text-xs font-bold text-slate-700">
+									候选 ZIP
+									<select value={candidateID} disabled={busy} onChange={(event) => void chooseCandidate(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none">
+										<option value="">请选择</option>
+										{inspection.candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.file_name || candidate.id}{candidate.file_size ? ` (${formatBytes(candidate.file_size)})` : ''}</option>)}
+									</select>
+								</label>
+							)}
+
+							{selectedCandidate && (
+								<div className="grid gap-4 border-y border-slate-100 py-4 sm:grid-cols-2">
+									<div>
+										<p className="text-[10px] font-bold text-slate-400">Mod</p>
+										<p className="mt-1 text-sm font-bold text-slate-800">{selectedCandidate.name || selectedCandidate.file_name || '等待读取元数据'}</p>
+										<p className="mt-1 break-all font-mono text-[10px] font-semibold text-slate-400">{selectedCandidate.package_name || '-'}</p>
+									</div>
+									<div>
+										<p className="text-[10px] font-bold text-slate-400">安装动作</p>
+										<p className="mt-1 text-sm font-bold text-slate-800">{selectedCandidate.action === 'update' ? '更新现有 Mod' : selectedCandidate.action === 'new' ? '新增 Mod（默认禁用）' : '安装时确认 PackageName'}</p>
+										{selectedCandidate.version && <p className="mt-1 text-[10px] font-semibold text-slate-400">版本 {selectedCandidate.version}</p>}
+									</div>
+								</div>
+							)}
+
+							{selectedCandidate?.warnings && selectedCandidate.warnings.length > 0 && (
+								<div className="grid gap-2 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800">
+									{selectedCandidate.warnings.map((warning) => <p key={warning} className="flex items-start gap-2"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{warning}</p>)}
+								</div>
+							)}
+							<p className="text-right text-[10px] font-semibold text-slate-400">检查有效期至 {new Date(inspection.expires_at).toLocaleString()}</p>
+						</>
+					)}
+				</div>
+
+				<div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
+					<button type="button" onClick={inspection ? () => { setInspection(null); setCandidateID(''); setError(''); } : onClose} disabled={busy} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+						{inspection ? '重新选择' : '取消'}
+					</button>
+					{inspection ? (
+						<button type="button" onClick={() => void startImport()} disabled={busy || !selectedCandidate?.ready} className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2.5 text-xs font-bold text-white hover:bg-sky-600 disabled:opacity-40">
+							{busy && <RefreshCw size={14} className="animate-spin" />}确认导入
+						</button>
+					) : (
+						<button type="button" onClick={() => void inspect()} disabled={busy || (!file && !source.trim())} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-40">
+							{busy && <RefreshCw size={14} className="animate-spin" />}检查
+						</button>
+					)}
+				</div>
+			</div>
+		</div>
+	);
 };
 
 const WorkshopCard: React.FC<{
