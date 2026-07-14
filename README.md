@@ -132,6 +132,11 @@ scripts/package.sh --version v1.0.3-hotfix.1 --targets linux-amd64 --clean
 - 密码、开发密钥和第三方 API Key 不要写入源码或问题截图
 - Windows ZIP 未做 Authenticode 签名
 
+## 相关项目
+
+- [PST](https://github.com/zaigie/palworld-server-tool)：Palworld 服务器管理工具
+- [DST 管理平台](https://github.com/miracleEverywhere/dst-management-platform-api)：《饥荒联机版》服务器管理项目
+
 ## 交流
 
 <p align="center">
