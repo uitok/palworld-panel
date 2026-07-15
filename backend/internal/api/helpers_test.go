@@ -201,7 +201,9 @@ func TestFrontendFilesystemRoutes(t *testing.T) {
 	}{
 		{http.MethodGet, "/", http.StatusOK, "no-cache", "index", "text/html"},
 		{http.MethodGet, "/settings", http.StatusOK, "no-cache", "index", "text/html"},
-		{http.MethodGet, "/assets/index.js", http.StatusOK, "public, max-age=31536000, immutable", "asset", "text/javascript"},
+		// Go may use text/javascript or application/javascript depending on the
+		// host MIME registry; both are valid JavaScript media types.
+		{http.MethodGet, "/assets/index.js", http.StatusOK, "public, max-age=31536000, immutable", "asset", "javascript"},
 		{http.MethodGet, "/assets/items/money.webp", http.StatusOK, "public, max-age=31536000, immutable", "webp-item", "image/webp"},
 		{http.MethodGet, "/favicon.ico", http.StatusOK, "public, max-age=3600", "icon", "image/"},
 		{http.MethodGet, "/api/missing", http.StatusNotFound, "", `"code":"not_found"`, "application/json"},
