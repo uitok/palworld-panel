@@ -47,6 +47,9 @@ func (s Server) testAITranslationConfig(c *gin.Context) {
 }
 
 func (s Server) translateWorkshopMod(c *gin.Context) {
+	if !s.requireWorkshopLogin(c) {
+		return
+	}
 	var request struct {
 		Force bool `json:"force"`
 	}

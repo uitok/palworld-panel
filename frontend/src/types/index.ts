@@ -373,6 +373,11 @@ export interface ModItem {
 export type ImportCandidate = components['schemas']['ImportCandidate'];
 export type ImportInspection = components['schemas']['ImportInspection'];
 export type ModImportRequest = components['schemas']['ModImportRequest'];
+export type LocalModFinding = components['schemas']['LocalModFinding'];
+export type LocalScanResult = components['schemas']['LocalScanResult'];
+export type LocalModAction = components['schemas']['LocalModActionCapability']['action'];
+export type LocalModActionRequest = components['schemas']['LocalModActionRequest'];
+export type LocalModActionResult = components['schemas']['LocalModActionResult'];
 
 export interface WorkshopItem {
   id: string;
@@ -400,26 +405,9 @@ export interface AITranslation {
   cached: boolean;
 }
 
-export interface AITranslationConfig {
-  configured: boolean;
-  base_url: string;
-  model: string;
-  api_key_present: boolean;
-}
-
-export interface AITranslationConfigUpdate {
-  base_url?: string;
-  model?: string;
-  api_key?: string;
-  clear_api_key?: boolean;
-}
-
-export interface AITranslationTestResult {
-  ok: boolean;
-  base_url: string;
-  model: string;
-  message: string;
-}
+export type AITranslationConfig = components['schemas']['AITranslationConfig'];
+export type AITranslationConfigUpdate = components['schemas']['AITranslationConfigUpdate'];
+export type AITranslationTestResult = components['schemas']['AITranslationTestResult'];
 
 export interface WorkshopSearchResponse {
   items: WorkshopItem[];
@@ -433,6 +421,8 @@ export interface WorkshopStatus {
   key_source?: 'environment' | 'bundled' | '';
   app_id: string;
 }
+
+export type SteamWorkshopAuthStatus = components['schemas']['SteamWorkshopAuthStatus'];
 
 export interface BackupInfo {
   name: string;
@@ -536,6 +526,30 @@ export interface PalDefenderRelease {
   assets: PalDefenderAsset[];
 }
 
+export type UE4SSDependencyState =
+  | 'not_checked'
+  | 'checking'
+  | 'missing'
+  | 'installing'
+  | 'installed'
+  | 'incompatible'
+  | 'failed'
+  | 'rollback_required';
+
+export interface UE4SSDependencyStatus {
+  state: UE4SSDependencyState;
+  installed: boolean;
+  version?: string;
+  compatible: boolean;
+  files: Record<string, boolean>;
+  path: string;
+  message: string;
+  error?: string;
+  archive_sha256?: string;
+  load_verified: boolean;
+  load_evidence?: string;
+}
+
 export interface PalDefenderStatus {
   installed: boolean;
   version?: string;
@@ -549,6 +563,9 @@ export interface PalDefenderStatus {
   paths: Record<string, string>;
   rest_api_enabled: boolean;
   warnings: string[];
+  ue4ss: UE4SSDependencyStatus;
+  load_verified: boolean;
+  load_evidence?: string;
 }
 
 export type PalDefenderGMStatus = components['schemas']['PalDefenderGMStatus'];

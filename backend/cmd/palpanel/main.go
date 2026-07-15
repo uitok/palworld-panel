@@ -50,6 +50,7 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 	fs := flag.NewFlagSet("palpanel", flag.ContinueOnError)
 	fs.SetOutput(errorOutput)
 	configPath := fs.String("config", "", "path to palpanel.env")
+	runtimeRoot := fs.String("runtime-root", "", "managed runtime root (overrides PALPANEL_RUNTIME_ROOT)")
 	initConfig := fs.Bool("init-config", false, "create a secure production configuration")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -63,10 +64,35 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 		fmt.Fprintf(output, "palpanel %s (commit %s, built %s)\n", info.Version, info.Commit, info.BuildTime)
 		return nil
 	}
+	if strings.TrimSpace(*runtimeRoot) != "" {
+		layout, err := appconfig.ResolveRuntimeLayout(*runtimeRoot)
+		if err != nil {
+			return err
+		}
+		previous, existed := os.LookupEnv("PALPANEL_RUNTIME_ROOT")
+		if err := os.Setenv("PALPANEL_RUNTIME_ROOT", layout.RuntimeRoot); err != nil {
+			return err
+		}
+		defer func() {
+			if existed {
+				_ = os.Setenv("PALPANEL_RUNTIME_ROOT", previous)
+			} else {
+				_ = os.Unsetenv("PALPANEL_RUNTIME_ROOT")
+			}
+		}()
+	}
 	if *initConfig {
 		path := *configPath
 		if path == "" {
-			path = "palpanel.env"
+			layout, err := appconfig.ResolveRuntimeLayout(os.Getenv("PALPANEL_RUNTIME_ROOT"))
+			if err != nil {
+				return err
+			}
+			if layout.Structured {
+				path = filepath.Join(layout.RuntimeRoot, "config", "palpanel.env")
+			} else {
+				path = filepath.Join(layout.ApplicationRoot, "config", "palpanel.env")
+			}
 		}
 		created, err := appconfig.InitFile(path)
 		if err != nil {
@@ -117,7 +143,7 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 	runner := docker.NewRunner(cfg)
 	serverManager := server.NewManager(cfg, store, runner, jobExecutor)
 	modsManager := mods.NewManager(cfg, store, runner, jobExecutor)
-	palDefenderManager := paldefender.NewManager(cfg, store, jobExecutor)
+	palDefenderManager := paldefender.NewManager(cfg, store, jobExecutor).WithServerState(serverManager)
 	restClient := palrest.New(cfg.PalworldRESTBaseURL, cfg.PalworldRESTUser, cfg.PalworldRESTPass)
 	monitorManager := monitor.New(cfg, store, serverManager, restClient)
 	schedulerManager := scheduler.New(store, serverManager, restClient, jobExecutor)

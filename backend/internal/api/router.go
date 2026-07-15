@@ -37,26 +37,27 @@ import (
 )
 
 type Server struct {
-	cfg         appconfig.Config
-	store       *db.Store
-	server      server.Manager
-	mods        mods.Manager
-	defender    paldefender.Manager
-	palrest     palrest.Client
-	monitor     monitor.Manager
-	scheduler   scheduler.Manager
-	saveIndex   *saveindex.Manager
-	ai          *aitranslation.Service
-	auth        *panelauth.Service
-	authLimiter *authRateLimiter
-	cache       *ttlCache
-	webUI       fs.FS
+	cfg           appconfig.Config
+	store         *db.Store
+	server        server.Manager
+	mods          mods.Manager
+	defender      paldefender.Manager
+	palrest       palrest.Client
+	monitor       monitor.Manager
+	scheduler     scheduler.Manager
+	saveIndex     *saveindex.Manager
+	ai            *aitranslation.Service
+	auth          *panelauth.Service
+	authLimiter   *authRateLimiter
+	cache         *ttlCache
+	gmIdempotency *gmIdempotencyStore
+	webUI         fs.FS
 }
 
 func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	webFiles, _ := webui.Load(cfg.FrontendDist)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), webUI: webFiles}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))
@@ -714,6 +715,41 @@ func (s Server) listMods(c *gin.Context) {
 	ok(c, list)
 }
 
+func (s Server) scanLocalMods(c *gin.Context) {
+	result, err := s.mods.ScanLocal(c.Request.Context())
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "mods_local_scan_failed", err.Error())
+		return
+	}
+	ok(c, result)
+}
+
+func (s Server) actOnLocalModFinding(c *gin.Context) {
+	var request mods.LocalModActionRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_local_action", err.Error())
+		return
+	}
+	result, err := s.mods.ActOnLocalFinding(c.Request.Context(), c.Param("id"), request)
+	if err != nil {
+		var actionErr mods.LocalModActionError
+		if errors.As(err, &actionErr) {
+			status := http.StatusConflict
+			switch actionErr.Code {
+			case "invalid_local_action", "local_action_confirmation_required":
+				status = http.StatusBadRequest
+			case "local_scan_failed", "local_ignore_failed", "local_import_staging_failed", "local_import_copy_failed", "local_import_failed", "local_repair_failed", "local_delete_failed", "local_rescan_failed":
+				status = http.StatusInternalServerError
+			}
+			fail(c, status, actionErr.Code, actionErr.Error())
+			return
+		}
+		fail(c, http.StatusInternalServerError, "local_action_failed", err.Error())
+		return
+	}
+	ok(c, result)
+}
+
 func (s Server) workshopStatus(c *gin.Context) {
 	ok(c, gin.H{
 		"configured": s.cfg.SteamWebAPIKeyConfigured(),
@@ -723,6 +759,9 @@ func (s Server) workshopStatus(c *gin.Context) {
 }
 
 func (s Server) searchWorkshopMods(c *gin.Context) {
+	if !s.requireWorkshopLogin(c) {
+		return
+	}
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "24"))
 	params := mods.WorkshopSearchParams{
 		Query:    c.Query("q"),
@@ -740,6 +779,9 @@ func (s Server) searchWorkshopMods(c *gin.Context) {
 }
 
 func (s Server) getWorkshopMod(c *gin.Context) {
+	if !s.requireWorkshopLogin(c) {
+		return
+	}
 	item, err := s.mods.WorkshopDetail(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		failWorkshop(c, err)
@@ -778,6 +820,9 @@ func (s Server) uploadMod(c *gin.Context) {
 }
 
 func (s Server) downloadWorkshop(c *gin.Context) {
+	if !s.requireWorkshopLogin(c) {
+		return
+	}
 	var req struct {
 		ItemID string `json:"item_id"`
 		Enable *bool  `json:"enable"`
@@ -1369,7 +1414,7 @@ func CORSMiddleware(origins []string) gin.HandlerFunc {
 		if !allowAny {
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, Idempotency-Key, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 
 		if c.Request.Method == "OPTIONS" {

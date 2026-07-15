@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
@@ -213,7 +214,12 @@ esac
 	m := NewManager(cfg, store, docker.NewRunner(cfg))
 	writeFile(t, cfg.PalServerExePath(), "exe")
 	writeWorldFixture(t, m, "running-world")
-	return m, func() { _ = store.Close() }
+	return m, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = m.jobs.Shutdown(shutdownCtx)
+		_ = store.Close()
+	}
 }
 
 func shellTestQuote(value string) string {

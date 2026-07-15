@@ -66,9 +66,9 @@ npm run check
 
 `/setup` 会显示本地/最新 Steam Build ID，并提供“检查更新”和“检查后更新”。`/tasks` 可创建“检查更新”计划任务；该计划只产生提醒，不会自动安装更新。
 
-Mod 页的统一导入流程支持来源输入或本地 ZIP、GitHub ZIP 候选选择、检查结果、更新提示、异步 Job 进度和待重启状态。旧 Workshop 商店入口继续使用兼容 API。
+Mod 页的统一导入流程支持来源输入或本地 ZIP、GitHub ZIP 候选选择、检查结果、更新提示、异步 Job 进度和待重启状态。Workshop 搜索、详情、翻译和下载会先验证本机 SteamCMD 登录缓存；未登录时，页面只接收 Steam 账户名并打开独立 SteamCMD 窗口，密码与 Steam Guard 验证码不会进入浏览器。GitHub、HTTPS ZIP、本地 ZIP、UE4SS 和 PalDefender 不受 Workshop 登录门禁影响。
 
-`/gm` 通过后端的类型化 PalDefender REST 代理工作，不会把 PalDefender Bearer Token 交给浏览器。页面提供玩家与在线状态筛选、六类背包查看、2,455 项 ItemID/中文名/图标搜索、最多 100 行批量发物品、玩家消息、广播、警报、踢出、封禁和解封。只读账号可查看；写操作按 `players:write` 禁用，安装与 REST Token 配置仍只在 `/security` 向具有 `security:write` 的管理员开放。
+`/gm` 通过后端的类型化 PalDefender REST 代理工作，不会把 PalDefender Bearer Token 交给浏览器。页面提供玩家列表与详情、在线状态筛选、六类背包查看、2,455 项 ItemID/中文名/图标搜索、最多 100 行批量发物品、玩家消息、广播、警报、踢出、封禁和解封。页面会分别显示未安装、未通过启动日志确认加载、REST 未启用、Token 未配置和服务未运行状态；对明确离线的玩家禁用发物品、私信和踢出。发物品及处罚操作执行前必须确认，写请求携带幂等键。只读账号可查看；写操作按 `players:write` 禁用，后端仍会独立强制权限。
 
 管理员在 `/settings` 配置 Workshop 翻译所用的 OpenAI-compatible Base URL、模型和 API Key。前端只提交新 Key，不从读取接口取回秘密；测试、截图和示例配置必须使用占位值。
 

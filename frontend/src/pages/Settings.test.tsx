@@ -69,9 +69,9 @@ describe('Settings page', () => {
 	auxiliaryMocks.listKeys.mockResolvedValue([]);
 	auxiliaryMocks.createKey.mockResolvedValue({ id: 'key_1', name: '本机自动化', prefix: 'ppk_example', token: 'ppk_full-once', created_at: '2026-07-14T00:00:00Z' });
 	auxiliaryMocks.revokeKey.mockResolvedValue({ revoked: true });
-    auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: false, base_url: '', model: '', api_key_present: false });
-    auxiliaryMocks.updateAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'translate-model', api_key_present: true });
-    auxiliaryMocks.testAIConfig.mockResolvedValue({ ok: true, base_url: 'https://ai.example/v1', model: 'translate-model', message: 'ok' });
+    auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: false, base_url: '', model: '', api_key_present: false, timeout_seconds: 90, proxy_configured: false, proxy_url: '', custom_header_names: [] });
+    auxiliaryMocks.updateAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'translate-model', api_key_present: true, timeout_seconds: 90, proxy_configured: false, proxy_url: '', custom_header_names: [] });
+    auxiliaryMocks.testAIConfig.mockResolvedValue({ ok: true, base_url: 'https://ai.example/v1', model: 'translate-model', message: 'ok', timeout_seconds: 90, proxy_configured: false, custom_header_names: [] });
 
     vi.mocked(serverApi.getStatus).mockResolvedValue({
       status: 'stopped',
@@ -181,7 +181,7 @@ describe('Settings page', () => {
   });
 
   it('saves AI configuration without requiring an API key replacement', async () => {
-    auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'old-model', api_key_present: true });
+    auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'old-model', api_key_present: true, timeout_seconds: 90, proxy_configured: false, proxy_url: '', custom_header_names: [] });
     renderSettings();
 
     expect(await screen.findByText('AI 翻译')).toBeInTheDocument();
@@ -192,6 +192,37 @@ describe('Settings page', () => {
       expect(auxiliaryMocks.updateAIConfig).toHaveBeenCalledWith({
         base_url: 'https://ai.example/v1',
         model: 'translate-model',
+        timeout_seconds: 90,
+      });
+    });
+  });
+
+  it('saves AI timeout, proxy, and private custom headers without replacing existing secrets', async () => {
+    auxiliaryMocks.getAIConfig.mockResolvedValue({
+      configured: true,
+      base_url: 'https://ai.example/v1',
+      model: 'old-model',
+      api_key_present: true,
+      timeout_seconds: 45,
+      proxy_configured: true,
+      proxy_url: 'socks5://127.0.0.1:10808',
+      custom_header_names: ['X-Tenant-ID'],
+    });
+    renderSettings();
+
+    expect(await screen.findByText('AI 翻译')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('请求超时（秒）'), { target: { value: '120' } });
+    fireEvent.change(screen.getByLabelText(/Proxy URL/), { target: { value: 'socks5://proxy-user:proxy-pass@127.0.0.1:10808' } });
+    fireEvent.change(screen.getByLabelText(/自定义请求头/), { target: { value: '{"X-Tenant-ID":"tenant-b"}' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存 AI 配置' }));
+
+    await waitFor(() => {
+      expect(auxiliaryMocks.updateAIConfig).toHaveBeenCalledWith({
+        base_url: 'https://ai.example/v1',
+        model: 'old-model',
+        timeout_seconds: 120,
+        proxy_url: 'socks5://proxy-user:proxy-pass@127.0.0.1:10808',
+        custom_headers: { 'X-Tenant-ID': 'tenant-b' },
       });
     });
   });

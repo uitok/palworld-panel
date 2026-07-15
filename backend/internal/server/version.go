@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -288,22 +287,7 @@ func (m Manager) remoteBuildID(ctx context.Context) (string, string, error) {
 }
 
 func (m Manager) windowsSteamAppInfo(ctx context.Context) (string, error) {
-	if err := m.ensureSteamCMD(ctx); err != nil {
-		return "", err
-	}
-	args := []string{
-		"+login", "anonymous",
-		"+app_info_update", "1",
-		"+app_info_print", palworldServerAppID,
-		"+quit",
-	}
-	cmd := exec.CommandContext(ctx, m.cfg.SteamCMDBinaryPath(), args...)
-	cmd.Dir = m.cfg.SteamCMDDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("steamcmd app_info_print failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
+	return m.nativeSteamCMD().AppInfo(ctx, palworldServerAppID)
 }
 
 func (m Manager) createVersionAlert(ctx context.Context, info VersionInfo) error {

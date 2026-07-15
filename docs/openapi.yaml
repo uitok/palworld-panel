@@ -55,6 +55,26 @@ x-import-inspection: &importInspection
   content:
     application/json:
       schema: {$ref: '#/components/schemas/ImportInspectionEnvelope'}
+x-local-mod-scan: &localModScan
+  description: Reconciliation of Mod files, database records, persistent ignore state, and safe action capabilities.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/LocalScanEnvelope'}
+x-local-mod-action: &localModAction
+  description: Result of a revision-checked local Mod action followed by a fresh scan.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/LocalModActionEnvelope'}
+x-ai-translation-config: &aiTranslationConfig
+  description: Public AI translation settings. Secret values are never returned.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/AITranslationConfigEnvelope'}
+x-ai-translation-test: &aiTranslationTest
+  description: AI provider connection test result without secret values.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/AITranslationTestEnvelope'}
 x-read-responses: &readResponses
   '200': *success
   '401': *error
@@ -74,6 +94,12 @@ x-id-parameter: &idParameter
   in: path
   required: true
   schema: {type: string}
+x-idempotency-key: &idempotencyKey
+  name: Idempotency-Key
+  in: header
+  required: true
+  description: Unique key for one GM write intent. Reusing it with the same payload replays the result; a different payload returns HTTP 409.
+  schema: {type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'}
 x-name-parameter: &nameParameter
   name: name
   in: path
@@ -274,8 +300,83 @@ paths:
     post: {operationId: validatePalworldConfig, tags: [content], x-palpanel-permission: read, requestBody: *jsonRequest, responses: *writeResponses}
   /mods:
     get: {operationId: listMods, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+  /mods/local/scan:
+    post:
+      operationId: scanLocalMods
+      tags: [content]
+      x-palpanel-permission: read
+      responses: {'200': *localModScan, '401': *error, '403': *error, '500': *error}
+  /mods/local/findings/{id}/actions:
+    parameters: [*idParameter]
+    post:
+      operationId: actOnLocalModFinding
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LocalModActionRequest'}
+      responses: {'200': *localModAction, '400': *error, '401': *error, '403': *error, '409': *error, '500': *error}
   /mods/workshop/status:
     get: {operationId: getWorkshopStatus, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+  /mods/workshop/auth/status:
+    get:
+      operationId: getWorkshopAuthenticationStatus
+      tags: [content]
+      x-palpanel-permission: read
+      responses:
+        '200':
+          description: SteamCMD cached-session authentication status. No credential contents are returned.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
+        '401': *error
+        '409': *error
+        '502': *error
+        '504': *error
+  /mods/workshop/auth/start:
+    post:
+      operationId: startWorkshopAuthentication
+      tags: [content]
+      x-palpanel-permission: 'security:write'
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SteamWorkshopAuthRequest'}
+      responses:
+        '200':
+          description: A separate SteamCMD console was opened for interactive login.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
+        '400': *error
+        '401': *error
+        '403': *error
+        '409': *error
+        '502': *error
+        '504': *error
+  /mods/workshop/auth/verify:
+    post:
+      operationId: verifyWorkshopAuthentication
+      tags: [content]
+      x-palpanel-permission: 'security:write'
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SteamWorkshopAuthRequest'}
+      responses:
+        '200':
+          description: Cached SteamCMD session verification result.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
+        '400': *error
+        '401': *error
+        '403': *error
+        '409': *error
+        '502': *error
+        '504': *error
   /mods/workshop/search:
     get: {operationId: searchWorkshop, tags: [content], x-palpanel-permission: read, responses: *readResponses}
   /mods/workshop/{id}:
@@ -334,10 +435,28 @@ paths:
     parameters: [*idParameter]
     delete: {operationId: deleteMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
   /ai/translation/config:
-    get: {operationId: getAITranslationConfig, tags: [content], x-palpanel-permission: read, responses: *readResponses}
-    put: {operationId: updateAITranslationConfig, tags: [content], x-palpanel-permission: 'ai:config', requestBody: *jsonRequest, responses: *writeResponses}
+    get: {operationId: getAITranslationConfig, tags: [content], x-palpanel-permission: read, responses: {'200': *aiTranslationConfig, '401': *error, '500': *error}}
+    put:
+      operationId: updateAITranslationConfig
+      tags: [content]
+      x-palpanel-permission: 'ai:config'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AITranslationConfigUpdate'}
+      responses: {'200': *aiTranslationConfig, '400': *error, '401': *error, '403': *error, '500': *error}
   /ai/translation/test:
-    post: {operationId: testAITranslationConfig, tags: [content], x-palpanel-permission: 'ai:config', requestBody: *jsonRequest, responses: *writeResponses}
+    post:
+      operationId: testAITranslationConfig
+      tags: [content]
+      x-palpanel-permission: 'ai:config'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AITranslationConfigUpdate'}
+      responses: {'200': *aiTranslationTest, '400': *error, '401': *error, '403': *error, '429': *error, '502': *error, '504': *error}
   /security/paldefender/releases:
     get: {operationId: listPalDefenderReleases, tags: [security], x-palpanel-permission: read, responses: *readResponses}
   /security/paldefender/status:
@@ -360,7 +479,7 @@ paths:
   /security/paldefender/gm/status:
     get: {operationId: getPalDefenderGMStatus, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '401': *error}}
   /security/paldefender/gm/players:
-    get: {operationId: listPalDefenderGMPlayers, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '401': *error, '409': *error, '502': *error}}
+    get: {operationId: listPalDefenderGMPlayers, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '401': *error, '409': *error, '502': *error, '503': *error, '504': *error}}
   /security/paldefender/gm/items:
     get:
       operationId: searchPalDefenderGMItems
@@ -370,53 +489,59 @@ paths:
         - {name: q, in: query, schema: {type: string}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
       responses: {'200': *success, '400': *error, '401': *error}
+  /security/paldefender/gm/players/{id}:
+    parameters: [*idParameter]
+    get: {operationId: getPalDefenderGMPlayer, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '400': *error, '401': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}}
   /security/paldefender/gm/players/{id}/inventory:
     parameters: [*idParameter]
-    get: {operationId: getPalDefenderGMInventory, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '400': *error, '401': *error, '404': *error, '409': *error, '502': *error}}
+    get: {operationId: getPalDefenderGMInventory, tags: [security], x-palpanel-permission: read, responses: {'200': *success, '400': *error, '401': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}}
   /security/paldefender/gm/players/{id}/items:
     parameters: [*idParameter]
     post:
       operationId: givePalDefenderGMItems
       tags: [security]
       x-palpanel-permission: 'players:write'
+      parameters: [*idempotencyKey]
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: '#/components/schemas/PalDefenderGiveItemsRequest'}
-      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}
+      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}
   /security/paldefender/gm/players/{id}/message:
     parameters: [*idParameter]
     post:
       operationId: sendPalDefenderGMPlayerMessage
       tags: [security]
       x-palpanel-permission: 'players:write'
+      parameters: [*idempotencyKey]
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: '#/components/schemas/PalDefenderMessageRequest'}
-      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}
+      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}
   /security/paldefender/gm/players/{id}/kick:
     parameters: [*idParameter]
-    post: {operationId: kickPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}}
+    post: {operationId: kickPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}}
   /security/paldefender/gm/players/{id}/ban:
     parameters: [*idParameter]
-    post: {operationId: banPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '409': *error, '502': *error}}
+    post: {operationId: banPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '409': *error, '502': *error, '503': *error, '504': *error}}
   /security/paldefender/gm/players/{id}/unban:
     parameters: [*idParameter]
-    post: {operationId: unbanPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error}}
+    post: {operationId: unbanPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPunishmentRequest'}}}}, responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}}
   /security/paldefender/gm/broadcast:
     post:
       operationId: broadcastPalDefenderGMMessage
       tags: [security]
       x-palpanel-permission: 'players:write'
+      parameters: [*idempotencyKey]
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: '#/components/schemas/PalDefenderBroadcastRequest'}
-      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '409': *error, '502': *error}
+      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '409': *error, '502': *error, '503': *error, '504': *error}
   /save/index/status:
     get: {operationId: getSaveIndexStatus, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /save/index/rebuild:
@@ -501,6 +626,24 @@ components:
         initialized: {type: boolean}
         authenticated: {type: boolean}
         user: {$ref: '#/components/schemas/SessionInfo'}
+    SteamWorkshopAuthRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        account_name: {type: string, minLength: 3, maxLength: 64, pattern: '^[A-Za-z0-9_]{3,64}$'}
+    SteamWorkshopAuthStatus:
+      type: object
+      required: [supported, steamcmd_installed, credentials_secure, login_in_progress, logged_in, verification_required]
+      properties:
+        supported: {type: boolean}
+        steamcmd_installed: {type: boolean}
+        credentials_secure: {type: boolean}
+        login_in_progress: {type: boolean}
+        logged_in: {type: boolean}
+        verification_required: {type: boolean}
+        account_name: {type: string}
+        last_verified_at: {type: string, format: date-time}
+        message: {type: string}
     DevelopmentKeyInput:
       type: object
       required: [name]
@@ -517,6 +660,46 @@ components:
         last_used_at: {type: string, format: date-time}
         revoked_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}
+    AITranslationConfig:
+      type: object
+      required: [configured, base_url, model, api_key_present, timeout_seconds, proxy_configured, proxy_url, custom_header_names]
+      properties:
+        configured: {type: boolean}
+        base_url: {type: string}
+        model: {type: string}
+        api_key_present: {type: boolean}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 600}
+        proxy_configured: {type: boolean}
+        proxy_url: {type: string, description: Proxy URL with user information removed.}
+        custom_header_names: {type: array, items: {type: string}, description: Header names only; values are never returned.}
+    AITranslationConfigUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        base_url: {type: string}
+        model: {type: string}
+        api_key: {type: string, writeOnly: true}
+        clear_api_key: {type: boolean}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 600}
+        proxy_url: {type: string, writeOnly: true}
+        clear_proxy: {type: boolean}
+        custom_headers:
+          type: object
+          writeOnly: true
+          maxProperties: 32
+          additionalProperties: {type: string}
+        clear_custom_headers: {type: boolean}
+    AITranslationTestResult:
+      type: object
+      required: [ok, base_url, model, message, timeout_seconds, proxy_configured, custom_header_names]
+      properties:
+        ok: {type: boolean}
+        base_url: {type: string}
+        model: {type: string}
+        message: {type: string}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 600}
+        proxy_configured: {type: boolean}
+        custom_header_names: {type: array, items: {type: string}}
     ModImportInspectRequest:
       type: object
       required: [source]
@@ -563,6 +746,84 @@ components:
         candidates: {type: array, items: {$ref: '#/components/schemas/ImportCandidate'}}
         selected_candidate_id: {type: string}
         expires_at: {type: string, format: date-time}
+    ModRecord:
+      type: object
+      required: [id, name, source, package_name, path, enabled, created_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        source: {type: string}
+        package_name: {type: string}
+        path: {type: string}
+        version: {type: string}
+        enabled: {type: boolean}
+        workshop_id: {type: string}
+        preview_url: {type: string}
+        steam_url: {type: string}
+        summary: {type: string}
+        tags: {type: array, items: {type: string}}
+        file_size: {type: integer, format: int64}
+        subscriptions: {type: integer, format: int64}
+        time_updated: {type: integer, format: int64}
+        last_checked_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    LocalModFinding:
+      type: object
+      required: [id, revision, ownership, state, source, confidence, name, enabled, duplicate, paths, classifications, ignored, actions]
+      properties:
+        id: {type: string}
+        revision: {type: string}
+        ownership: {type: string, enum: [managed, manual]}
+        state: {type: string, enum: [present, missing_files, unknown, disabled, duplicate, incomplete]}
+        source: {type: string, enum: [workshop, legacy_pak, ue4ss, database]}
+        confidence: {type: string, enum: [high, medium, low]}
+        name: {type: string}
+        package_name: {type: string}
+        version: {type: string}
+        enabled: {type: boolean}
+        duplicate: {type: boolean}
+        paths: {type: array, items: {type: string}}
+        database_mods: {type: array, items: {$ref: '#/components/schemas/ModRecord'}}
+        classifications:
+          type: array
+          items: {type: string, enum: [managed, manual, present, missing_files, unknown, disabled, duplicate, incomplete]}
+        issues: {type: array, items: {type: string}}
+        ignored: {type: boolean}
+        actions: {type: array, items: {$ref: '#/components/schemas/LocalModActionCapability'}}
+    LocalModActionCapability:
+      type: object
+      required: [action, available, confirmation_required]
+      properties:
+        action: {type: string, enum: [import, repair, ignore, unignore, delete]}
+        available: {type: boolean}
+        confirmation_required: {type: boolean}
+        reason: {type: string}
+    LocalModActionRequest:
+      type: object
+      required: [action, revision]
+      properties:
+        action: {type: string, enum: [import, repair, ignore, unignore, delete]}
+        revision: {type: string}
+        confirm: {type: boolean}
+    LocalModActionResult:
+      type: object
+      required: [action, finding_id, message, scan]
+      properties:
+        action: {type: string, enum: [import, repair, ignore, unignore, delete]}
+        finding_id: {type: string}
+        message: {type: string}
+        mod: {$ref: '#/components/schemas/ModRecord'}
+        scan: {$ref: '#/components/schemas/LocalScanResult'}
+    LocalScanResult:
+      type: object
+      required: [server_dir, scanned_at, findings, skipped_paths, warnings]
+      properties:
+        server_dir: {type: string}
+        scanned_at: {type: string, format: date-time}
+        findings: {type: array, items: {$ref: '#/components/schemas/LocalModFinding'}}
+        skipped_paths: {type: array, items: {type: string}}
+        warnings: {type: array, items: {type: string}}
     PalDefenderRESTVersion:
       type: object
       required: [Major, Minor, Patch, Build, Version, VersionLong, Beta]
@@ -576,10 +837,14 @@ components:
         Beta: {type: boolean}
     PalDefenderGMStatus:
       type: object
-      required: [configured, available]
+      required: [configured, available, installed, load_verified, rest_enabled, state]
       properties:
         configured: {type: boolean}
         available: {type: boolean}
+        installed: {type: boolean}
+        load_verified: {type: boolean}
+        rest_enabled: {type: boolean}
+        state: {type: string, enum: [ready, not_installed, not_loaded, not_configured, rest_disabled, server_not_running, failed]}
         version: {$ref: '#/components/schemas/PalDefenderRESTVersion'}
         error: {type: string}
     PalDefenderLocation:
@@ -653,8 +918,9 @@ components:
     PalDefenderItemGrant:
       type: object
       required: [ItemID, Count]
+      additionalProperties: false
       properties:
-        ItemID: {type: string, minLength: 1, maxLength: 128}
+        ItemID: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_:-]{1,128}$'}
         Count: {type: integer, format: int64, minimum: 1, maximum: 2147483647}
     PalDefenderItemCatalogEntry:
       type: object
@@ -672,22 +938,26 @@ components:
     PalDefenderGiveItemsRequest:
       type: object
       required: [Items]
+      additionalProperties: false
       properties:
         Items: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderItemGrant'}}
     PalDefenderMessageRequest:
       type: object
       required: [Message]
+      additionalProperties: false
       properties:
         SendType: {type: string, enum: [PlayerChat, PlayerGlobalChat, PlayerGuildChat, PlayerLogNormal, PlayerLogImportant, PlayerLogVeryImportant], default: PlayerLogImportant}
         Message: {type: string, minLength: 1, maxLength: 4096}
     PalDefenderPunishmentRequest:
       type: object
+      additionalProperties: false
       properties:
         Reason: {type: string, maxLength: 1024}
         IP: {type: boolean, default: false}
     PalDefenderBroadcastRequest:
       type: object
       required: [message]
+      additionalProperties: false
       properties:
         message: {type: string, minLength: 1, maxLength: 4096}
         alert: {type: boolean, default: false}
@@ -697,6 +967,12 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/AuthStatus'}
+    SteamWorkshopAuthStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SteamWorkshopAuthStatus'}
     SessionEnvelope:
       type: object
       required: [ok, data]
@@ -721,6 +997,30 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/ImportInspection'}
+    LocalScanEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/LocalScanResult'}
+    LocalModActionEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/LocalModActionResult'}
+    AITranslationConfigEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/AITranslationConfig'}
+    AITranslationTestEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/AITranslationTestResult'}
     JsonObject:
       type: object
       additionalProperties: true

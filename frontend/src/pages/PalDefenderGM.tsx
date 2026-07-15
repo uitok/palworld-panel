@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
@@ -80,6 +80,7 @@ export const PalDefenderGM: React.FC = () => {
   const [pending, setPending] = useState('');
   const [notice, setNotice] = useState('');
   const [actionError, setActionError] = useState('');
+  const actionInFlight = useRef(false);
 
   const statusQuery = useQuery({
     queryKey: ['paldefender-gm', 'status'],
@@ -98,7 +99,13 @@ export const PalDefenderGM: React.FC = () => {
     staleTime: 30 * 60 * 1000,
   });
   const players = playersQuery.data?.Players ?? emptyPlayers;
-  const selectedPlayer = players.find((player) => identifierFor(player) === selectedID) ?? null;
+  const listedPlayer = players.find((player) => identifierFor(player) === selectedID) ?? null;
+  const playerQuery = useQuery({
+    queryKey: ['paldefender-gm', 'player', selectedID],
+    queryFn: () => palDefenderGMApi.player(selectedID),
+    enabled: Boolean(status?.available && selectedID),
+  });
+  const selectedPlayer = playerQuery.data ?? listedPlayer;
   const inventoryQuery = useQuery({
     queryKey: ['paldefender-gm', 'inventory', selectedID],
     queryFn: () => palDefenderGMApi.inventory(selectedID),
@@ -129,6 +136,8 @@ export const PalDefenderGM: React.FC = () => {
     : [];
 
   const runAction = async (key: string, action: () => Promise<unknown>, success: string) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
     setPending(key);
     setNotice('');
     setActionError('');
@@ -138,12 +147,17 @@ export const PalDefenderGM: React.FC = () => {
     } catch (error) {
       setActionError(getErrorMessage(error));
     } finally {
+      actionInFlight.current = false;
       setPending('');
     }
   };
 
   const submitGrant = async () => {
     if (!selectedPlayer) return;
+    if (!isOnline(selectedPlayer)) {
+      setActionError('玩家已离线，未发送物品发放请求');
+      return;
+    }
     const items = grantRows.map(({ ItemID, Count }) => ({ ItemID: ItemID.trim(), Count: Number(Count) }));
     if (items.some((item) => !item.ItemID || !Number.isInteger(item.Count) || item.Count <= 0)) {
       setActionError('物品 ID 与正整数数量均为必填项');
@@ -168,6 +182,10 @@ export const PalDefenderGM: React.FC = () => {
       return;
     }
     if (messageMode === 'player' && !selectedPlayer) return;
+    if (messageMode === 'player' && selectedPlayer && !isOnline(selectedPlayer)) {
+      setActionError('玩家已离线，未发送私信请求');
+      return;
+    }
     const label = messageMode === 'player' ? selectedPlayer?.Name || selectedID : messageMode === 'alert' ? '全服警报' : '全服广播';
     await runAction(
       'message',
@@ -195,7 +213,7 @@ export const PalDefenderGM: React.FC = () => {
     );
   };
 
-  const queryError = statusQuery.error || playersQuery.error || inventoryQuery.error || catalogQuery.error;
+  const queryError = statusQuery.error || playersQuery.error || playerQuery.error || inventoryQuery.error || catalogQuery.error;
   const visibleError = actionError || (queryError ? getErrorMessage(queryError) : '') || status?.error || '';
   const busy = Boolean(pending);
 
@@ -219,7 +237,10 @@ export const PalDefenderGM: React.FC = () => {
             onClick={() => {
               void statusQuery.refetch();
               void playersQuery.refetch();
-              if (selectedID) void inventoryQuery.refetch();
+              if (selectedID) {
+                void playerQuery.refetch();
+                void inventoryQuery.refetch();
+              }
             }}
             title="刷新 GM 数据"
             aria-label="刷新 GM 数据"
@@ -248,8 +269,16 @@ export const PalDefenderGM: React.FC = () => {
         <div className="flex min-h-72 items-center justify-center text-xs font-semibold text-slate-500">
           <LoaderCircle className="mr-2 animate-spin text-sky-500" size={16} /> 正在检查 PalDefender REST...
         </div>
-      ) : !status?.configured ? (
+      ) : status?.state === 'not_installed' ? (
+        <UnavailableState icon={<CircleOff size={22} />} title="PalDefender 尚未安装" action="打开安全设置" />
+      ) : status?.state === 'not_loaded' ? (
+        <UnavailableState icon={<CircleOff size={22} />} title="PalDefender 尚未通过启动日志确认加载" action="检查安全设置" />
+      ) : status?.state === 'rest_disabled' ? (
+        <UnavailableState icon={<CircleOff size={22} />} title="PalDefender REST API 未启用" action="打开安全设置" />
+      ) : !status?.configured || status?.state === 'not_configured' ? (
         <UnavailableState icon={<CircleOff size={22} />} title="REST Token 未配置" action="打开安全设置" />
+      ) : status?.state === 'server_not_running' ? (
+        <UnavailableState icon={<CircleOff size={22} />} title="游戏服务或 PalDefender REST 未运行" action="检查安全设置" />
       ) : !status.available ? (
         <UnavailableState icon={<CircleOff size={22} />} title="PalDefender REST 不可用" action="检查安全设置" />
       ) : (
@@ -336,6 +365,7 @@ export const PalDefenderGM: React.FC = () => {
                     rows={grantRows}
                     setRows={setGrantRows}
                     canWrite={canWrite}
+                    online={isOnline(selectedPlayer)}
                     busy={busy}
                     pending={pending}
                     onSubmit={() => void submitGrant()}
@@ -357,6 +387,7 @@ export const PalDefenderGM: React.FC = () => {
                     message={message}
                     onMessageChange={setMessage}
                     canWrite={canWrite}
+                    online={isOnline(selectedPlayer)}
                     busy={busy}
                     onSubmit={() => void submitMessage()}
                   />
@@ -397,6 +428,7 @@ const ItemsWorkspace: React.FC<{
   rows: GrantRow[];
   setRows: React.Dispatch<React.SetStateAction<GrantRow[]>>;
   canWrite: boolean;
+  online: boolean;
   busy: boolean;
   pending: string;
   onSubmit: () => void;
@@ -407,7 +439,7 @@ const ItemsWorkspace: React.FC<{
   loading: boolean;
   onRefresh: () => void;
   catalog: PalDefenderItemCatalogEntry[];
-}> = ({ rows, setRows, canWrite, busy, pending, onSubmit, containerKey, onContainerChange, container, inventoryRows, loading, onRefresh, catalog }) => (
+}> = ({ rows, setRows, canWrite, online, busy, pending, onSubmit, containerKey, onContainerChange, container, inventoryRows, loading, onRefresh, catalog }) => (
   <div>
     <form
       className="border-b border-slate-200 p-4 sm:p-5"
@@ -421,7 +453,7 @@ const ItemsWorkspace: React.FC<{
         <button
           type="button"
           onClick={() => setRows((current) => [...current, newGrant()])}
-          disabled={rows.length >= 100 || busy || !canWrite}
+          disabled={rows.length >= 100 || busy || !canWrite || !online}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
         >
           <Plus size={13} /> 添加
@@ -460,7 +492,7 @@ const ItemsWorkspace: React.FC<{
       </div>
       <button
         type="submit"
-        disabled={!canWrite || busy}
+        disabled={!canWrite || !online || busy}
         className="mt-3 inline-flex min-w-32 items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-40"
       >
         {pending === 'give' ? <LoaderCircle size={14} className="animate-spin" /> : <PackagePlus size={14} />}
@@ -487,14 +519,18 @@ const ItemsWorkspace: React.FC<{
       </div>
       <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full min-w-[460px] text-left">
-          <thead className="bg-slate-50 text-[10px] font-bold text-slate-400"><tr><th className="px-4 py-2.5">槽位</th><th className="px-4 py-2.5">ItemID</th><th className="px-4 py-2.5 text-right">数量</th></tr></thead>
+          <thead className="bg-slate-50 text-[10px] font-bold text-slate-400"><tr><th className="px-4 py-2.5">槽位</th><th className="px-4 py-2.5">物品</th><th className="px-4 py-2.5 text-right">数量</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {loading && inventoryRows.length === 0 ? (
               <tr><td colSpan={3} className="px-4 py-10 text-center text-xs font-semibold text-slate-400">正在读取背包...</td></tr>
             ) : inventoryRows.length === 0 ? (
               <tr><td colSpan={3} className="px-4 py-10 text-center text-xs font-semibold text-slate-400">该容器为空</td></tr>
             ) : inventoryRows.map(([slot, item]) => (
-              <tr key={slot}><td className="px-4 py-3 font-mono text-[11px] text-slate-400">{slot}</td><td className="px-4 py-3 font-mono text-xs font-semibold text-slate-700">{item.ItemID}</td><td className="px-4 py-3 text-right text-xs font-bold text-slate-700">{item.Count.toLocaleString()}</td></tr>
+              <tr key={slot}>
+                <td className="px-4 py-3 font-mono text-[11px] text-slate-400">{slot}</td>
+                <td className="px-4 py-3"><InventoryItemIdentity itemID={item.ItemID} catalog={catalog} /></td>
+                <td className="px-4 py-3 text-right text-xs font-bold text-slate-700">{item.Count.toLocaleString()}</td>
+              </tr>
             ))}
           </tbody>
         </table>
@@ -502,6 +538,29 @@ const ItemsWorkspace: React.FC<{
     </div>
   </div>
 );
+
+const InventoryItemIdentity: React.FC<{
+  itemID: string;
+  catalog: PalDefenderItemCatalogEntry[];
+}> = ({ itemID, catalog }) => {
+  const entry = catalog.find((item) => item.id.toLowerCase() === itemID.toLowerCase());
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      {entry?.icon ? (
+        <img
+          src={`/assets/items/${encodeURIComponent(entry.icon)}.webp`}
+          alt={`${entry.name}图标`}
+          className="h-9 w-9 shrink-0 object-contain"
+          onError={(event) => { event.currentTarget.style.visibility = 'hidden'; }}
+        />
+      ) : <span className="h-9 w-9 shrink-0" />}
+      <span className="min-w-0">
+        {entry?.name && <span className="block truncate text-xs font-bold text-slate-700">{entry.name}</span>}
+        <span className="block truncate font-mono text-[10px] font-semibold text-slate-400">{itemID}</span>
+      </span>
+    </div>
+  );
+};
 
 const ItemGrantField: React.FC<{
   label: string;
@@ -615,9 +674,10 @@ const MessageWorkspace: React.FC<{
   message: string;
   onMessageChange: (message: string) => void;
   canWrite: boolean;
+  online: boolean;
   busy: boolean;
   onSubmit: () => void;
-}> = ({ mode, onModeChange, messageType, onMessageTypeChange, message, onMessageChange, canWrite, busy, onSubmit }) => (
+}> = ({ mode, onModeChange, messageType, onMessageTypeChange, message, onMessageChange, canWrite, online, busy, onSubmit }) => (
   <form className="max-w-3xl p-4 sm:p-5" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
     <div className="flex w-fit rounded-lg border border-slate-200 bg-slate-100 p-0.5" aria-label="消息目标">
       {([
@@ -643,7 +703,7 @@ const MessageWorkspace: React.FC<{
       <textarea value={message} onChange={(event) => onMessageChange(event.target.value)} maxLength={4096} rows={7} className="resize-y rounded-lg border border-slate-200 p-3 text-sm font-medium text-slate-700 focus:border-sky-500 focus:outline-none" />
     </label>
     <div className="mt-2 text-right text-[10px] font-semibold text-slate-400">{message.length}/4096</div>
-    <button type="submit" disabled={!canWrite || busy || !message.trim()} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">
+    <button type="submit" disabled={!canWrite || busy || !message.trim() || (mode === 'player' && !online)} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">
       {busy ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />} 发送
     </button>
   </form>

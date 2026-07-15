@@ -49,6 +49,7 @@ type options struct {
 	noPrompt        bool
 	exitAfterHealth bool
 	showVersion     bool
+	runtimeRoot     string
 }
 
 func main() {
@@ -66,6 +67,7 @@ func run(args []string) error {
 	fs.BoolVar(&opts.noPrompt, "no-prompt", false, "do not display interactive prompts")
 	fs.BoolVar(&opts.exitAfterHealth, "exit-after-health", false, "stop children after smoke-test health checks")
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
+	fs.StringVar(&opts.runtimeRoot, "runtime-root", "", "managed runtime root")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -83,7 +85,19 @@ func run(args []string) error {
 		return err
 	}
 	root := filepath.Dir(executable)
-	mutex, alreadyRunning, err := acquireInstanceMutex(root)
+	runtimeOverride := strings.TrimSpace(opts.runtimeRoot)
+	if runtimeOverride == "" {
+		runtimeOverride = strings.TrimSpace(os.Getenv("PALPANEL_RUNTIME_ROOT"))
+	}
+	layout, err := appconfig.ResolveRuntimeLayout(runtimeOverride)
+	if err != nil {
+		return err
+	}
+	runtimeRoot := root
+	if layout.Structured {
+		runtimeRoot = layout.RuntimeRoot
+	}
+	mutex, alreadyRunning, err := acquireInstanceMutex(runtimeRoot)
 	if err != nil {
 		return fmt.Errorf("create instance lock: %w", err)
 	}
@@ -100,9 +114,9 @@ func run(args []string) error {
 			return fmt.Errorf("required executable is missing: %s", path)
 		}
 	}
-	configPath := filepath.Join(root, "config", "palpanel.env")
-	dataPath := filepath.Join(root, "data")
-	logsPath := filepath.Join(root, "logs")
+	configPath := filepath.Join(runtimeRoot, "config", "palpanel.env")
+	dataPath := filepath.Join(runtimeRoot, "data")
+	logsPath := filepath.Join(dataPath, "logs")
 	firstRun := false
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		firstRun = true
@@ -122,7 +136,11 @@ func run(args []string) error {
 		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 			return err
 		}
-		output, initErr := exec.Command(serverPath, "--config", configPath, "--init-config").CombinedOutput()
+		initArgs := []string{"--config", configPath, "--init-config"}
+		if layout.Structured {
+			initArgs = append(initArgs, "--runtime-root", runtimeRoot)
+		}
+		output, initErr := exec.Command(serverPath, initArgs...).CombinedOutput()
 		if initErr != nil {
 			return fmt.Errorf("initialize config: %w: %s", initErr, strings.TrimSpace(string(output)))
 		}
@@ -170,7 +188,12 @@ func run(args []string) error {
 		"PALPANEL_SAVE_INDEXER_ENABLED": "true",
 		"PALPANEL_SAVE_INDEXER_URL":     "http://127.0.0.1:8090",
 	}
-	serverChild, err := startChild(job, serverPath, []string{"--config", configPath}, childEnv, serverLog)
+	serverArgs := []string{"--config", configPath}
+	if layout.Structured {
+		childEnv["PALPANEL_RUNTIME_ROOT"] = runtimeRoot
+		serverArgs = append(serverArgs, "--runtime-root", runtimeRoot)
+	}
+	serverChild, err := startChild(job, serverPath, serverArgs, childEnv, serverLog)
 	if err != nil {
 		return fmt.Errorf("start palpanel server: %w", err)
 	}

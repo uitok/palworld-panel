@@ -49,6 +49,11 @@ export const Settings: React.FC = () => {
   const [aiModel, setAIModel] = useState('');
   const [aiAPIKey, setAIAPIKey] = useState('');
   const [clearAIAPIKey, setClearAIAPIKey] = useState(false);
+  const [aiTimeoutSeconds, setAITimeoutSeconds] = useState(90);
+  const [aiProxyURL, setAIProxyURL] = useState('');
+  const [clearAIProxy, setClearAIProxy] = useState(false);
+  const [aiCustomHeaders, setAICustomHeaders] = useState('');
+  const [clearAICustomHeaders, setClearAICustomHeaders] = useState(false);
   const [aiBusy, setAIBusy] = useState(false);
   const [developmentKeys, setDevelopmentKeys] = useState<DevelopmentKey[]>([]);
   const [developmentKeyName, setDevelopmentKeyName] = useState('本机自动化');
@@ -109,6 +114,11 @@ export const Settings: React.FC = () => {
         setAIModel(config.model);
         setAIAPIKey('');
         setClearAIAPIKey(false);
+        setAITimeoutSeconds(config.timeout_seconds || 90);
+        setAIProxyURL('');
+        setClearAIProxy(false);
+        setAICustomHeaders('');
+        setClearAICustomHeaders(false);
       })
       .catch((error) => {
         if (active) setMessage(getErrorMessage(error));
@@ -197,12 +207,33 @@ export const Settings: React.FC = () => {
     }
   };
 
-  const aiUpdate = (): AITranslationConfigUpdate => ({
-    base_url: aiBaseURL.trim(),
-    model: aiModel.trim(),
-    ...(aiAPIKey.trim() ? { api_key: aiAPIKey.trim() } : {}),
-    ...(clearAIAPIKey ? { clear_api_key: true } : {}),
-  });
+  const aiUpdate = (): AITranslationConfigUpdate => {
+    let customHeaders: Record<string, string> | undefined;
+    if (aiCustomHeaders.trim()) {
+      const decoded: unknown = JSON.parse(aiCustomHeaders);
+      if (!decoded || Array.isArray(decoded) || typeof decoded !== 'object') {
+        throw new Error('自定义请求头必须是 JSON 对象');
+      }
+      customHeaders = {};
+      for (const [name, value] of Object.entries(decoded)) {
+        if (typeof value !== 'string') {
+          throw new Error(`请求头 ${name} 的值必须是字符串`);
+        }
+        customHeaders[name] = value;
+      }
+    }
+    return {
+      base_url: aiBaseURL.trim(),
+      model: aiModel.trim(),
+      timeout_seconds: aiTimeoutSeconds,
+      ...(aiAPIKey.trim() ? { api_key: aiAPIKey.trim() } : {}),
+      ...(clearAIAPIKey ? { clear_api_key: true } : {}),
+      ...(aiProxyURL.trim() ? { proxy_url: aiProxyURL.trim() } : {}),
+      ...(clearAIProxy ? { clear_proxy: true } : {}),
+      ...(customHeaders ? { custom_headers: customHeaders } : {}),
+      ...(clearAICustomHeaders ? { clear_custom_headers: true } : {}),
+    };
+  };
 
   const saveAIConfig = async () => {
     setAIBusy(true);
@@ -213,6 +244,11 @@ export const Settings: React.FC = () => {
       setAIModel(saved.model);
       setAIAPIKey('');
       setClearAIAPIKey(false);
+      setAITimeoutSeconds(saved.timeout_seconds || 90);
+      setAIProxyURL('');
+      setClearAIProxy(false);
+      setAICustomHeaders('');
+      setClearAICustomHeaders(false);
       setMessage(saved.configured ? 'AI 翻译配置已保存' : 'AI 翻译配置已保存，但尚未完整配置');
     } catch (error) {
       setMessage(getErrorMessage(error));
@@ -481,11 +517,33 @@ export const Settings: React.FC = () => {
               <span className="flex items-center gap-2"><KeyRound size={13} />API Key {aiConfig?.api_key_present ? '（已保存）' : ''}</span>
               <input type="password" value={aiAPIKey} onChange={(event) => { setAIAPIKey(event.target.value); if (event.target.value) setClearAIAPIKey(false); }} placeholder={aiConfig?.api_key_present ? '留空以保留现有密钥' : '输入 API Key'} className="rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-emerald-500 focus:outline-none" />
             </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              请求超时（秒）
+              <input type="number" min={1} max={600} value={aiTimeoutSeconds} onChange={(event) => setAITimeoutSeconds(Number(event.target.value))} className="rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-emerald-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              Proxy URL {aiConfig?.proxy_configured ? `（已保存：${aiConfig.proxy_url || '私密代理'}）` : ''}
+              <input type="password" value={aiProxyURL} onChange={(event) => { setAIProxyURL(event.target.value); if (event.target.value) setClearAIProxy(false); }} placeholder={aiConfig?.proxy_configured ? '留空以保留现有代理' : 'socks5://127.0.0.1:10808'} className="rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-emerald-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600 md:col-span-2">
+              自定义请求头 {aiConfig?.custom_header_names.length ? `（已保存：${aiConfig.custom_header_names.join(', ')}）` : ''}
+              <textarea rows={3} value={aiCustomHeaders} onChange={(event) => { setAICustomHeaders(event.target.value); if (event.target.value) setClearAICustomHeaders(false); }} placeholder={'{"X-Tenant-ID":"tenant-a"}'} spellCheck={false} className="resize-y rounded-lg border border-slate-200 px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-emerald-500 focus:outline-none" />
+            </label>
           </div>
-          <label className="mt-4 inline-flex items-center gap-2 text-xs font-semibold text-rose-600">
-            <input type="checkbox" checked={clearAIAPIKey} onChange={(event) => { setClearAIAPIKey(event.target.checked); if (event.target.checked) setAIAPIKey(''); }} className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
-            删除已保存的 API Key
-          </label>
+          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-3">
+            <label className="inline-flex items-center gap-2 text-xs font-semibold text-rose-600">
+              <input type="checkbox" checked={clearAIAPIKey} onChange={(event) => { setClearAIAPIKey(event.target.checked); if (event.target.checked) setAIAPIKey(''); }} className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+              删除已保存的 API Key
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs font-semibold text-rose-600">
+              <input type="checkbox" checked={clearAIProxy} onChange={(event) => { setClearAIProxy(event.target.checked); if (event.target.checked) setAIProxyURL(''); }} className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+              删除已保存的代理
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs font-semibold text-rose-600">
+              <input type="checkbox" checked={clearAICustomHeaders} onChange={(event) => { setClearAICustomHeaders(event.target.checked); if (event.target.checked) setAICustomHeaders(''); }} className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+              删除已保存的请求头
+            </label>
+          </div>
         </section>
       )}
     </div>

@@ -134,7 +134,7 @@ func (e contextError) Error() string { return string(e) }
 
 func TestModImportHTTPWorkshopInspection(t *testing.T) {
 	root := t.TempDir()
-	cfg := appconfig.Config{ServerDir: filepath.Join(root, "server"), DBPath: filepath.Join(root, "panel.db"), MaxUploadBytes: 1 << 20}
+	cfg := appconfig.Config{DataDir: root, ServerDir: filepath.Join(root, "server"), DBPath: filepath.Join(root, "panel.db"), MaxUploadBytes: 1 << 20}
 	store, err := db.Open(cfg.DBPath)
 	if err != nil {
 		t.Fatal(err)

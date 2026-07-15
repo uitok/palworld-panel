@@ -1,6 +1,7 @@
 package appconfig
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/url"
@@ -14,6 +15,12 @@ const DefaultDockerRunnerBaseImage = "scottyhardy/docker-wine:latest@sha256:477a
 const DefaultPalDefenderRESTPort = 17993
 const DefaultSteamAPIBaseURL = "https://api.steampowered.com"
 const DefaultSteamAPITimeoutSeconds = 15
+const DefaultSteamCMDDownloadURL = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip"
+const DefaultSteamCMDDownloadMaxMB = 64
+const DefaultUE4SSVersion = "v3.0.1"
+const DefaultUE4SSDownloadURL = "https://github.com/UE4SS-RE/RE-UE4SS/releases/download/v3.0.1/UE4SS_v3.0.1.zip"
+const DefaultUE4SSArchiveSHA256 = "4b47d4bceddd2f561a4e395bfa00924ccfc945af576a2d0c613e6537846c57ec"
+const DefaultUE4SSDownloadMaxMB = 64
 const DefaultAITranslationTimeoutSeconds = 90
 const DefaultMonitorRetentionDays = 7
 
@@ -29,12 +36,16 @@ var DefaultDockerRunnerBaseImageMirrorPrefixes = []string{
 }
 
 type Config struct {
+	RuntimeRoot                  string
+	RepositoryRoot               string
+	DevelopmentMode              bool
 	ListenAddr                   string
 	DataDir                      string
 	ServerDir                    string
 	WinePrefixDir                string
 	ToolsDir                     string
 	SteamCMDDir                  string
+	UE4SSDir                     string
 	UploadsDir                   string
 	BackupsDir                   string
 	LogsDir                      string
@@ -52,6 +63,12 @@ type Config struct {
 	SteamWebAPIKeySource         string
 	SteamAPIBaseURL              string
 	SteamAPITimeoutSeconds       int
+	SteamCMDDownloadURL          string
+	SteamCMDDownloadMaxBytes     int64
+	UE4SSVersion                 string
+	UE4SSDownloadURL             string
+	UE4SSArchiveSHA256           string
+	UE4SSDownloadMaxBytes        int64
 	WorkshopAppID                string
 	GamePort                     int
 	QueryPort                    int
@@ -79,24 +96,105 @@ func Load() (Config, error) {
 	if err := validateScalarEnvironment(); err != nil {
 		return Config{}, err
 	}
-	cwd, err := os.Getwd()
+	layout, err := ResolveRuntimeLayout(os.Getenv("PALPANEL_RUNTIME_ROOT"))
 	if err != nil {
 		return Config{}, err
 	}
-
-	root := cwd
-	if filepath.Base(cwd) == "backend" {
-		root = filepath.Dir(cwd)
+	root := layout.ApplicationRoot
+	if layout.RepositoryRoot != "" {
+		root = layout.RepositoryRoot
 	}
-
-	dataDir := env("PALPANEL_DATA_DIR", filepath.Join(root, "data"))
-	dataDir, err = filepath.Abs(dataDir)
+	mutableBase := root
+	dataDefault := filepath.Join(root, "data")
+	serverDefault := ""
+	toolsDefault := ""
+	steamCMDDefault := ""
+	ue4ssDefault := ""
+	uploadsDefault := ""
+	backupsDefault := ""
+	logsDefault := ""
+	dbDefault := ""
+	saveIndexDefault := ""
+	winePrefixDefault := ""
+	if layout.Structured {
+		mutableBase = layout.RuntimeRoot
+		dataDefault = filepath.Join(layout.RuntimeRoot, "data")
+		serverDefault = filepath.Join(layout.RuntimeRoot, "palworld")
+		toolsDefault = filepath.Join(layout.RuntimeRoot, "temp")
+		steamCMDDefault = filepath.Join(layout.RuntimeRoot, "steamcmd")
+		ue4ssDefault = filepath.Join(layout.RuntimeRoot, "ue4ss")
+		uploadsDefault = filepath.Join(layout.RuntimeRoot, "mods", "staging")
+		backupsDefault = filepath.Join(dataDefault, "backups")
+		logsDefault = filepath.Join(dataDefault, "logs")
+		dbDefault = filepath.Join(dataDefault, "database", "palpanel.db")
+		saveIndexDefault = filepath.Join(dataDefault, "save-index")
+		winePrefixDefault = filepath.Join(layout.RuntimeRoot, "wineprefix")
+	}
+	dataDir, err := configuredPath("PALPANEL_DATA_DIR", dataDefault, mutableBase)
 	if err != nil {
 		return Config{}, err
 	}
-
-	backendDir := env("PALPANEL_BACKEND_DIR", filepath.Join(root, "backend"))
-	backendDir, err = filepath.Abs(backendDir)
+	if serverDefault == "" {
+		serverDefault = filepath.Join(dataDir, "server")
+		toolsDefault = filepath.Join(dataDir, "tools")
+		steamCMDDefault = filepath.Join(dataDir, "tools", "steamcmd")
+		ue4ssDefault = filepath.Join(dataDir, "tools", "ue4ss")
+		uploadsDefault = filepath.Join(dataDir, "uploads")
+		backupsDefault = filepath.Join(dataDir, "backups")
+		logsDefault = filepath.Join(dataDir, "logs")
+		dbDefault = filepath.Join(dataDir, "palpanel.db")
+		saveIndexDefault = filepath.Join(dataDir, "save-index")
+		winePrefixDefault = filepath.Join(dataDir, "wineprefix")
+	}
+	serverDir, err := configuredPath("PALPANEL_SERVER_DIR", serverDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	winePrefixDir, err := configuredPath("PALPANEL_WINE_PREFIX_DIR", winePrefixDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	toolsDir, err := configuredPath("PALPANEL_TOOLS_DIR", toolsDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	steamCMDDir, err := configuredPath("PALPANEL_STEAMCMD_DIR", steamCMDDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	ue4ssDir, err := configuredPath("PALPANEL_UE4SS_DIR", ue4ssDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	uploadsDir, err := configuredPath("PALPANEL_UPLOADS_DIR", uploadsDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	backupsDir, err := configuredPath("PALPANEL_BACKUPS_DIR", backupsDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	logsDir, err := configuredPath("PALPANEL_LOGS_DIR", logsDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	dbPath, err := configuredPath("PALPANEL_DB_PATH", dbDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	saveIndexCacheDir, err := configuredPath("PALPANEL_SAVE_INDEX_CACHE_DIR", saveIndexDefault, mutableBase)
+	if err != nil {
+		return Config{}, err
+	}
+	backendDir, err := configuredPath("PALPANEL_BACKEND_DIR", filepath.Join(root, "backend"), root)
+	if err != nil {
+		return Config{}, err
+	}
+	frontendDist, err := configuredPath("PALPANEL_FRONTEND_DIST", filepath.Join(root, "frontend", "dist"), root)
+	if err != nil {
+		return Config{}, err
+	}
+	runnerDir, err := configuredPath("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner"), root)
 	if err != nil {
 		return Config{}, err
 	}
@@ -104,19 +202,23 @@ func Load() (Config, error) {
 	steamWebAPIKey, steamWebAPIKeySource := resolveSteamWebAPIKey()
 	palDefenderRESTPort := envInt("PALPANEL_PALDEFENDER_REST_PORT", DefaultPalDefenderRESTPort)
 	cfg := Config{
+		RuntimeRoot:                  layout.RuntimeRoot,
+		RepositoryRoot:               layout.RepositoryRoot,
+		DevelopmentMode:              layout.Development,
 		ListenAddr:                   env("PALPANEL_LISTEN_ADDR", "127.0.0.1:8080"),
 		DataDir:                      dataDir,
-		ServerDir:                    env("PALPANEL_SERVER_DIR", filepath.Join(dataDir, "server")),
-		WinePrefixDir:                env("PALPANEL_WINE_PREFIX_DIR", filepath.Join(dataDir, "wineprefix")),
-		ToolsDir:                     env("PALPANEL_TOOLS_DIR", filepath.Join(dataDir, "tools")),
-		SteamCMDDir:                  env("PALPANEL_STEAMCMD_DIR", filepath.Join(dataDir, "tools", "steamcmd")),
-		UploadsDir:                   env("PALPANEL_UPLOADS_DIR", filepath.Join(dataDir, "uploads")),
-		BackupsDir:                   env("PALPANEL_BACKUPS_DIR", filepath.Join(dataDir, "backups")),
-		LogsDir:                      env("PALPANEL_LOGS_DIR", filepath.Join(dataDir, "logs")),
-		DBPath:                       env("PALPANEL_DB_PATH", filepath.Join(dataDir, "palpanel.db")),
+		ServerDir:                    serverDir,
+		WinePrefixDir:                winePrefixDir,
+		ToolsDir:                     toolsDir,
+		SteamCMDDir:                  steamCMDDir,
+		UE4SSDir:                     ue4ssDir,
+		UploadsDir:                   uploadsDir,
+		BackupsDir:                   backupsDir,
+		LogsDir:                      logsDir,
+		DBPath:                       dbPath,
 		RequireAuth:                  envBool("PALPANEL_REQUIRE_AUTH", true),
 		CORSOrigins:                  envList("PALPANEL_CORS_ORIGINS", []string{"http://127.0.0.1:3000", "http://localhost:3000"}),
-		FrontendDist:                 env("PALPANEL_FRONTEND_DIST", filepath.Join(root, "frontend", "dist")),
+		FrontendDist:                 frontendDist,
 		MaxUploadBytes:               int64(envInt("PALPANEL_MAX_UPLOAD_MB", 256)) * 1024 * 1024,
 		DockerBinary:                 env("PALPANEL_DOCKER_BIN", "docker"),
 		DockerImage:                  env("PALPANEL_DOCKER_IMAGE", "palworld-wine-runner:local"),
@@ -127,6 +229,12 @@ func Load() (Config, error) {
 		SteamWebAPIKeySource:         steamWebAPIKeySource,
 		SteamAPIBaseURL:              strings.TrimRight(env("PALPANEL_STEAM_API_BASE_URL", DefaultSteamAPIBaseURL), "/"),
 		SteamAPITimeoutSeconds:       envInt("PALPANEL_STEAM_API_TIMEOUT_SECONDS", DefaultSteamAPITimeoutSeconds),
+		SteamCMDDownloadURL:          strings.TrimSpace(env("PALPANEL_STEAMCMD_DOWNLOAD_URL", DefaultSteamCMDDownloadURL)),
+		SteamCMDDownloadMaxBytes:     int64(envInt("PALPANEL_STEAMCMD_DOWNLOAD_MAX_MB", DefaultSteamCMDDownloadMaxMB)) * 1024 * 1024,
+		UE4SSVersion:                 strings.TrimSpace(env("PALPANEL_UE4SS_VERSION", DefaultUE4SSVersion)),
+		UE4SSDownloadURL:             strings.TrimSpace(env("PALPANEL_UE4SS_DOWNLOAD_URL", DefaultUE4SSDownloadURL)),
+		UE4SSArchiveSHA256:           strings.ToLower(strings.TrimSpace(env("PALPANEL_UE4SS_ARCHIVE_SHA256", DefaultUE4SSArchiveSHA256))),
+		UE4SSDownloadMaxBytes:        int64(envInt("PALPANEL_UE4SS_DOWNLOAD_MAX_MB", DefaultUE4SSDownloadMaxMB)) * 1024 * 1024,
 		WorkshopAppID:                env("PALPANEL_WORKSHOP_APP_ID", "1623730"),
 		GamePort:                     envInt("PALPANEL_GAME_PORT", 8211),
 		QueryPort:                    envInt("PALPANEL_QUERY_PORT", 27015),
@@ -141,13 +249,13 @@ func Load() (Config, error) {
 		PalDefenderRESTPort:          palDefenderRESTPort,
 		SaveIndexerEnabled:           envBool("PALPANEL_SAVE_INDEXER_ENABLED", false),
 		SaveIndexerURL:               env("PALPANEL_SAVE_INDEXER_URL", "http://127.0.0.1:8090"),
-		SaveIndexCacheDir:            env("PALPANEL_SAVE_INDEX_CACHE_DIR", filepath.Join(dataDir, "save-index")),
+		SaveIndexCacheDir:            saveIndexCacheDir,
 		SaveIndexTimeoutSeconds:      envInt("PALPANEL_SAVE_INDEX_TIMEOUT_SECONDS", 120),
 		PerfSlowRequestMS:            envInt("PALPANEL_PERF_SLOW_REQUEST_MS", 500),
 		MonitorRetentionDays:         envInt("PALPANEL_MONITOR_RETENTION_DAYS", DefaultMonitorRetentionDays),
 		AITranslationTimeoutSeconds:  envInt("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS", DefaultAITranslationTimeoutSeconds),
 		LogLevel:                     strings.ToLower(env("PALPANEL_LOG_LEVEL", "info")),
-		RunnerDir:                    env("PALPANEL_RUNNER_DIR", filepath.Join(backendDir, "deployments", "wine-runner")),
+		RunnerDir:                    runnerDir,
 	}
 	if err := validateListenAddress(cfg.ListenAddr); err != nil {
 		return Config{}, err
@@ -157,6 +265,27 @@ func Load() (Config, error) {
 	}
 	if cfg.SteamAPITimeoutSeconds < 1 || cfg.SteamAPITimeoutSeconds > 300 {
 		return Config{}, fmt.Errorf("PALPANEL_STEAM_API_TIMEOUT_SECONDS must be between 1 and 300")
+	}
+	if err := validateHTTPBaseURL("PALPANEL_STEAMCMD_DOWNLOAD_URL", cfg.SteamCMDDownloadURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.SteamCMDDownloadMaxBytes < 1*1024*1024 || cfg.SteamCMDDownloadMaxBytes > 1024*1024*1024 {
+		return Config{}, fmt.Errorf("PALPANEL_STEAMCMD_DOWNLOAD_MAX_MB must be between 1 and 1024")
+	}
+	if err := validateHTTPBaseURL("PALPANEL_UE4SS_DOWNLOAD_URL", cfg.UE4SSDownloadURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.UE4SSVersion == "" {
+		return Config{}, fmt.Errorf("PALPANEL_UE4SS_VERSION must not be empty")
+	}
+	if len(cfg.UE4SSArchiveSHA256) != 64 {
+		return Config{}, fmt.Errorf("PALPANEL_UE4SS_ARCHIVE_SHA256 must contain 64 hexadecimal characters")
+	}
+	if _, err := hex.DecodeString(cfg.UE4SSArchiveSHA256); err != nil {
+		return Config{}, fmt.Errorf("PALPANEL_UE4SS_ARCHIVE_SHA256 must be hexadecimal")
+	}
+	if cfg.UE4SSDownloadMaxBytes < 1*1024*1024 || cfg.UE4SSDownloadMaxBytes > 1024*1024*1024 {
+		return Config{}, fmt.Errorf("PALPANEL_UE4SS_DOWNLOAD_MAX_MB must be between 1 and 1024")
 	}
 	if cfg.AITranslationTimeoutSeconds < 1 || cfg.AITranslationTimeoutSeconds > 600 {
 		return Config{}, fmt.Errorf("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS must be between 1 and 600")
@@ -174,14 +303,35 @@ func Load() (Config, error) {
 }
 
 func (c Config) EnsureDirs() error {
-	dirs := []string{c.DataDir, c.ServerDir, c.WinePrefixDir, c.ToolsDir, c.SteamCMDDir, c.UploadsDir, c.BackupsDir, c.LogsDir, c.SaveIndexCacheDir}
+	if c.RuntimeRoot != "" {
+		if err := c.ValidateManagedPath(c.RuntimeRoot, true); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(c.RuntimeRoot, 0o755); err != nil {
+			return err
+		}
+	}
+	dirs := []string{c.DataDir, c.ServerDir, c.WinePrefixDir, c.ToolsDir, c.SteamCMDDir, c.UE4SSDir, c.UploadsDir, c.BackupsDir, c.LogsDir, c.SaveIndexCacheDir}
 	for _, dir := range dirs {
 		if strings.TrimSpace(dir) == "" {
 			continue
 		}
+		if c.RuntimeRoot != "" {
+			if err := c.ValidateManagedPath(dir, true); err != nil {
+				return err
+			}
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
+	}
+	if c.RuntimeRoot != "" {
+		if err := c.ValidateManagedPath(c.DBPath, false); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(c.DBPath), 0o755); err != nil {
+		return err
 	}
 	return nil
 }
@@ -315,6 +465,8 @@ func validateScalarEnvironment() error {
 		"PALPANEL_PALDEFENDER_REST_PORT",
 		"PALPANEL_MAX_UPLOAD_MB",
 		"PALPANEL_STEAM_API_TIMEOUT_SECONDS",
+		"PALPANEL_STEAMCMD_DOWNLOAD_MAX_MB",
+		"PALPANEL_UE4SS_DOWNLOAD_MAX_MB",
 		"PALPANEL_GAME_PORT",
 		"PALPANEL_QUERY_PORT",
 		"PALPANEL_REST_PORT",
@@ -354,6 +506,18 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func configuredPath(key, fallback, base string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		value = fallback
+	}
+	path, err := absoluteFrom(base, value)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", key, err)
+	}
+	return path, nil
 }
 
 func envInt(key string, fallback int) int {

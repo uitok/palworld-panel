@@ -42,13 +42,32 @@ describe('PalDefender GM API', () => {
   it('sends validated GM write payloads to encoded player routes', async () => {
     const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ status: 200, data: { ok: true, data: { Success: true, Granted: { Items: 5 } } } });
 
-    await palDefenderGMApi.giveItems('steam/user', [{ ItemID: 'Money', Count: 5 }]);
-    await palDefenderGMApi.sendMessage('steam/user', { SendType: 'PlayerChat', Message: 'hello' });
-    await palDefenderGMApi.ban('steam/user', { Reason: 'abuse', IP: true });
+    await palDefenderGMApi.giveItems('steam/user', [{ ItemID: 'Money', Count: 5 }], 'gm-request-001');
+    await palDefenderGMApi.sendMessage('steam/user', { SendType: 'PlayerChat', Message: 'hello' }, 'gm-request-002');
+    await palDefenderGMApi.ban('steam/user', { Reason: 'abuse', IP: true }, 'gm-request-003');
 
-    expect(post).toHaveBeenNthCalledWith(1, '/security/paldefender/gm/players/steam%2Fuser/items', { Items: [{ ItemID: 'Money', Count: 5 }] });
-    expect(post).toHaveBeenNthCalledWith(2, '/security/paldefender/gm/players/steam%2Fuser/message', { SendType: 'PlayerChat', Message: 'hello' });
-    expect(post).toHaveBeenNthCalledWith(3, '/security/paldefender/gm/players/steam%2Fuser/ban', { Reason: 'abuse', IP: true });
+    expect(post).toHaveBeenNthCalledWith(1, '/security/paldefender/gm/players/steam%2Fuser/items', { Items: [{ ItemID: 'Money', Count: 5 }] }, { headers: { 'Idempotency-Key': 'gm-request-001' } });
+    expect(post).toHaveBeenNthCalledWith(2, '/security/paldefender/gm/players/steam%2Fuser/message', { SendType: 'PlayerChat', Message: 'hello' }, { headers: { 'Idempotency-Key': 'gm-request-002' } });
+    expect(post).toHaveBeenNthCalledWith(3, '/security/paldefender/gm/players/steam%2Fuser/ban', { Reason: 'abuse', IP: true }, { headers: { 'Idempotency-Key': 'gm-request-003' } });
+  });
+
+  it('maps structured readiness state and player detail', async () => {
+    const get = vi.spyOn(apiClient, 'get');
+    get.mockResolvedValueOnce({
+      status: 200,
+      data: { ok: true, data: { configured: true, available: false, installed: true, load_verified: false, rest_enabled: true, state: 'not_loaded' } },
+    });
+    get.mockResolvedValueOnce({
+      status: 200,
+      data: { ok: true, data: { Name: 'Builder', UserId: 'steam_1', PlayerUID: 'uid_1', Status: 'Online' } },
+    });
+
+    const status = await palDefenderGMApi.status();
+    const player = await palDefenderGMApi.player('steam_1');
+
+    expect(status).toMatchObject({ installed: true, load_verified: false, rest_enabled: true, state: 'not_loaded' });
+    expect(player).toMatchObject({ Name: 'Builder', UserId: 'steam_1', PlayerUID: 'uid_1' });
+    expect(get).toHaveBeenNthCalledWith(2, '/security/paldefender/gm/players/steam_1');
   });
 
   it('maps the local item catalog and requests the full bounded list', async () => {

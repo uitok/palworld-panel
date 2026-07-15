@@ -15,6 +15,26 @@ import type {
 
 const emptyLocation = { x: 0, y: 0, z: 0 };
 
+const newGMRequestKey = () => {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `gm-${uuid}`;
+  return `gm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+};
+
+const idempotencyConfig = (key?: string) => ({
+  headers: { 'Idempotency-Key': key || newGMRequestKey() },
+});
+
+const gmStates = new Set<PalDefenderGMStatus['state']>([
+  'ready',
+  'not_installed',
+  'not_loaded',
+  'not_configured',
+  'rest_disabled',
+  'server_not_running',
+  'failed',
+]);
+
 const asRecord = (raw: unknown): Record<string, unknown> =>
   raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
 
@@ -26,9 +46,14 @@ const mapLocation = (raw: unknown) => {
 const mapStatus = (raw: unknown): PalDefenderGMStatus => {
   const data = asRecord(raw);
   const version = asRecord(data.version);
+  const rawState = String(data.state || 'failed') as PalDefenderGMStatus['state'];
   return {
     configured: Boolean(data.configured),
     available: Boolean(data.available),
+    installed: Boolean(data.installed),
+    load_verified: Boolean(data.load_verified),
+    rest_enabled: Boolean(data.rest_enabled),
+    state: gmStates.has(rawState) ? rawState : 'failed',
     error: data.error ? String(data.error) : undefined,
     version:
       Object.keys(version).length > 0
@@ -139,7 +164,7 @@ export const palDefenderGMApi = {
   status: () =>
     handleRequest<unknown, PalDefenderGMStatus>(
       () => apiClient.get('/security/paldefender/gm/status'),
-      { configured: false, available: false },
+      { configured: false, available: false, installed: false, load_verified: false, rest_enabled: false, state: 'failed' },
       { map: mapStatus, quiet: true, fallbackOnError: false },
     ),
 
@@ -148,6 +173,13 @@ export const palDefenderGMApi = {
       () => apiClient.get('/security/paldefender/gm/players'),
       { Meta: { PlayerCount: 0, OnlineCount: 0 }, Players: [] },
       { map: mapPlayers, quiet: true, fallbackOnError: false },
+    ),
+
+  player: (identifier: string) =>
+    handleRequest<unknown, PalDefenderGMPlayer>(
+      () => apiClient.get(playerPath(identifier)),
+      mapPlayer({ UserId: identifier }),
+      { map: mapPlayer, quiet: true, fallbackOnError: false },
     ),
 
   items: (query = '', limit = 5000) => {
@@ -171,44 +203,44 @@ export const palDefenderGMApi = {
       { map: mapInventory, quiet: true, fallbackOnError: false },
     ),
 
-  giveItems: (identifier: string, items: PalDefenderItemGrant[]) =>
+  giveItems: (identifier: string, items: PalDefenderItemGrant[], idempotencyKey?: string) =>
     handleRequest<unknown, PalDefenderGiveItemsResult>(
-      () => apiClient.post(`${playerPath(identifier)}/items`, { Items: items }),
+      () => apiClient.post(`${playerPath(identifier)}/items`, { Items: items }, idempotencyConfig(idempotencyKey)),
       { Granted: { Items: 0 } },
       { quiet: true, fallbackOnError: false },
     ),
 
-  sendMessage: (identifier: string, request: PalDefenderMessageRequest) =>
+  sendMessage: (identifier: string, request: PalDefenderMessageRequest, idempotencyKey?: string) =>
     handleRequest<unknown, Record<string, unknown>>(
-      () => apiClient.post(`${playerPath(identifier)}/message`, request),
+      () => apiClient.post(`${playerPath(identifier)}/message`, request, idempotencyConfig(idempotencyKey)),
       {},
       { quiet: true, fallbackOnError: false },
     ),
 
-  broadcast: (message: string, alert = false) =>
+  broadcast: (message: string, alert = false, idempotencyKey?: string) =>
     handleRequest<unknown, Record<string, unknown>>(
-      () => apiClient.post('/security/paldefender/gm/broadcast', { message, alert }),
+      () => apiClient.post('/security/paldefender/gm/broadcast', { message, alert }, idempotencyConfig(idempotencyKey)),
       {},
       { quiet: true, fallbackOnError: false },
     ),
 
-  kick: (identifier: string, request: PalDefenderPunishmentRequest = {}) =>
+  kick: (identifier: string, request: PalDefenderPunishmentRequest = {}, idempotencyKey?: string) =>
     handleRequest<unknown, Record<string, unknown>>(
-      () => apiClient.post(`${playerPath(identifier)}/kick`, request),
+      () => apiClient.post(`${playerPath(identifier)}/kick`, request, idempotencyConfig(idempotencyKey)),
       {},
       { quiet: true, fallbackOnError: false },
     ),
 
-  ban: (identifier: string, request: PalDefenderPunishmentRequest = {}) =>
+  ban: (identifier: string, request: PalDefenderPunishmentRequest = {}, idempotencyKey?: string) =>
     handleRequest<unknown, Record<string, unknown>>(
-      () => apiClient.post(`${playerPath(identifier)}/ban`, request),
+      () => apiClient.post(`${playerPath(identifier)}/ban`, request, idempotencyConfig(idempotencyKey)),
       {},
       { quiet: true, fallbackOnError: false },
     ),
 
-  unban: (identifier: string, request: PalDefenderPunishmentRequest = {}) =>
+  unban: (identifier: string, request: PalDefenderPunishmentRequest = {}, idempotencyKey?: string) =>
     handleRequest<unknown, Record<string, unknown>>(
-      () => apiClient.post(`${playerPath(identifier)}/unban`, request),
+      () => apiClient.post(`${playerPath(identifier)}/unban`, request, idempotencyConfig(idempotencyKey)),
       {},
       { quiet: true, fallbackOnError: false },
     ),

@@ -7,14 +7,18 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRESTReadsVersionPlayersAndInventory(t *testing.T) {
 	manager, cleanup := testManager(t)
 	defer cleanup()
+	prepareGMRESTFixture(t, manager)
 	setTestRESTToken(t, manager, "rest-secret")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +56,10 @@ func TestRESTReadsVersionPlayersAndInventory(t *testing.T) {
 	if err != nil || players.Meta.OnlineCount != 1 || len(players.Players) != 1 || players.Players[0].UserID != "steam_1" {
 		t.Fatalf("RESTPlayers = %#v, %v", players, err)
 	}
+	player, err := manager.RESTPlayer(context.Background(), "uid_1")
+	if err != nil || player.UserID != "steam_1" {
+		t.Fatalf("RESTPlayer = %#v, %v", player, err)
+	}
 	inventory, err := manager.RESTInventory(context.Background(), "steam_1")
 	if err != nil || inventory.Inventory.Items.Slots["0"].ItemID != "Money" || inventory.Inventory.Items.FreeSlots != 41 {
 		t.Fatalf("RESTInventory = %#v, %v", inventory, err)
@@ -66,6 +74,7 @@ func TestRESTReadsVersionPlayersAndInventory(t *testing.T) {
 func TestRESTGMWriteRequests(t *testing.T) {
 	manager, cleanup := testManager(t)
 	defer cleanup()
+	prepareGMRESTFixture(t, manager)
 	setTestRESTToken(t, manager, "rest-secret")
 
 	type capturedRequest struct {
@@ -90,7 +99,7 @@ func TestRESTGMWriteRequests(t *testing.T) {
 	defer server.Close()
 	manager.restBaseURL = server.URL
 
-	granted, err := manager.RESTGiveItems(context.Background(), "steam_1", GiveItemsRequest{Items: []ItemGrant{{ItemID: " Money ", Count: 12}}})
+	granted, err := manager.RESTGiveItems(context.Background(), "steam_1", GiveItemsRequest{Items: []ItemGrant{{ItemID: " Money ", Count: 12}, {ItemID: "Wood", Count: 3}}})
 	if err != nil || granted.Granted.Items != 12 {
 		t.Fatalf("RESTGiveItems = %#v, %v", granted, err)
 	}
@@ -117,7 +126,7 @@ func TestRESTGMWriteRequests(t *testing.T) {
 		t.Fatalf("give request = %#v", captured[0])
 	}
 	items, ok := captured[0].Body["Items"].([]any)
-	if !ok || len(items) != 1 || items[0].(map[string]any)["ItemID"] != "Money" {
+	if !ok || len(items) != 2 || items[0].(map[string]any)["ItemID"] != "Money" || items[1].(map[string]any)["ItemID"] != "Wood" {
 		t.Fatalf("give body = %#v", captured[0].Body)
 	}
 	if captured[1].Path != "/v1/pdapi/SendPlayerMessage" || captured[1].Body["SendType"] != "PlayerLogImportant" || captured[1].Body["UserID"] != "uid_1" {
@@ -134,6 +143,7 @@ func TestRESTGMWriteRequests(t *testing.T) {
 func TestRESTValidationDoesNotSendRequests(t *testing.T) {
 	manager, cleanup := testManager(t)
 	defer cleanup()
+	prepareGMRESTFixture(t, manager)
 	setTestRESTToken(t, manager, "rest-secret")
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -144,12 +154,20 @@ func TestRESTValidationDoesNotSendRequests(t *testing.T) {
 	manager.restBaseURL = server.URL
 
 	tests := []error{}
-	_, err := manager.RESTInventory(context.Background(), "../../bad")
+	for _, identifier := range []string{"../../bad", `steam\\user`, "steam/user", "steam?user", "steam%2fuser", "玩家", "steam\nuser"} {
+		_, err := manager.RESTInventory(context.Background(), identifier)
+		tests = append(tests, err)
+	}
+	_, err := manager.RESTPlayer(context.Background(), "bad.id")
 	tests = append(tests, err)
 	_, err = manager.RESTGiveItems(context.Background(), "steam_1", GiveItemsRequest{})
 	tests = append(tests, err)
 	_, err = manager.RESTGiveItems(context.Background(), "steam_1", GiveItemsRequest{Items: []ItemGrant{{ItemID: "Money", Count: 0}}})
 	tests = append(tests, err)
+	for _, itemID := range []string{"../Money", `Money\\Other`, "Money;quit", "Money\nOther", `\"Money\"`, "$(shutdown)"} {
+		_, err = manager.RESTGiveItems(context.Background(), "steam_1", GiveItemsRequest{Items: []ItemGrant{{ItemID: itemID, Count: 1}}})
+		tests = append(tests, err)
+	}
 	_, err = manager.RESTSendMessage(context.Background(), "steam_1", SendMessageRequest{Message: " "})
 	tests = append(tests, err)
 	_, err = manager.RESTBroadcast(context.Background(), "", false)
@@ -169,6 +187,7 @@ func TestRESTValidationDoesNotSendRequests(t *testing.T) {
 func TestRESTErrorsLimitsMissingTokenAndRedirects(t *testing.T) {
 	manager, cleanup := testManager(t)
 	defer cleanup()
+	prepareGMRESTFixture(t, manager)
 	if _, err := manager.RESTPlayers(context.Background()); !errors.Is(err, ErrRESTTokenMissing) {
 		t.Fatalf("missing token error = %v", err)
 	}
@@ -219,9 +238,140 @@ func TestRESTErrorsLimitsMissingTokenAndRedirects(t *testing.T) {
 	}
 }
 
+func TestGMStatusReportsEachReadinessState(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+
+	if status := manager.GMStatus(t.Context()); status.State != GMStateNotInstalled || status.Installed {
+		t.Fatalf("initial status = %#v", status)
+	}
+	if err := os.MkdirAll(manager.cfg.Win64Dir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"PalDefender.dll", "d3d9.dll"} {
+		if err := os.WriteFile(filepath.Join(manager.cfg.Win64Dir(), name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if status := manager.GMStatus(t.Context()); status.State != GMStateNotLoaded || !status.Installed || status.LoadVerified {
+		t.Fatalf("not-loaded status = %#v", status)
+	}
+	if err := os.WriteFile(manager.cfg.ServerLogPath(), []byte("PalDefender load complete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := manager.GMStatus(t.Context()); status.State != GMStateNotConfigured || !status.LoadVerified || status.Configured {
+		t.Fatalf("not-configured status = %#v", status)
+	}
+	setTestRESTToken(t, manager, "rest-secret")
+	if status := manager.GMStatus(t.Context()); status.State != GMStateRESTDisabled || status.RESTEnabled {
+		t.Fatalf("REST-disabled status = %#v", status)
+	}
+	if err := os.MkdirAll(filepath.Dir(manager.restConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manager.restConfigPath(), []byte(`{"Enabled":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager.restBaseURL = "http://127.0.0.1:1"
+	if status := manager.GMStatus(t.Context()); status.State != GMStateServerNotRunning || status.Available || status.Error == "" {
+		t.Fatalf("stopped-server status = %#v", status)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Version": map[string]any{"Version": "1.8.1"}})
+	}))
+	defer server.Close()
+	manager.restBaseURL = server.URL
+	status := manager.GMStatus(t.Context())
+	if status.State != GMStateReady || !status.Available || status.Version == nil || status.Version.Version != "1.8.1" {
+		t.Fatalf("ready status = %#v", status)
+	}
+}
+
+func TestRESTClassifiesTimeoutAndMalformedResponses(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	prepareGMRESTFixture(t, manager)
+	setTestRESTToken(t, manager, "rest-secret")
+
+	timeoutServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	manager.restBaseURL = timeoutServer.URL
+	manager.restClient = newRESTHTTPClient()
+	manager.restClient.Timeout = 20 * time.Millisecond
+	if _, err := manager.RESTPlayers(t.Context()); !errors.Is(err, ErrRESTTimeout) {
+		t.Fatalf("timeout error = %v", err)
+	}
+	timeoutServer.Close()
+
+	for name, payload := range map[string]string{
+		"invalid_json":   `{not-json}`,
+		"trailing_json":  `{} {}`,
+		"empty_body":     ``,
+		"missing_fields": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, payload)
+			}))
+			defer server.Close()
+			manager.restBaseURL = server.URL
+			manager.restClient = newRESTHTTPClient()
+			if _, err := manager.RESTPlayers(t.Context()); !errors.Is(err, ErrRESTInvalidResponse) {
+				t.Fatalf("malformed response error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRESTRejectsNonLoopbackEndpointBeforeSendingCredentials(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	prepareGMRESTFixture(t, manager)
+	setTestRESTToken(t, manager, "rest-secret")
+	manager.restBaseURL = "http://example.com"
+
+	if _, err := manager.RESTPlayers(t.Context()); !errors.Is(err, ErrRESTInvalidConfiguration) {
+		t.Fatalf("non-loopback endpoint error = %v", err)
+	}
+	for _, baseURL := range []string{
+		"https://127.0.0.1:8212",
+		"http://user:password@127.0.0.1:8212",
+		"http://127.0.0.1:8212/prefix",
+		"http://127.0.0.1:8212?token=leak",
+	} {
+		if _, err := buildRESTURL(baseURL, "/v1/pdapi/players"); !errors.Is(err, ErrRESTInvalidConfiguration) {
+			t.Errorf("buildRESTURL(%q) error = %v", baseURL, err)
+		}
+	}
+}
+
 func setTestRESTToken(t *testing.T, manager Manager, token string) {
 	t.Helper()
 	if err := manager.store.SetKV(context.Background(), kvRESTToken, token); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func prepareGMRESTFixture(t *testing.T, manager Manager) {
+	t.Helper()
+	if err := os.MkdirAll(manager.cfg.Win64Dir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"PalDefender.dll", "d3d9.dll"} {
+		if err := os.WriteFile(filepath.Join(manager.cfg.Win64Dir(), name), []byte("test fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(manager.restConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manager.restConfigPath(), []byte(`{"Enabled":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manager.cfg.ServerLogPath(), []byte("PalDefender load complete\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -1,7 +1,23 @@
 import { apiClient, handleRequest } from './client';
-import type { AITranslation, ImportCandidate, ImportInspection, Job, ModItem, WorkshopItem, WorkshopSearchResponse, WorkshopStatus } from '../types';
+import type {
+  AITranslation,
+  ImportCandidate,
+  ImportInspection,
+  Job,
+  LocalModAction,
+  LocalModActionResult,
+  LocalModFinding,
+  LocalScanResult,
+  ModItem,
+  SteamWorkshopAuthStatus,
+  WorkshopItem,
+  WorkshopSearchResponse,
+  WorkshopStatus,
+} from '../types';
 import { mapJob } from './tasks';
 import { AI_OPERATION_TIMEOUT_MS } from './requestTimeouts';
+
+const STEAM_AUTH_OPERATION_TIMEOUT_MS = 60_000;
 
 const stringArray = (raw: unknown): string[] => {
   if (!Array.isArray(raw)) return [];
@@ -11,6 +27,18 @@ const stringArray = (raw: unknown): string[] => {
 const numberValue = (raw: unknown) => {
   const value = Number(raw);
   return Number.isFinite(value) ? value : undefined;
+};
+
+const localOwnerships = ['managed', 'manual'] as const;
+const localStates = ['present', 'missing_files', 'unknown', 'disabled', 'duplicate', 'incomplete'] as const;
+const localSources = ['workshop', 'legacy_pak', 'ue4ss', 'database'] as const;
+const localConfidences = ['high', 'medium', 'low'] as const;
+const localClassifications = ['managed', 'manual', 'present', 'missing_files', 'unknown', 'disabled', 'duplicate', 'incomplete'] as const;
+const localActions = ['import', 'repair', 'ignore', 'unignore', 'delete'] as const;
+
+const enumValue = <T extends string>(raw: unknown, values: readonly T[], fallback: T): T => {
+  const value = String(raw || '');
+  return values.includes(value as T) ? (value as T) : fallback;
 };
 
 const mapMod = (raw: unknown): ModItem => {
@@ -39,6 +67,87 @@ const mapMod = (raw: unknown): ModItem => {
 const mapMods = (raw: unknown): ModItem[] => {
   if (!Array.isArray(raw)) return [];
   return raw.map(mapMod);
+};
+
+const mapLocalFinding = (raw: unknown): LocalModFinding => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const databaseMods = Array.isArray(data.database_mods)
+    ? data.database_mods
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        .map((item) => ({
+          id: String(item.id || ''),
+          name: String(item.name || item.package_name || 'Unnamed Mod'),
+          source: String(item.source || 'unknown'),
+          package_name: String(item.package_name || ''),
+          path: String(item.path || ''),
+          version: item.version ? String(item.version) : undefined,
+          enabled: Boolean(item.enabled),
+          workshop_id: item.workshop_id ? String(item.workshop_id) : undefined,
+          preview_url: item.preview_url ? String(item.preview_url) : undefined,
+          steam_url: item.steam_url ? String(item.steam_url) : undefined,
+          summary: item.summary ? String(item.summary) : undefined,
+          tags: stringArray(item.tags),
+          file_size: numberValue(item.file_size),
+          subscriptions: numberValue(item.subscriptions),
+          time_updated: numberValue(item.time_updated),
+          last_checked_at: item.last_checked_at ? String(item.last_checked_at) : undefined,
+          created_at: String(item.created_at || ''),
+          updated_at: String(item.updated_at || ''),
+        }))
+    : [];
+  const classifications = stringArray(data.classifications)
+    .map((item) => enumValue(item, localClassifications, 'unknown'));
+  return {
+    id: String(data.id || ''),
+    revision: String(data.revision || ''),
+    ownership: enumValue(data.ownership, localOwnerships, 'manual'),
+    state: enumValue(data.state, localStates, 'unknown'),
+    source: enumValue(data.source, localSources, 'database'),
+    confidence: enumValue(data.confidence, localConfidences, 'low'),
+    name: String(data.name || data.package_name || 'Unknown Mod'),
+    package_name: data.package_name ? String(data.package_name) : undefined,
+    version: data.version ? String(data.version) : undefined,
+    enabled: Boolean(data.enabled),
+    duplicate: Boolean(data.duplicate),
+    paths: stringArray(data.paths),
+    database_mods: databaseMods.length > 0 ? databaseMods : undefined,
+    classifications,
+    issues: stringArray(data.issues),
+    ignored: Boolean(data.ignored),
+    actions: Array.isArray(data.actions)
+      ? data.actions.map((rawAction) => {
+          const action = (rawAction && typeof rawAction === 'object' ? rawAction : {}) as Record<string, unknown>;
+          return {
+            action: enumValue(action.action, localActions, 'ignore'),
+            available: Boolean(action.available),
+            confirmation_required: Boolean(action.confirmation_required),
+            reason: action.reason ? String(action.reason) : undefined,
+          };
+        })
+      : [],
+  };
+};
+
+export const mapLocalScanResult = (raw: unknown): LocalScanResult => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    server_dir: String(data.server_dir || ''),
+    scanned_at: String(data.scanned_at || ''),
+    findings: Array.isArray(data.findings) ? data.findings.map(mapLocalFinding) : [],
+    skipped_paths: stringArray(data.skipped_paths),
+    warnings: stringArray(data.warnings),
+  };
+};
+
+const mapLocalActionResult = (raw: unknown): LocalModActionResult => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    action: enumValue(data.action, localActions, 'ignore'),
+    finding_id: String(data.finding_id || ''),
+    message: String(data.message || ''),
+    mod: data.mod ? mapMod(data.mod) as LocalModActionResult['mod'] : undefined,
+    scan: mapLocalScanResult(data.scan),
+  };
 };
 
 const mapImportCandidate = (raw: unknown): ImportCandidate => {
@@ -127,6 +236,30 @@ export const mapWorkshopStatus = (raw: unknown): WorkshopStatus => {
   };
 };
 
+export const mapSteamWorkshopAuthStatus = (raw: unknown): SteamWorkshopAuthStatus => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    supported: Boolean(data.supported),
+    steamcmd_installed: Boolean(data.steamcmd_installed),
+    credentials_secure: Boolean(data.credentials_secure),
+    login_in_progress: Boolean(data.login_in_progress),
+    logged_in: Boolean(data.logged_in),
+    verification_required: Boolean(data.verification_required),
+    account_name: data.account_name ? String(data.account_name) : undefined,
+    last_verified_at: data.last_verified_at ? String(data.last_verified_at) : undefined,
+    message: data.message ? String(data.message) : undefined,
+  };
+};
+
+const emptySteamWorkshopAuthStatus: SteamWorkshopAuthStatus = {
+  supported: false,
+  steamcmd_installed: false,
+  credentials_secure: false,
+  login_in_progress: false,
+  logged_in: false,
+  verification_required: false,
+};
+
 const fallbackJob = (type: string, message: string): Job => ({
   id: `local_${Date.now()}`,
   type,
@@ -142,6 +275,24 @@ export const modsApi = {
       map: mapMods,
       quiet: true,
     }),
+
+  scanLocal: () =>
+    handleRequest<unknown, LocalScanResult>(
+      () => apiClient.post('/mods/local/scan', undefined, { timeout: 60_000 }),
+      { server_dir: '', scanned_at: '', findings: [], skipped_paths: [], warnings: [] },
+      { map: mapLocalScanResult, quiet: true, fallbackOnError: false },
+    ),
+
+  actOnLocalFinding: (finding: Pick<LocalModFinding, 'id' | 'revision'>, action: LocalModAction, confirm = false) =>
+    handleRequest<unknown, LocalModActionResult>(
+      () => apiClient.post(`/mods/local/findings/${encodeURIComponent(finding.id)}/actions`, {
+        action,
+        revision: finding.revision,
+        confirm: confirm || undefined,
+      }),
+      { action, finding_id: finding.id, message: '', scan: { server_dir: '', scanned_at: '', findings: [], skipped_paths: [], warnings: [] } },
+      { map: mapLocalActionResult, quiet: true, fallbackOnError: false },
+    ),
 
   upload: (file: File, enable: boolean) => {
     const form = new FormData();
@@ -201,6 +352,35 @@ export const modsApi = {
       () => apiClient.get('/mods/workshop/status'),
       { configured: false, key_source: '', app_id: '1623730' },
       { map: mapWorkshopStatus, quiet: true, fallbackOnError: false },
+    ),
+
+  workshopAuthStatus: () =>
+    handleRequest<unknown, SteamWorkshopAuthStatus>(
+      () => apiClient.get('/mods/workshop/auth/status', { timeout: STEAM_AUTH_OPERATION_TIMEOUT_MS }),
+      emptySteamWorkshopAuthStatus,
+      { map: mapSteamWorkshopAuthStatus, quiet: true, fallbackOnError: false },
+    ),
+
+  startWorkshopAuth: (accountName?: string) =>
+    handleRequest<unknown, SteamWorkshopAuthStatus>(
+      () => apiClient.post(
+        '/mods/workshop/auth/start',
+        { account_name: accountName?.trim() || undefined },
+        { timeout: STEAM_AUTH_OPERATION_TIMEOUT_MS },
+      ),
+      emptySteamWorkshopAuthStatus,
+      { map: mapSteamWorkshopAuthStatus, quiet: true, fallbackOnError: false },
+    ),
+
+  verifyWorkshopAuth: (accountName?: string) =>
+    handleRequest<unknown, SteamWorkshopAuthStatus>(
+      () => apiClient.post(
+        '/mods/workshop/auth/verify',
+        { account_name: accountName?.trim() || undefined },
+        { timeout: STEAM_AUTH_OPERATION_TIMEOUT_MS },
+      ),
+      emptySteamWorkshopAuthStatus,
+      { map: mapSteamWorkshopAuthStatus, quiet: true, fallbackOnError: false },
     ),
 
   searchWorkshop: (params: { q?: string; sort?: string; cursor?: string; page_size?: number; tags?: string[] }) =>

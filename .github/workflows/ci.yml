@@ -96,20 +96,42 @@ jobs:
         run: |
           $gcc = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\gcc.exe"
           if (-not (Test-Path $gcc)) { throw "MinGW gcc not found: $gcc" }
-          ./scripts/package.ps1 -Version $env:CI_PACKAGE_VERSION -Clean -MingwGcc $gcc
-      - name: Launcher and process smoke test
+          $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE "dev-runtime\windows"
+          ./scripts/package.ps1 -Version $env:CI_PACKAGE_VERSION -Clean -MingwGcc $gcc -RuntimeRoot $runtimeRoot
+      - name: Windows upgrade, uninstall, and recovery contract
         shell: pwsh
         run: |
-          $objdump = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\objdump.exe"
-          ./scripts/verify-windows-package.ps1 -Archive "dist\packages\palpanel_$($env:CI_PACKAGE_VERSION)_windows_amd64.zip" -ObjdumpPath $objdump
-          ./scripts/smoke-windows.ps1 -PackageDir "dist\packages\palpanel_$($env:CI_PACKAGE_VERSION)_windows_amd64" -Version $env:CI_PACKAGE_VERSION
+          $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE "dev-runtime\windows"
+          ./scripts/test-windows-upgrade.ps1 -RuntimeRoot $runtimeRoot
+      - name: Offline Windows E2E validation
+        shell: pwsh
+        run: |
+          $env:PALPANEL_OBJDUMP_PATH = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\objdump.exe"
+          $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE "dev-runtime\windows"
+          ./scripts/e2e-windows.ps1 `
+            -RuntimeRoot $runtimeRoot `
+            -SkipGameDownload `
+            -SkipLiveServer `
+            -SkipPalDefender `
+            -TimeoutMinutes 30
+      - name: Upload Windows validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: palpanel-windows-validation-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            dev-runtime/windows/artifacts/**
+            dev-runtime/windows/e2e/**
+            dev-runtime/windows/temp/**
       - name: Upload Windows CI package
         uses: actions/upload-artifact@v4
         with:
           name: palpanel-windows-amd64-${{ github.sha }}
           if-no-files-found: error
           retention-days: 7
-          path: dist/packages/palpanel_${{ env.CI_PACKAGE_VERSION }}_windows_amd64.zip
+          path: dev-runtime/windows/package/palpanel_${{ env.CI_PACKAGE_VERSION }}_windows_amd64.zip
 
   vulnerability:
     runs-on: ubuntu-24.04

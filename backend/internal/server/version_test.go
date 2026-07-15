@@ -158,6 +158,27 @@ func TestWithGameVersionReportsCompatibility(t *testing.T) {
 	}
 }
 
+func TestValidateWindowsServerInstallAcceptsCurrentCommandExecutable(t *testing.T) {
+	m, closeStore := newVersionTestManager(t, "24181105")
+	defer closeStore()
+	if err := m.validateWindowsServerInstall(); err != nil {
+		t.Fatalf("validateWindowsServerInstall returned error: %v", err)
+	}
+}
+
+func TestValidateWindowsServerInstallAcceptsLegacyCommandExecutable(t *testing.T) {
+	m, closeStore := newVersionTestManager(t, "24181105")
+	defer closeStore()
+	current := filepath.Join(m.cfg.Win64Dir(), "PalServer-Win64-Shipping-Cmd.exe")
+	if err := os.Remove(current); err != nil {
+		t.Fatalf("Remove current command executable returned error: %v", err)
+	}
+	writeFile(t, filepath.Join(m.cfg.Win64Dir(), "PalServer-Win64-Test-Cmd.exe"), "MZ-test-palserver-cmd")
+	if err := m.validateWindowsServerInstall(); err != nil {
+		t.Fatalf("legacy command executable was rejected: %v", err)
+	}
+}
+
 func newVersionTestManager(t *testing.T, buildID string) (Manager, func()) {
 	t.Helper()
 	root := t.TempDir()
@@ -189,9 +210,15 @@ func newVersionTestManager(t *testing.T, buildID string) (Manager, func()) {
 	if err := store.SetKV(context.Background(), kvRuntimeMode, RuntimeWindowsSteamCMD); err != nil {
 		t.Fatalf("SetKV runtime returned error: %v", err)
 	}
-	writeFile(t, cfg.PalServerExePath(), "")
+	writeFile(t, cfg.PalServerExePath(), "MZ-test-palserver")
+	writeFile(t, filepath.Join(cfg.Win64Dir(), "PalServer-Win64-Shipping-Cmd.exe"), "MZ-test-palserver-cmd")
 	writeAppManifest(t, m, buildID)
-	return m, func() { _ = store.Close() }
+	return m, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = m.jobs.Shutdown(shutdownCtx)
+		_ = store.Close()
+	}
 }
 
 func writeAppManifest(t *testing.T, m Manager, buildID string) {

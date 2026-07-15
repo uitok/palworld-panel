@@ -1,6 +1,19 @@
 # Runtime data
 /data/
+/dev-runtime/
 /dist/packages/
+/.playwright-cli/
+/output/
+/*.log
+
+# Defensive SteamCMD credential/session and download exclusions. The managed runtime
+# should already be below dev-runtime, but these prevent accidental alternate-root adds.
+**/steamcmd/config/
+**/steamcmd/userdata/
+**/steamcmd/logs/
+**/steamcmd/steamapps/
+**/steamcmd/steamcmd.exe
+**/steamcmd/steamclient.dll
 
 # Backend build and local logs
 /backend/bin/

@@ -15,17 +15,21 @@ import (
 	"palpanel/internal/db"
 	"palpanel/internal/docker"
 	"palpanel/internal/jobs"
+	"palpanel/internal/steamcmd"
 )
 
 var workshopIDPattern = regexp.MustCompile(`^\d{5,20}$`)
 
 type Manager struct {
-	cfg      appconfig.Config
-	store    *db.Store
-	runner   docker.Runner
-	workshop *WorkshopService
-	jobs     *jobs.Executor
-	imports  *importRegistry
+	cfg       appconfig.Config
+	store     *db.Store
+	runner    docker.Runner
+	native    nativeWorkshopDownloader
+	steamAuth workshopAuthenticator
+	workshop  *WorkshopService
+	jobs      *jobs.Executor
+	imports   *importRegistry
+	local     *localActionState
 }
 
 func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, executors ...*jobs.Executor) Manager {
@@ -33,7 +37,11 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, exe
 	if len(executors) > 0 && executors[0] != nil {
 		executor = executors[0]
 	}
-	return Manager{cfg: cfg, store: store, runner: runner, workshop: NewWorkshopService(cfg), jobs: executor, imports: newImportRegistry(cfg)}
+	nativeClient := steamcmd.New(cfg)
+	return Manager{
+		cfg: cfg, store: store, runner: runner, native: nativeClient, steamAuth: nativeClient,
+		workshop: NewWorkshopService(cfg), jobs: executor, imports: newImportRegistry(cfg), local: &localActionState{},
+	}
 }
 
 func (m Manager) List(ctx context.Context) ([]db.Mod, error) {
@@ -45,7 +53,7 @@ func (m Manager) UploadZip(ctx context.Context, r io.Reader, filename string, en
 	if err != nil {
 		return db.Mod{}, err
 	}
-	defer os.RemoveAll(record.directory)
+	defer func() { _ = m.removeManagedDirectory(record.directory) }()
 	workDir := record.directory
 	zipPath := filepath.Join(workDir, cleanFilename(filename))
 	if _, err := writeLimitedFile(r, zipPath, m.imports.maxBytes); err != nil {
@@ -97,12 +105,15 @@ func (m Manager) DownloadWorkshop(ctx context.Context, itemID string, enable boo
 	if !workshopIDPattern.MatchString(itemID) {
 		return db.Job{}, fmt.Errorf("workshop item id must be numeric")
 	}
+	if _, err := m.RequireWorkshopLogin(ctx); err != nil {
+		return db.Job{}, err
+	}
 	record, err := m.imports.newRecord(itemID)
 	if err != nil {
 		return db.Job{}, err
 	}
 	job, err := m.jobs.Submit(ctx, jobs.ClassLifecycle, "workshop_download", "queued workshop download", func(jobCtx context.Context, jobID string) {
-		defer os.RemoveAll(record.directory)
+		defer func() { _ = m.removeManagedDirectory(record.directory) }()
 		var meta WorkshopItem
 		if item, err := m.workshop.Detail(jobCtx, itemID); err == nil {
 			meta = item
@@ -110,7 +121,7 @@ func (m Manager) DownloadWorkshop(ctx context.Context, itemID string, enable boo
 		m.runWorkshopImport(jobCtx, jobID, itemID, enable, meta, record.directory)
 	})
 	if err != nil {
-		_ = os.RemoveAll(record.directory)
+		_ = m.removeManagedDirectory(record.directory)
 		return db.Job{}, err
 	}
 	return job, nil
@@ -137,7 +148,11 @@ func (m Manager) Delete(ctx context.Context, modID string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(mod.Path); err != nil {
+	target, err := palPanelOwnedModTarget(m.cfg.WorkshopModsDir(), mod.ID, mod.Path)
+	if err != nil {
+		return err
+	}
+	if err := m.removeManagedDirectory(target); err != nil {
 		return err
 	}
 	if err := m.store.DeleteMod(ctx, modID); err != nil {
@@ -148,6 +163,18 @@ func (m Manager) Delete(ctx context.Context, modID string) error {
 	}
 	_ = m.store.SetKV(ctx, "pending_restart", "true")
 	return nil
+}
+
+func (m Manager) removeManagedDirectory(path string) error {
+	if err := m.cfg.ValidateManagedPath(path, false); err != nil {
+		return err
+	}
+	// Revalidate immediately before the destructive operation so a path changed
+	// into a junction or symlink after an earlier check cannot escape the root.
+	if err := m.cfg.ValidateManagedPath(path, false); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
 }
 
 func (m Manager) mergeWorkshopState(ctx context.Context, result WorkshopSearchResult) (WorkshopSearchResult, error) {

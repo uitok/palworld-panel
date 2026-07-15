@@ -122,7 +122,20 @@ export const Security: React.FC = () => {
               <InfoRow label="版本" value={status.version || '未知'} ok={Boolean(status.version)} />
               <InfoRow label="内置 DLL" value={status.bundled.version ? `v${status.bundled.version}` : '不可用'} ok={Boolean(status.bundled.version)} />
               <InfoRow label="REST API" value={status.rest_api_enabled ? '已启用' : '未启用'} ok={status.rest_api_enabled} />
+              <InfoRow label="PalDefender 加载" value={status.load_verified ? '启动日志已确认' : '尚未确认'} ok={status.load_verified} />
+              <InfoRow
+                label="UE4SS"
+                value={status.ue4ss.version ? `${status.ue4ss.state} (${status.ue4ss.version})` : status.ue4ss.state}
+                ok={status.ue4ss.compatible}
+              />
+              <InfoRow label="UE4SS 加载" value={status.ue4ss.load_verified ? '启动日志已确认' : '尚未确认'} ok={status.ue4ss.load_verified} />
               <InfoRow label="首次启动" value={status.needs_first_start ? '需要启动生成配置' : '已就绪'} ok={!status.needs_first_start} />
+              {status.ue4ss.message && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] font-semibold text-slate-700">
+                  {status.ue4ss.message}
+                  {status.ue4ss.error && <p className="mt-1 text-rose-600">{status.ue4ss.error}</p>}
+                </div>
+              )}
               {status.warnings.length > 0 && (
                 <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-[11px] font-semibold text-amber-800">
                   {status.warnings.join(' / ')}

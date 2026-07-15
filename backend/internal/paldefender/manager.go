@@ -22,6 +22,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
+	"palpanel/internal/id"
 	"palpanel/internal/jobs"
 )
 
@@ -67,6 +68,8 @@ type Manager struct {
 	restClient  *http.Client
 	restBaseURL string
 	jobs        *jobs.Executor
+	ue4ss       *dependencyTracker
+	serverState ServerState
 }
 
 type Release struct {
@@ -84,14 +87,17 @@ type Asset struct {
 }
 
 type Status struct {
-	Installed       bool              `json:"installed"`
-	Version         string            `json:"version,omitempty"`
-	Bundled         BundledAssetInfo  `json:"bundled"`
-	NeedsFirstStart bool              `json:"needs_first_start"`
-	Files           map[string]bool   `json:"files"`
-	Paths           map[string]string `json:"paths"`
-	RESTAPIEnabled  bool              `json:"rest_api_enabled"`
-	Warnings        []string          `json:"warnings"`
+	Installed       bool                  `json:"installed"`
+	Version         string                `json:"version,omitempty"`
+	Bundled         BundledAssetInfo      `json:"bundled"`
+	NeedsFirstStart bool                  `json:"needs_first_start"`
+	Files           map[string]bool       `json:"files"`
+	Paths           map[string]string     `json:"paths"`
+	RESTAPIEnabled  bool                  `json:"rest_api_enabled"`
+	Warnings        []string              `json:"warnings"`
+	UE4SS           UE4SSDependencyStatus `json:"ue4ss"`
+	LoadVerified    bool                  `json:"load_verified"`
+	LoadEvidence    string                `json:"load_evidence,omitempty"`
 }
 
 type TokenResult struct {
@@ -106,7 +112,7 @@ func NewManager(cfg appconfig.Config, store *db.Store, executors ...*jobs.Execut
 	if len(executors) > 0 && executors[0] != nil {
 		executor = executors[0]
 	}
-	return Manager{cfg: cfg, store: store, client: &http.Client{Timeout: 60 * time.Second}, restClient: newRESTHTTPClient(), restBaseURL: cfg.EffectivePalDefenderRESTBaseURL(), jobs: executor}
+	return Manager{cfg: cfg, store: store, client: &http.Client{Timeout: 60 * time.Second}, restClient: newRESTHTTPClient(), restBaseURL: cfg.EffectivePalDefenderRESTBaseURL(), jobs: executor, ue4ss: newDependencyTracker()}
 }
 
 func (m Manager) Releases(ctx context.Context) ([]Release, error) {
@@ -142,6 +148,14 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 	if installed && !dirExists(m.cfg.PalDefenderDir()) {
 		warnings = append(warnings, "PalDefender directory has not been generated yet; start the server once")
 	}
+	ue4ssStatus := m.UE4SSStatus()
+	if !ue4ssStatus.Compatible {
+		warnings = append(warnings, ue4ssStatus.Message)
+	}
+	loadVerified, loadEvidence := m.palDefenderLoadEvidence()
+	if !loadVerified && installed {
+		warnings = append(warnings, "PalDefender files are installed but startup-log loading has not been verified yet")
+	}
 	return Status{
 		Installed:       installed,
 		Version:         version,
@@ -158,7 +172,45 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 		},
 		RESTAPIEnabled: m.restEnabled(),
 		Warnings:       warnings,
+		UE4SS:          ue4ssStatus,
+		LoadVerified:   loadVerified,
+		LoadEvidence:   loadEvidence,
 	}, nil
+}
+
+func (m Manager) palDefenderLoadEvidence() (bool, string) {
+	type logCandidate struct {
+		path    string
+		modTime time.Time
+	}
+	logDir := filepath.Join(m.cfg.PalDefenderDir(), "Logs")
+	entries, err := os.ReadDir(logDir)
+	if err == nil {
+		candidates := make([]logCandidate, 0, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".log") {
+				continue
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			candidates = append(candidates, logCandidate{path: filepath.Join(logDir, entry.Name()), modTime: info.ModTime()})
+		}
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime.After(candidates[j].modTime) })
+		if len(candidates) > 20 {
+			candidates = candidates[:20]
+		}
+		for _, candidate := range candidates {
+			if logContainsMarkers(candidate.path, "starting paldefender anti cheat") {
+				return true, "paldefender_log"
+			}
+		}
+	}
+	if logContainsMarkers(m.cfg.ServerLogPath(), "paldefender", "load") || logContainsMarkers(m.cfg.ServerLogPath(), "paldefender", "version") {
+		return true, "palserver_log"
+	}
+	return false, ""
 }
 
 func (m Manager) Install(ctx context.Context) (db.Job, error) {
@@ -327,15 +379,21 @@ func BalancedPreset() map[string]any {
 
 func (m Manager) installJob(ctx context.Context, typ, message string) (db.Job, error) {
 	return m.jobs.Submit(ctx, jobs.ClassLifecycle, typ, message, func(jobCtx context.Context, jobID string) {
-		m.update(jobID, "running", 10, "fetching latest PalDefender release", "")
-		release, err := m.Latest(jobCtx)
-		if err != nil {
-			m.update(jobID, "failed", 10, "release lookup failed", err.Error())
+		m.update(jobID, "running", 5, "checking Palworld state and UE4SS dependency", "")
+		if _, err := m.ensureUE4SS(jobCtx); err != nil {
+			status := m.UE4SSStatus()
+			m.update(jobID, "failed", 5, "UE4SS dependency stage failed: "+status.State, err.Error())
 			return
 		}
-		m.update(jobID, "running", 30, "downloading PalDefender assets", "")
+		m.update(jobID, "running", 35, "UE4SS verified; fetching latest PalDefender release", "")
+		release, err := m.Latest(jobCtx)
+		if err != nil {
+			m.update(jobID, "failed", 35, "PalDefender release lookup failed", err.Error())
+			return
+		}
+		m.update(jobID, "running", 55, "downloading and transactionally installing PalDefender assets", "")
 		if err := m.installRelease(jobCtx, release); err != nil {
-			m.update(jobID, "failed", 30, "install failed", err.Error())
+			m.update(jobID, "failed", 55, "PalDefender install stage failed", err.Error())
 			return
 		}
 		installedVersion := BundledPalDefenderVersion + "+bundled"
@@ -348,33 +406,76 @@ func (m Manager) installJob(ctx context.Context, typ, message string) (db.Job, e
 }
 
 func (m Manager) installRelease(ctx context.Context, release Release) error {
-	if err := os.MkdirAll(m.cfg.Win64Dir(), 0o755); err != nil {
+	for _, path := range []string{m.cfg.ToolsDir, m.cfg.Win64Dir(), m.cfg.BackupsDir} {
+		if err := m.cfg.ValidateManagedPath(path, false); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(m.cfg.ToolsDir, 0o755); err != nil {
 		return err
 	}
-	if err := m.backupCurrent(); err != nil {
+	stage, err := os.MkdirTemp(m.cfg.ToolsDir, "paldefender-stage-")
+	if err != nil {
 		return err
 	}
+	defer func() { _ = m.removeManagedDirectory(stage) }()
+	var loaderPath string
 	zipAsset := findAsset(release.Assets, "PalDefender.zip")
 	if zipAsset.BrowserDownloadURL != "" {
-		zipPath := filepath.Join(m.cfg.ToolsDir, "PalDefender-"+release.TagName+".zip")
+		zipPath := filepath.Join(stage, "PalDefender.zip")
 		if err := m.downloadAsset(ctx, zipAsset, zipPath); err != nil {
 			return err
 		}
-		tmp := filepath.Join(m.cfg.ToolsDir, "paldefender-"+release.TagName)
-		_ = os.RemoveAll(tmp)
-		if err := extractZipSafe(zipPath, tmp); err != nil {
+		extracted := filepath.Join(stage, "extracted")
+		validate := func(path string) error { return m.cfg.ValidateManagedPath(path, false) }
+		if err := extractZipSafeValidated(zipPath, extracted, 256<<20, validate); err != nil {
 			return err
 		}
-		return m.copyInstalledFiles(tmp)
+		loaderPath, err = findFile(extracted, "d3d9.dll")
+		if err != nil {
+			return err
+		}
+	} else {
+		asset := findAsset(release.Assets, "d3d9.dll")
+		if asset.BrowserDownloadURL == "" {
+			return fmt.Errorf("release asset d3d9.dll not found")
+		}
+		loaderPath = filepath.Join(stage, "d3d9.dll")
+		if err := m.downloadAsset(ctx, asset, loaderPath); err != nil {
+			return err
+		}
 	}
-	asset := findAsset(release.Assets, "d3d9.dll")
-	if asset.BrowserDownloadURL == "" {
-		return fmt.Errorf("release asset d3d9.dll not found")
-	}
-	if err := m.downloadAsset(ctx, asset, filepath.Join(m.cfg.Win64Dir(), "d3d9.dll")); err != nil {
+	if err := validateBundledDLL(); err != nil {
 		return err
 	}
-	return m.installBundledDLL()
+	bundledPath := filepath.Join(stage, "PalDefender.dll")
+	if err := os.WriteFile(bundledPath, bundledPalDefenderDLL, 0o600); err != nil {
+		return err
+	}
+	backupDir := filepath.Join(m.cfg.BackupsDir, "paldefender-"+time.Now().UTC().Format("20060102T150405.000000000Z")+"-"+id.New("backup"))
+	mutations := make([]ue4ssMutation, 0, 2)
+	for _, item := range []struct {
+		source string
+		name   string
+	}{
+		{source: loaderPath, name: "d3d9.dll"},
+		{source: bundledPath, name: "PalDefender.dll"},
+	} {
+		mutation, err := m.replaceUE4SSFile(item.source, filepath.Join(m.cfg.Win64Dir(), item.name), filepath.Join(backupDir, item.name))
+		if err != nil {
+			if rollbackErr := rollbackUE4SSMutations(m, mutations); rollbackErr != nil {
+				return fmt.Errorf("PalDefender install failed: %v; rollback failed: %v", err, rollbackErr)
+			}
+			return fmt.Errorf("PalDefender install failed and previous files were restored: %w", err)
+		}
+		mutations = append(mutations, mutation)
+	}
+	for _, mutation := range mutations {
+		if mutation.oldPath != "" {
+			_ = os.Remove(mutation.oldPath)
+		}
+	}
+	return nil
 }
 
 func (m Manager) copyInstalledFiles(root string) error {
@@ -389,6 +490,9 @@ func (m Manager) copyInstalledFiles(root string) error {
 }
 
 func (m Manager) downloadAsset(ctx context.Context, asset Asset, dst string) error {
+	if err := m.cfg.ValidateManagedPath(dst, false); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.BrowserDownloadURL, nil)
 	if err != nil {
 		return err
@@ -398,12 +502,20 @@ func (m Manager) downloadAsset(ctx context.Context, asset Asset, dst string) err
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("download %s returned status %d", asset.Name, resp.StatusCode)
 	}
+	const maxAssetBytes int64 = 64 << 20
+	if resp.ContentLength > maxAssetBytes || asset.Size > maxAssetBytes {
+		return fmt.Errorf("download %s exceeds the size limit", asset.Name)
+	}
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, resp.Body); err != nil {
+	written, err := io.Copy(&buf, io.LimitReader(resp.Body, maxAssetBytes+1))
+	if err != nil {
 		return err
+	}
+	if written > maxAssetBytes {
+		return fmt.Errorf("download %s exceeds the size limit", asset.Name)
 	}
 	if err := verifyDigest(asset, buf.Bytes()); err != nil {
 		return err
@@ -411,16 +523,41 @@ func (m Manager) downloadAsset(ctx context.Context, asset Asset, dst string) err
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, buf.Bytes(), 0o644)
+	temporary, err := os.CreateTemp(filepath.Dir(dst), ".paldefender-download-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	complete := false
+	defer func() {
+		_ = temporary.Close()
+		if !complete {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if _, err := temporary.Write(buf.Bytes()); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, dst); err != nil {
+		return err
+	}
+	complete = true
+	return nil
 }
 
 func verifyDigest(asset Asset, b []byte) error {
 	if asset.Digest == "" {
-		return nil
+		return fmt.Errorf("%s release asset has no SHA-256 digest", asset.Name)
 	}
 	want, ok := strings.CutPrefix(asset.Digest, "sha256:")
 	if !ok {
-		return nil
+		return fmt.Errorf("%s release asset uses an unsupported digest", asset.Name)
 	}
 	sum := sha256.Sum256(b)
 	got := hex.EncodeToString(sum[:])
@@ -634,6 +771,10 @@ func findFile(root, name string) (string, error) {
 }
 
 func extractZipSafe(zipPath, dst string) error {
+	return extractZipSafeValidated(zipPath, dst, 1<<30, nil)
+}
+
+func extractZipSafeValidated(zipPath, dst string, maxExtractedBytes int64, validate func(string) error) error {
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
@@ -643,17 +784,58 @@ func extractZipSafe(zipPath, dst string) error {
 	if err != nil {
 		return err
 	}
+	if maxExtractedBytes <= 0 {
+		return fmt.Errorf("invalid extracted size limit")
+	}
+	if len(reader.File) > 20_000 {
+		return fmt.Errorf("zip contains too many entries")
+	}
+	if validate != nil {
+		if err := validate(dst); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(reader.File))
+	var declaredBytes int64
+	var extractedBytes int64
 	for _, file := range reader.File {
-		target := filepath.Join(dst, file.Name)
+		normalized := strings.ReplaceAll(strings.TrimSuffix(file.Name, "/"), "\\", "/")
+		if unsafeArchiveEntryName(normalized) {
+			return fmt.Errorf("zip contains unsafe path: %s", file.Name)
+		}
+		key := strings.ToLower(normalized)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("zip contains duplicate path: %s", file.Name)
+		}
+		seen[key] = struct{}{}
+		if file.UncompressedSize64 > uint64(maxExtractedBytes) || declaredBytes > maxExtractedBytes-int64(file.UncompressedSize64) {
+			return fmt.Errorf("zip exceeds the extracted size limit")
+		}
+		declaredBytes += int64(file.UncompressedSize64)
+		mode := file.Mode()
+		isDirectory := file.FileInfo().IsDir()
+		if mode&os.ModeSymlink != 0 || (!isDirectory && mode.Type() != 0) {
+			return fmt.Errorf("zip contains unsupported file type: %s", file.Name)
+		}
+		target := filepath.Join(dst, filepath.FromSlash(normalized))
 		targetAbs, err := filepath.Abs(target)
 		if err != nil {
 			return err
 		}
-		if targetAbs != dst && !strings.HasPrefix(targetAbs, dst+string(os.PathSeparator)) {
+		relative, err := filepath.Rel(dst, targetAbs)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 			return fmt.Errorf("zip contains unsafe path: %s", file.Name)
 		}
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(targetAbs, file.Mode()); err != nil {
+		if validate != nil {
+			if err := validate(targetAbs); err != nil {
+				return err
+			}
+		}
+		if isDirectory {
+			if err := os.MkdirAll(targetAbs, 0o755); err != nil {
 				return err
 			}
 			continue
@@ -661,26 +843,65 @@ func extractZipSafe(zipPath, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
 			return err
 		}
+		if validate != nil {
+			if err := validate(targetAbs); err != nil {
+				return err
+			}
+		}
 		in, err := file.Open()
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(targetAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.Mode())
+		permissions := mode.Perm()
+		if permissions == 0 {
+			permissions = 0o644
+		}
+		out, err := os.OpenFile(targetAbs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, permissions)
 		if err != nil {
 			_ = in.Close()
 			return err
 		}
-		_, copyErr := io.Copy(out, in)
+		remaining := maxExtractedBytes - extractedBytes
+		written, copyErr := io.Copy(out, io.LimitReader(in, remaining+1))
+		extractedBytes += written
 		closeErr := out.Close()
 		_ = in.Close()
 		if copyErr != nil {
 			return copyErr
+		}
+		if extractedBytes > maxExtractedBytes {
+			return fmt.Errorf("zip exceeds the extracted size limit")
 		}
 		if closeErr != nil {
 			return closeErr
 		}
 	}
 	return nil
+}
+
+func unsafeArchiveEntryName(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, ":") {
+		return true
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(name)))
+	if clean != name || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || filepath.IsAbs(filepath.FromSlash(clean)) {
+		return true
+	}
+	for _, component := range strings.Split(clean, "/") {
+		if component == "" || strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") || strings.ContainsAny(component, `<>"|?*`) {
+			return true
+		}
+		base := component
+		if index := strings.IndexByte(base, '.'); index >= 0 {
+			base = base[:index]
+		}
+		base = strings.ToUpper(base)
+		if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || base == "CLOCK$" ||
+			(len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9') {
+			return true
+		}
+	}
+	return false
 }
 
 func copyFile(src, dst string) error {

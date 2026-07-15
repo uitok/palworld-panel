@@ -82,12 +82,13 @@ OptionSettings=(AdminPassword="secret",RCONEnabled=False)`
 		RuntimeMode: server.RuntimeWineDocker,
 		Container:   docker.ContainerStatus{Exists: true, Status: "running"},
 	}}, palrest.New(restServer.URL, "admin", ""))
+	manager.diskUsage = func(string) (int64, int64, error) {
+		return 800 * 1024, 1000 * 1024, nil
+	}
 	manager.run = func(_ context.Context, name string, _ ...string) ([]byte, error) {
 		switch name {
 		case "docker":
 			return []byte("12.5%|1.5GiB / 4GiB\n"), nil
-		case "df":
-			return []byte("Filesystem 1K-blocks Used Available Use% Mounted\n/dev/test 1000 200 800 20% /\n"), nil
 		default:
 			return nil, errors.New("unexpected command: " + name)
 		}
@@ -135,12 +136,11 @@ func TestSampleCollectsWindowsStatsAndCanDisableHistory(t *testing.T) {
 		Container:   docker.ContainerStatus{Exists: true, Status: "running"},
 	}}, palrest.New(restServer.URL, "", ""))
 	manager.goos = "windows"
+	manager.diskUsage = func(string) (int64, int64, error) { return 100, 1000, nil }
 	manager.run = func(_ context.Context, name string, _ ...string) ([]byte, error) {
 		switch name {
 		case "tasklist":
 			return []byte(`"PalServer.exe","123","Console","1","1,024 K"` + "\n"), nil
-		case "powershell":
-			return []byte("100\n1000\n"), nil
 		default:
 			return nil, errors.New("unexpected command")
 		}
@@ -176,6 +176,7 @@ OptionSettings=(RCONEnabled=True,RCONPort=25575)`
 		t.Fatal(err)
 	}
 	manager := New(cfg, store, fakeStatusServer{err: errors.New("status unavailable")}, palrest.New("http://127.0.0.1:1", "", ""))
+	manager.diskUsage = func(string) (int64, int64, error) { return 0, 0, errors.New("failed") }
 	manager.run = func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return []byte("df failed"), errors.New("failed")
 	}
@@ -226,6 +227,7 @@ func TestHelpersAndBackgroundLoop(t *testing.T) {
 	}
 	defer store.Close()
 	manager := New(appconfig.Config{DataDir: root, ServerDir: filepath.Join(root, "server"), MonitorRetentionDays: 0}, store, fakeStatusServer{}, palrest.New("http://127.0.0.1:1", "", ""))
+	manager.diskUsage = func(string) (int64, int64, error) { return 0, 0, errors.New("unavailable") }
 	manager.run = func(_ context.Context, _ string, _ ...string) ([]byte, error) { return nil, errors.New("unavailable") }
 	ctx, cancel := context.WithCancel(t.Context())
 	done := manager.Start(ctx)

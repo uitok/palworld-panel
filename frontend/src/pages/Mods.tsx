@@ -1,35 +1,44 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-	AlertTriangle,
+  AlertTriangle,
   CheckCircle2,
   DownloadCloud,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileArchive,
+  FolderSearch,
   Info,
   Languages,
+  LogIn,
+  MonitorUp,
   PackageCheck,
   Power,
   RefreshCw,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   Trash2,
   UploadCloud,
+  Wrench,
   X,
 } from 'lucide-react';
-import { getErrorMessage } from '../api/client';
+import { ApiError, getErrorMessage } from '../api/client';
 import { modsApi } from '../api/mods';
+import { securityApi } from '../api/security';
 import { serverApi } from '../api/server';
 import { tasksApi } from '../api/tasks';
-import type { ImportInspection, Job, ModItem, WorkshopItem } from '../types';
+import type { ImportInspection, Job, LocalModAction, LocalModFinding, LocalScanResult, ModItem, PalDefenderStatus, SteamWorkshopAuthStatus, WorkshopItem } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { useServerStore } from '../store/useServerStore';
 
-type ModsTab = 'store' | 'installed';
+type ModsTab = 'store' | 'installed' | 'local';
 
 const tabs: Array<{ id: ModsTab; label: string }> = [
   { id: 'store', label: 'Mod 商店' },
   { id: 'installed', label: '已安装' },
+  { id: 'local', label: '本地检测' },
 ];
 
 const sortOptions = [
@@ -39,13 +48,22 @@ const sortOptions = [
   { id: 'updated', label: '最近更新' },
 ];
 
+const isSteamLoginRequired = (error: unknown) => error instanceof ApiError && error.code === 'steam_login_required';
+
+const isWorkshopImportSource = (source: string) => {
+  const value = source.trim();
+  return /^\d+$/.test(value) || /^https?:\/\/(?:www\.)?steamcommunity\.com\/sharedfiles\/filedetails\//i.test(value);
+};
+
 export const Mods: React.FC = () => {
   const { session } = useServerStore();
+  const canAuthenticateSteam = Boolean(session?.permissions.includes('security:write'));
   const [activeTab, setActiveTab] = useState<ModsTab>('store');
   const [mods, setMods] = useState<ModItem[]>([]);
+  const [securityStatus, setSecurityStatus] = useState<PalDefenderStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [installedSearch, setInstalledSearch] = useState('');
-	const [importOpen, setImportOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -58,34 +76,121 @@ export const Mods: React.FC = () => {
   const [storeNextCursor, setStoreNextCursor] = useState<string | undefined>();
   const [storeLoading, setStoreLoading] = useState(false);
   const [storeError, setStoreError] = useState<string | null>(null);
-  const [statusLoading, setStatusLoading] = useState(true);
+  const [workshopAuth, setWorkshopAuth] = useState<SteamWorkshopAuthStatus | null>(null);
+  const [workshopAuthLoading, setWorkshopAuthLoading] = useState(true);
+  const [workshopAuthError, setWorkshopAuthError] = useState<string | null>(null);
+  const [workshopLoginOpen, setWorkshopLoginOpen] = useState(false);
   const [selectedWorkshop, setSelectedWorkshop] = useState<WorkshopItem | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationError, setTranslationError] = useState<string | null>(null);
+  const [localScan, setLocalScan] = useState<LocalScanResult | null>(null);
+  const [localScanLoading, setLocalScanLoading] = useState(false);
+  const [localScanError, setLocalScanError] = useState<string | null>(null);
+  const [localScanSearch, setLocalScanSearch] = useState('');
+  const [localActionBusy, setLocalActionBusy] = useState<string | null>(null);
   const initialLoadRef = useRef(false);
+  const localScanRequestedRef = useRef(false);
 
   const loadInstalled = useCallback(async () => {
     setLoading(true);
-    const [list, status] = await Promise.all([modsApi.list(), serverApi.getStatus()]);
+    const [list, status, nextSecurityStatus] = await Promise.all([
+      modsApi.list(),
+      serverApi.getStatus(),
+      securityApi.status(),
+    ]);
     setMods(Array.isArray(list) ? list : []);
     setPendingRestart(status.pending_restart);
+    setSecurityStatus(nextSecurityStatus);
     setLoading(false);
   }, []);
 
-  const loadWorkshopStatus = useCallback(async () => {
-    setStatusLoading(true);
+  const loadWorkshopAuthStatus = useCallback(async () => {
+    setWorkshopAuthLoading(true);
+    setWorkshopAuthError(null);
     try {
-      return await modsApi.workshopStatus();
+      const status = await modsApi.workshopAuthStatus();
+      setWorkshopAuth(status);
+      if (!status.logged_in) {
+        setStoreItems([]);
+        setStoreNextCursor(undefined);
+        setStoreTotal(0);
+        setWorkshopLoginOpen(true);
+      }
+      return status;
     } catch (error) {
-      setStoreError(getErrorMessage(error));
-      return { configured: false, key_source: '' as const, app_id: '1623730' };
+      setWorkshopAuthError(getErrorMessage(error));
+      return null;
     } finally {
-      setStatusLoading(false);
+      setWorkshopAuthLoading(false);
     }
   }, []);
 
-  const loadStore = useCallback(async (reset = true, overrides: { sort?: string } = {}) => {
+  const handleWorkshopAuthFailure = useCallback((error: unknown) => {
+    if (!isSteamLoginRequired(error)) return false;
+    const errorMessage = getErrorMessage(error);
+    setWorkshopAuth((current) => current
+      ? { ...current, logged_in: false, login_in_progress: false, verification_required: true, message: errorMessage }
+      : {
+          supported: true,
+          steamcmd_installed: true,
+          credentials_secure: false,
+          login_in_progress: false,
+          logged_in: false,
+          verification_required: true,
+          message: errorMessage,
+        });
+    setWorkshopAuthError(errorMessage);
+    setStoreItems([]);
+    setStoreNextCursor(undefined);
+    setStoreTotal(0);
+    setSelectedWorkshop(null);
+    setWorkshopLoginOpen(true);
+    return true;
+  }, []);
+
+  const runLocalScan = useCallback(async () => {
+    setLocalScanLoading(true);
+    setLocalScanError(null);
+    try {
+      setLocalScan(await modsApi.scanLocal());
+    } catch (error) {
+      setLocalScanError(getErrorMessage(error));
+    } finally {
+      setLocalScanLoading(false);
+    }
+  }, []);
+
+  const actOnLocalFinding = async (finding: LocalModFinding, action: LocalModAction) => {
+    const capability = finding.actions.find((item) => item.action === action);
+    if (!capability?.available) return;
+    const confirmed = action !== 'delete' || window.confirm(`删除 PalPanel 管理的 Mod“${finding.name}”及其数据库记录？此操作不可撤销。`);
+    if (!confirmed) return;
+    setLocalActionBusy(`${finding.id}:${action}`);
+    setLocalScanError(null);
+    try {
+      const result = await modsApi.actOnLocalFinding(finding, action, action === 'delete');
+      setLocalScan(result.scan);
+      setMessage(result.message);
+      if (action === 'import' || action === 'repair' || action === 'delete') {
+        await loadInstalled();
+      }
+    } catch (error) {
+      setLocalScanError(getErrorMessage(error));
+    } finally {
+      setLocalActionBusy(null);
+    }
+  };
+
+  const loadStore = useCallback(async (
+    reset = true,
+    overrides: { sort?: string } = {},
+    authenticated = workshopAuth?.logged_in === true,
+  ) => {
+    if (!authenticated) {
+      setWorkshopLoginOpen(true);
+      return;
+    }
     setStoreLoading(true);
     setStoreError(null);
     try {
@@ -103,7 +208,9 @@ export const Mods: React.FC = () => {
       setStoreNextCursor(response.next_cursor);
       setStoreTotal(response.total);
     } catch (error) {
-      setStoreError(getErrorMessage(error));
+      if (!handleWorkshopAuthFailure(error)) {
+        setStoreError(getErrorMessage(error));
+      }
       if (reset) {
         setStoreItems([]);
         setStoreNextCursor(undefined);
@@ -112,16 +219,22 @@ export const Mods: React.FC = () => {
     } finally {
       setStoreLoading(false);
     }
-  }, [storeNextCursor, storeQuery, storeSort, tagText]);
+  }, [handleWorkshopAuthFailure, storeNextCursor, storeQuery, storeSort, tagText, workshopAuth?.logged_in]);
 
   useEffect(() => {
     if (initialLoadRef.current) return;
     initialLoadRef.current = true;
     void loadInstalled();
-    void loadWorkshopStatus().then(() => {
-      void loadStore();
+    void loadWorkshopAuthStatus().then((status) => {
+      if (status?.logged_in) void loadStore(true, {}, true);
     });
-  }, [loadInstalled, loadStore, loadWorkshopStatus]);
+  }, [loadInstalled, loadStore, loadWorkshopAuthStatus]);
+
+  useEffect(() => {
+    if (activeTab !== 'local' || localScanRequestedRef.current) return;
+    localScanRequestedRef.current = true;
+    void runLocalScan();
+  }, [activeTab, runLocalScan]);
 
   const storeStatusByWorkshopID = useMemo(() => {
     const map = new Map<string, WorkshopItem>();
@@ -143,6 +256,25 @@ export const Mods: React.FC = () => {
     );
   }, [mods, installedSearch]);
 
+  const filteredLocalFindings = useMemo(() => {
+    const findings = localScan?.findings || [];
+    const keyword = localScanSearch.trim().toLowerCase();
+    if (!keyword) return findings;
+    return findings.filter((finding) =>
+      [
+        finding.name,
+        finding.package_name || '',
+        finding.version || '',
+        finding.source,
+        finding.ownership,
+        finding.confidence,
+        finding.state,
+        ...finding.paths,
+        ...(finding.issues || []),
+      ].some((value) => value.toLowerCase().includes(keyword)),
+    );
+  }, [localScan, localScanSearch]);
+
   const trackJob = async (job: Job) => {
     setActiveJob(job);
     const done = await tasksApi.waitForJob(job.id, setActiveJob);
@@ -152,6 +284,10 @@ export const Mods: React.FC = () => {
   };
 
   const installWorkshop = async (itemID: string, enable: boolean) => {
+    if (!workshopAuth?.logged_in) {
+      setWorkshopLoginOpen(true);
+      return;
+    }
     if (!itemID.trim()) {
       setMessage('请输入 Steam Workshop Item ID');
       return;
@@ -163,7 +299,7 @@ export const Mods: React.FC = () => {
         await loadStore(true);
       }
     } catch (error) {
-      setMessage(getErrorMessage(error));
+      if (!handleWorkshopAuthFailure(error)) setMessage(getErrorMessage(error));
     }
   };
 
@@ -183,7 +319,7 @@ export const Mods: React.FC = () => {
       await modsApi.delete(mod.id);
       setMessage('Mod 已删除，重启后生效');
       await loadInstalled();
-      if (!storeError) {
+      if (workshopAuth?.logged_in && !storeError) {
         await loadStore(true);
       }
     } catch (error) {
@@ -192,13 +328,17 @@ export const Mods: React.FC = () => {
   };
 
   const openWorkshopDetail = async (item: WorkshopItem) => {
+    if (!workshopAuth?.logged_in) {
+      setWorkshopLoginOpen(true);
+      return;
+    }
     setSelectedWorkshop(item);
     setTranslationError(null);
     setDetailLoading(true);
     try {
       setSelectedWorkshop(await modsApi.getWorkshopItem(item.id));
     } catch (error) {
-      setMessage(getErrorMessage(error));
+      if (!handleWorkshopAuthFailure(error)) setMessage(getErrorMessage(error));
     } finally {
       setDetailLoading(false);
     }
@@ -213,6 +353,7 @@ export const Mods: React.FC = () => {
       const translation = await modsApi.translateWorkshop(workshopID, force);
       setSelectedWorkshop((current) => current?.id === workshopID ? { ...current, translation } : current);
     } catch (error) {
+      if (handleWorkshopAuthFailure(error)) return;
       const errorMessage = getErrorMessage(error);
       setTranslationError(errorMessage);
       setMessage(errorMessage);
@@ -221,12 +362,27 @@ export const Mods: React.FC = () => {
     }
   };
 
+  const workshopAuthVerified = async (status: SteamWorkshopAuthStatus) => {
+    setWorkshopAuth(status);
+    setWorkshopAuthError(null);
+    setWorkshopLoginOpen(false);
+    await loadStore(true, {}, true);
+  };
+
   const headers = [
     { key: 'name', label: 'Mod' },
     { key: 'package', label: 'PackageName' },
     { key: 'source', label: '来源' },
     { key: 'status', label: '状态' },
     { key: 'updated', label: '更新' },
+    { key: 'actions', label: '操作', align: 'center' as const },
+  ];
+  const localHeaders = [
+    { key: 'name', label: 'Mod' },
+    { key: 'source', label: '来源' },
+    { key: 'confidence', label: '置信度' },
+    { key: 'status', label: '状态' },
+    { key: 'paths', label: '路径' },
     { key: 'actions', label: '操作', align: 'center' as const },
   ];
   return (
@@ -262,7 +418,26 @@ export const Mods: React.FC = () => {
       {message && <div className="rounded-lg border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">{message}</div>}
       {activeJob && <JobProgress job={activeJob} />}
 
-      {activeTab === 'store' && (
+      {activeTab === 'store' && workshopAuthLoading && (
+        <div className="py-12 text-center text-xs font-semibold text-slate-400">
+          <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
+          正在验证 Steam 登录缓存...
+        </div>
+      )}
+
+      {activeTab === 'store' && !workshopAuthLoading && !workshopAuth?.logged_in && !workshopLoginOpen && (
+        <WorkshopAuthGate
+          status={workshopAuth}
+          error={workshopAuthError}
+          canAuthenticate={canAuthenticateSteam}
+          onLogin={() => setWorkshopLoginOpen(true)}
+          onRetry={() => void loadWorkshopAuthStatus().then((status) => {
+            if (status?.logged_in) void loadStore(true, {}, true);
+          })}
+        />
+      )}
+
+      {activeTab === 'store' && !workshopAuthLoading && workshopAuth?.logged_in && (
         <section className="flex flex-col gap-4">
           <div className="rounded-lg border border-slate-100 bg-white p-4">
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_auto]">
@@ -275,7 +450,6 @@ export const Mods: React.FC = () => {
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') void loadStore(true);
                   }}
-                  disabled={statusLoading}
                   placeholder="搜索 Workshop Mod"
                   className="w-full rounded-lg border border-slate-200 py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
                 />
@@ -286,7 +460,6 @@ export const Mods: React.FC = () => {
                   type="text"
                   value={tagText}
                   onChange={(event) => setTagText(event.target.value)}
-                  disabled={statusLoading}
                   placeholder="标签，逗号分隔"
                   className="w-full rounded-lg border border-slate-200 py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
                 />
@@ -294,7 +467,7 @@ export const Mods: React.FC = () => {
               <button
                 type="button"
                 onClick={() => loadStore(true)}
-                disabled={storeLoading || statusLoading}
+                disabled={storeLoading}
                 className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50"
               >
                 <Search size={14} />
@@ -308,7 +481,6 @@ export const Mods: React.FC = () => {
                   <button
                     key={option.id}
                     type="button"
-                    disabled={statusLoading}
                     onClick={() => {
                       setStoreSort(option.id);
                       void loadStore(true, { sort: option.id });
@@ -338,19 +510,13 @@ export const Mods: React.FC = () => {
             ))}
           </div>
 
-          {statusLoading && (
-            <div className="py-10 text-center text-xs font-semibold text-slate-400">
-              <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
-              正在检查 Workshop 配置...
-            </div>
-          )}
-          {storeLoading && !statusLoading && (
+          {storeLoading && (
             <div className="py-10 text-center text-xs font-semibold text-slate-400">
               <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
               正在读取 Workshop...
             </div>
           )}
-          {!statusLoading && !storeLoading && !storeError && storeItems.length === 0 && (
+          {!storeLoading && !storeError && storeItems.length === 0 && (
             <div className="rounded-lg border border-dashed border-slate-200 bg-white px-4 py-12 text-center text-xs font-semibold text-slate-400">
               暂无匹配 Mod
             </div>
@@ -370,8 +536,119 @@ export const Mods: React.FC = () => {
         </section>
       )}
 
+      {activeTab === 'local' && (
+        <section className="rounded-lg border border-slate-100 bg-white p-4 sm:p-6">
+          <div className="flex flex-col gap-3 border-b border-slate-100 pb-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <h2 className="text-[15px] font-bold text-slate-800">本地 Mod 检测</h2>
+              <p className="mt-1 break-all font-mono text-[10px] font-semibold text-slate-400" title={localScan?.server_dir || undefined}>
+                {localScan?.server_dir || '等待扫描服务器目录'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void runLocalScan()}
+              disabled={localScanLoading}
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={localScanLoading ? 'animate-spin' : ''} />
+              重新扫描
+            </button>
+          </div>
+
+          <div className="my-4 flex items-start gap-3 rounded-lg border border-sky-100 bg-sky-50 px-4 py-3 text-xs font-semibold leading-5 text-sky-800">
+            <FolderSearch size={16} className="mt-0.5 shrink-0" />
+            <p>每次操作都会重新扫描并校验结果修订。未知、链接或不完整文件不会自动导入或删除；删除仅限可验证的 PalPanel 管理目录并要求明确确认。</p>
+          </div>
+
+          {localScanError && (
+            <div role="alert" className="mb-4 rounded-lg border border-rose-100 bg-rose-50 px-4 py-3 text-xs font-bold text-rose-700">
+              {localScanError}
+            </div>
+          )}
+
+          {localScan && (
+            <div className="mb-5 grid gap-3 border-b border-slate-100 pb-5 sm:grid-cols-3">
+              <LocalScanMetric label="检测结果" value={`${localScan.findings.length} 项`} />
+              <LocalScanMetric label="跳过路径" value={`${localScan.skipped_paths.length} 项`} />
+              <LocalScanMetric label="扫描时间" value={formatLocalScanTime(localScan.scanned_at)} />
+              {localScan.warnings.length > 0 && (
+                <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 sm:col-span-3">
+                  <p className="text-[10px] font-bold text-amber-700">扫描警告</p>
+                  <ul className="mt-1 grid gap-1 text-[11px] font-semibold text-amber-800">
+                    {localScan.warnings.map((warning) => <li key={warning} className="break-words">{warning}</li>)}
+                  </ul>
+                </div>
+              )}
+              {localScan.skipped_paths.length > 0 && (
+                <details className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 sm:col-span-3">
+                  <summary className="cursor-pointer text-[11px] font-bold text-slate-600">查看已跳过路径（{localScan.skipped_paths.length}）</summary>
+                  <ul className="mt-2 grid gap-1 font-mono text-[10px] font-semibold text-slate-500">
+                    {localScan.skipped_paths.map((path) => <li key={path} className="break-all">{path}</li>)}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+
+          {localScanLoading && !localScan ? (
+            <div className="py-12 text-center text-xs font-semibold text-slate-400">
+              <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
+              正在扫描本地 Mod...
+            </div>
+          ) : localScan ? (
+            <DataTable
+              title={`检测结果（${localScan.findings.length}）`}
+              headers={localHeaders}
+              data={filteredLocalFindings}
+              searchText={localScanSearch}
+              onSearchChange={setLocalScanSearch}
+              searchPlaceholder="搜索名称、来源、状态或路径"
+              emptyText="未检测到匹配的本地 Mod"
+              renderCard={(finding) => (
+                <LocalFindingCard
+                  finding={finding}
+                  canWrite={Boolean(session?.permissions.includes('mods:write'))}
+                  busy={localActionBusy}
+                  onAction={actOnLocalFinding}
+                />
+              )}
+              renderRow={(finding, index) => (
+                <tr key={`${finding.source}-${finding.name}-${index}`} className="align-top hover:bg-slate-50/50">
+                  <td className="px-6 py-4">
+                    <LocalFindingIdentity finding={finding} />
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="text-xs font-bold text-slate-700">{localSourceText[finding.source]}</p>
+                    <p className="mt-1 text-[10px] font-semibold text-slate-400">{localOwnershipText[finding.ownership]}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <ConfidenceBadge confidence={finding.confidence} />
+                  </td>
+                  <td className="px-6 py-4">
+                    <LocalFindingState finding={finding} />
+                  </td>
+                  <td className="max-w-md px-6 py-4">
+                    <LocalFindingPaths paths={finding.paths} />
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <LocalFindingActions
+                      finding={finding}
+                      canWrite={Boolean(session?.permissions.includes('mods:write'))}
+                      busy={localActionBusy}
+                      onAction={actOnLocalFinding}
+                    />
+                  </td>
+                </tr>
+              )}
+            />
+          ) : null}
+        </section>
+      )}
+
       {activeTab === 'installed' && (
         <section className="rounded-lg border border-slate-100 bg-white p-4 sm:p-6">
+          <InstalledRuntimeComponents status={securityStatus} loading={loading} />
           {loading ? (
             <div className="py-12 text-center text-xs font-semibold text-slate-400">
               <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
@@ -462,10 +739,15 @@ export const Mods: React.FC = () => {
 	  {importOpen && (
 		<ImportDialog
 		  onClose={() => setImportOpen(false)}
+		  workshopAuthenticated={workshopAuth?.logged_in === true}
+		  onWorkshopAuthRequired={() => {
+			setImportOpen(false);
+			setWorkshopLoginOpen(true);
+		  }}
 		  onImport={async (job) => {
 			setImportOpen(false);
 			const done = await trackJob(job);
-			if (done.status === 'success' && !storeError) await loadStore(true);
+			if (done.status === 'success' && workshopAuth?.logged_in && !storeError) await loadStore(true);
 		  }}
 		/>
 	  )}
@@ -482,6 +764,282 @@ export const Mods: React.FC = () => {
           onInstallEnabled={() => installWorkshop(selectedWorkshop.id, true)}
         />
       )}
+      {workshopLoginOpen && !workshopAuth?.logged_in && (
+        <WorkshopLoginDialog
+          status={workshopAuth}
+          initialError={workshopAuthError}
+          canAuthenticate={canAuthenticateSteam}
+          onClose={() => setWorkshopLoginOpen(false)}
+          onStatusChange={(status) => {
+            setWorkshopAuth(status);
+            setWorkshopAuthError(null);
+          }}
+          onVerified={workshopAuthVerified}
+        />
+      )}
+    </div>
+  );
+};
+
+const InstalledRuntimeComponents: React.FC<{
+  status: PalDefenderStatus | null;
+  loading: boolean;
+}> = ({ status, loading }) => {
+  const components = [
+    {
+      name: 'UE4SS',
+      installed: Boolean(status?.ue4ss.installed),
+      version: status?.ue4ss.version,
+      loadVerified: Boolean(status?.ue4ss.load_verified),
+      detail: status?.ue4ss.message,
+    },
+    {
+      name: 'PalDefender',
+      installed: Boolean(status?.installed),
+      version: status?.version,
+      loadVerified: Boolean(status?.load_verified),
+      detail: status?.needs_first_start ? '需要启动一次服务器以生成并验证配置' : undefined,
+    },
+  ];
+
+  return (
+    <div className="mb-5 border-b border-slate-100 pb-5">
+      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-[15px] font-bold text-slate-800">运行组件</h2>
+          <p className="mt-1 text-[11px] font-semibold text-slate-500">
+            UE4SS 与 PalDefender 根据本机文件和启动日志单独检测；PalDefender 安装前会先检查并安装 UE4SS。
+          </p>
+        </div>
+        <span className="text-[10px] font-semibold text-slate-400">普通与手工 Mod 继续显示在下方列表和“本地检测”中</span>
+      </div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        {components.map((component) => (
+          <div key={component.name} className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800">{component.name}</p>
+                <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
+                  {loading ? '正在检测...' : component.version || '未检测到版本'}
+                </p>
+              </div>
+              <StatusBadge
+                status={loading ? 'running_job' : component.installed ? 'success' : 'missing'}
+                customText={loading ? '检测中' : component.installed ? '已安装' : '未安装'}
+              />
+            </div>
+            {!loading && component.installed && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-600">
+                <StatusBadge
+                  status={component.loadVerified ? 'success' : 'waiting'}
+                  customText={component.loadVerified ? '启动日志已确认' : '待启动验证'}
+                />
+                {component.detail && <span className="min-w-0 break-words">{component.detail}</span>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const WorkshopAuthGate: React.FC<{
+  status: SteamWorkshopAuthStatus | null;
+  error: string | null;
+  canAuthenticate: boolean;
+  onLogin: () => void;
+  onRetry: () => void;
+}> = ({ status, error, canAuthenticate, onLogin, onRetry }) => {
+  const unsupported = status?.supported === false;
+  const steamCMDMissing = status?.supported === true && !status.steamcmd_installed;
+  const title = unsupported
+    ? '当前平台不支持 SteamCMD 登录'
+    : steamCMDMissing
+      ? '需要先安装 SteamCMD'
+      : error && !status
+        ? '无法检查 Steam 登录'
+        : '登录 Steam 后浏览 Workshop';
+  return (
+    <section className="flex min-h-[360px] flex-col items-center justify-center border-y border-slate-100 bg-white px-5 py-12 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-900 text-white">
+        <LogIn size={21} />
+      </div>
+      <h2 className="mt-4 text-base font-bold text-slate-900">{title}</h2>
+      <p className="mt-2 max-w-xl text-xs font-semibold leading-5 text-slate-500">
+        Workshop 搜索、详情和下载只会在验证本机 SteamCMD 登录缓存后加载。本地 Mod、GitHub、HTTPS ZIP、UE4SS 和 PalDefender 不受此门禁影响。
+      </p>
+      {(error || status?.message) && (
+        <div role="alert" className="mt-4 max-w-xl rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-left text-xs font-semibold leading-5 text-amber-800">
+          {error || status?.message}
+        </div>
+      )}
+      {!canAuthenticate && (
+        <p className="mt-4 text-xs font-semibold text-slate-500">Steam 登录需由具备安全管理权限的本机管理员完成。</p>
+      )}
+      <div className="mt-5 flex flex-wrap justify-center gap-2">
+        {!unsupported && !steamCMDMissing && status && canAuthenticate && (
+          <button type="button" onClick={onLogin} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800">
+            <LogIn size={14} />
+            登录 Steam
+          </button>
+        )}
+        <button type="button" onClick={onRetry} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
+          <RefreshCw size={14} />
+          重新检查
+        </button>
+      </div>
+    </section>
+  );
+};
+
+const WorkshopLoginDialog: React.FC<{
+  status: SteamWorkshopAuthStatus | null;
+  initialError: string | null;
+  canAuthenticate: boolean;
+  onClose: () => void;
+  onStatusChange: (status: SteamWorkshopAuthStatus) => void;
+  onVerified: (status: SteamWorkshopAuthStatus) => Promise<void>;
+}> = ({ status, initialError, canAuthenticate, onClose, onStatusChange, onVerified }) => {
+  const [accountName, setAccountName] = useState(status?.account_name || '');
+  const [busy, setBusy] = useState<'start' | 'verify' | null>(null);
+  const [error, setError] = useState(initialError || '');
+  const [notice, setNotice] = useState(initialError ? '' : status?.message || '');
+  const accountAvailable = Boolean(accountName.trim() || status?.account_name);
+  const canUseSteamCMD = Boolean(status?.supported && status.steamcmd_installed && canAuthenticate);
+
+  useEffect(() => {
+    if (!accountName && status?.account_name) setAccountName(status.account_name);
+  }, [accountName, status?.account_name]);
+
+  const startLogin = async () => {
+    if (!accountAvailable) {
+      setError('请输入 Steam 账户名。');
+      return;
+    }
+    setBusy('start');
+    setError('');
+    setNotice('');
+    try {
+      const next = await modsApi.startWorkshopAuth(accountName.trim() || undefined);
+      onStatusChange(next);
+      if (next.logged_in) {
+        await onVerified(next);
+        return;
+      }
+      setNotice(next.message || 'SteamCMD 登录窗口已打开。请在该窗口输入密码和 Steam Guard 验证码。');
+    } catch (startError) {
+      setError(getErrorMessage(startError));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const verifyLogin = async () => {
+    if (!accountAvailable) {
+      setError('请输入 Steam 账户名。');
+      return;
+    }
+    setBusy('verify');
+    setError('');
+    try {
+      const next = await modsApi.verifyWorkshopAuth(accountName.trim() || undefined);
+      onStatusChange(next);
+      if (!next.logged_in) {
+        setError(next.message || '尚未检测到有效的 Steam 登录缓存，请完成 SteamCMD 登录后重试。');
+        return;
+      }
+      await onVerified(next);
+    } catch (verifyError) {
+      setError(getErrorMessage(verifyError));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="steam-login-title">
+      <div className="flex max-h-[min(720px,95dvh)] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div className="min-w-0">
+            <h2 id="steam-login-title" className="text-base font-bold text-slate-900">登录 Steam 以使用 Workshop</h2>
+            <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">登录在本机 SteamCMD 窗口完成，验证通过后才会加载 Workshop。</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={busy !== null} className="shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-40" aria-label="关闭 Steam 登录">
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-5">
+          <div className="flex items-start gap-3 border-b border-slate-100 pb-4">
+            <ShieldCheck className="mt-0.5 shrink-0 text-emerald-600" size={17} />
+            <p className="text-xs font-semibold leading-5 text-slate-600">此页面只接收 Steam 账户名，不接收密码、Steam Guard 验证码或恢复码。敏感信息只应输入 SteamCMD 窗口。</p>
+          </div>
+
+          <ol className="divide-y divide-slate-100">
+            <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">1</span>
+              <label className="grid min-w-0 gap-1.5 text-xs font-bold text-slate-700">
+                Steam 账户名
+                <input
+                  type="text"
+                  autoComplete="username"
+                  spellCheck={false}
+                  value={accountName}
+                  onChange={(event) => setAccountName(event.target.value)}
+                  disabled={busy !== null}
+                  placeholder="不是个人资料昵称"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50"
+                />
+              </label>
+            </li>
+            <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">2</span>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-700">在本机 SteamCMD 中完成登录</p>
+                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">点击后会打开独立窗口。请只在该窗口输入密码和 Steam Guard 验证码。</p>
+                <button
+                  type="button"
+                  onClick={() => void startLogin()}
+                  disabled={busy !== null || !canUseSteamCMD || !accountAvailable}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-40"
+                >
+                  {busy === 'start' ? <RefreshCw size={14} className="animate-spin" /> : <MonitorUp size={14} />}
+                  打开 SteamCMD 登录窗口
+                </button>
+              </div>
+            </li>
+            <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">3</span>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-700">验证登录缓存</p>
+                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">SteamCMD 显示登录成功后，再返回这里验证。</p>
+                <button
+                  type="button"
+                  onClick={() => void verifyLogin()}
+                  disabled={busy !== null || !canUseSteamCMD || !accountAvailable}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
+                >
+                  {busy === 'verify' ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                  我已完成，验证登录
+                </button>
+              </div>
+            </li>
+          </ol>
+
+          {status?.supported === false && (
+            <div role="alert" className="rounded-lg border border-rose-100 bg-rose-50 px-4 py-3 text-xs font-semibold leading-5 text-rose-700">当前运行平台不支持本机 SteamCMD 登录。</div>
+          )}
+          {status?.supported && !status.steamcmd_installed && (
+            <div role="alert" className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-800">尚未安装 SteamCMD。请先在服务器安装流程中完成 SteamCMD 初始化。</div>
+          )}
+          {!canAuthenticate && (
+            <div role="alert" className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-800">Steam 登录需由具备安全管理权限的本机管理员在面板主机上完成。</div>
+          )}
+          {notice && <div role="status" className="rounded-lg border border-sky-100 bg-sky-50 px-4 py-3 text-xs font-semibold leading-5 text-sky-700">{notice}</div>}
+          {error && <div role="alert" className="mt-3 rounded-lg border border-rose-100 bg-rose-50 px-4 py-3 text-xs font-semibold leading-5 text-rose-700">{error}</div>}
+        </div>
+      </div>
     </div>
   );
 };
@@ -489,7 +1047,9 @@ export const Mods: React.FC = () => {
 const ImportDialog: React.FC<{
 	onClose: () => void;
 	onImport: (job: Job) => Promise<void>;
-}> = ({ onClose, onImport }) => {
+	workshopAuthenticated: boolean;
+	onWorkshopAuthRequired: () => void;
+}> = ({ onClose, onImport, workshopAuthenticated, onWorkshopAuthRequired }) => {
 	const [source, setSource] = useState('');
 	const [file, setFile] = useState<File | null>(null);
 	const [inspection, setInspection] = useState<ImportInspection | null>(null);
@@ -501,6 +1061,11 @@ const ImportDialog: React.FC<{
 	const inspect = async () => {
 		if (!file && !source.trim()) {
 			setError('请选择本地 ZIP 或输入导入来源');
+			return;
+		}
+		if (!file && isWorkshopImportSource(source) && !workshopAuthenticated) {
+			setError('Workshop 导入需要先验证 Steam 登录。');
+			onWorkshopAuthRequired();
 			return;
 		}
 		setBusy(true);
@@ -736,6 +1301,195 @@ const ModCard: React.FC<{
   </div>
 );
 
+const localSourceText: Record<LocalModFinding['source'], string> = {
+  workshop: 'Workshop',
+  legacy_pak: 'Pak / LogicMods',
+  ue4ss: 'UE4SS',
+  database: '数据库记录',
+};
+
+const localOwnershipText: Record<LocalModFinding['ownership'], string> = {
+  managed: 'PalPanel 管理',
+  manual: '手动放置',
+};
+
+const localStateText: Record<LocalModFinding['state'], string> = {
+  present: '文件存在',
+  missing_files: '文件缺失',
+  unknown: '未知 Mod',
+  disabled: '已禁用',
+  duplicate: '重复 Mod',
+  incomplete: '安装不完整',
+};
+
+const localClassificationText: Record<LocalModFinding['classifications'][number], string> = {
+  managed: '已管理',
+  manual: '手动安装',
+  present: '文件存在',
+  missing_files: '文件缺失',
+  unknown: '未知',
+  disabled: '已禁用',
+  duplicate: '重复',
+  incomplete: '不完整',
+};
+
+const localStateBadge: Record<LocalModFinding['state'], string> = {
+  present: 'installed',
+  missing_files: 'Error',
+  unknown: 'Warning',
+  disabled: 'disabled',
+  duplicate: 'Warning',
+  incomplete: 'Error',
+};
+
+const LocalScanMetric: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+    <p className="text-[10px] font-bold text-slate-400">{label}</p>
+    <p className="mt-1 break-words text-xs font-bold text-slate-700">{value}</p>
+  </div>
+);
+
+const LocalFindingIdentity: React.FC<{ finding: LocalModFinding }> = ({ finding }) => (
+  <div className="min-w-0">
+    <p className="break-words text-xs font-bold text-slate-800">{finding.name}</p>
+    <p className="mt-1 break-all font-mono text-[10px] font-semibold text-slate-400">{finding.package_name || '-'}</p>
+    <div className="mt-1 flex flex-wrap gap-x-2 text-[10px] font-semibold text-slate-400">
+      {finding.version && <span>版本 {finding.version}</span>}
+      {finding.database_mods && finding.database_mods.length > 0 && <span>数据库记录 {finding.database_mods.length} 条</span>}
+    </div>
+  </div>
+);
+
+const ConfidenceBadge: React.FC<{ confidence: LocalModFinding['confidence'] }> = ({ confidence }) => {
+  const text = confidence === 'high' ? '高' : confidence === 'medium' ? '中' : '低';
+  const style = confidence === 'high'
+    ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+    : confidence === 'medium'
+      ? 'border-amber-100 bg-amber-50 text-amber-700'
+      : 'border-slate-100 bg-slate-50 text-slate-600';
+  return <span className={`inline-flex rounded-lg border px-2.5 py-0.5 text-[11px] font-bold ${style}`}>{text}</span>;
+};
+
+const LocalFindingState: React.FC<{ finding: LocalModFinding }> = ({ finding }) => (
+  <div className="grid min-w-0 gap-2">
+    <div className="flex flex-wrap gap-1.5">
+      <StatusBadge status={localStateBadge[finding.state]} customText={localStateText[finding.state]} />
+      {finding.ignored && <StatusBadge status="Warning" customText="已忽略" />}
+      {finding.state !== 'disabled' && <StatusBadge status={finding.enabled ? 'enabled' : 'disabled'} />}
+      {finding.duplicate && finding.state !== 'duplicate' && <StatusBadge status="Warning" customText="重复" />}
+    </div>
+    {finding.classifications.length > 0 && (
+      <p className="text-[10px] font-semibold leading-4 text-slate-400">
+        {finding.classifications.map((classification) => localClassificationText[classification]).join(' · ')}
+      </p>
+    )}
+    {finding.issues && finding.issues.length > 0 && (
+      <ul className="grid gap-1 text-[10px] font-semibold leading-4 text-rose-600">
+        {finding.issues.map((issue, index) => <li key={`${issue}-${index}`} className="break-words">{issue}</li>)}
+      </ul>
+    )}
+  </div>
+);
+
+const LocalFindingPaths: React.FC<{ paths: string[] }> = ({ paths }) => {
+  if (paths.length === 0) return <span className="text-[10px] font-semibold text-slate-400">未找到磁盘路径</span>;
+  return (
+    <ul className="grid gap-1.5 font-mono text-[10px] font-semibold leading-4 text-slate-500">
+      {paths.map((path, index) => <li key={`${path}-${index}`} className="break-all" title={path}>{path}</li>)}
+    </ul>
+  );
+};
+
+const localActionLabels: Record<LocalModAction, string> = {
+  import: '导入',
+  repair: '修复记录',
+  ignore: '忽略',
+  unignore: '取消忽略',
+  delete: '删除',
+};
+
+const LocalActionIcon: React.FC<{ action: LocalModAction }> = ({ action }) => {
+  if (action === 'import') return <DownloadCloud size={13} />;
+  if (action === 'repair') return <Wrench size={13} />;
+  if (action === 'ignore') return <EyeOff size={13} />;
+  if (action === 'unignore') return <Eye size={13} />;
+  return <Trash2 size={13} />;
+};
+
+const LocalFindingActions: React.FC<{
+  finding: LocalModFinding;
+  canWrite: boolean;
+  busy: string | null;
+  onAction: (finding: LocalModFinding, action: LocalModAction) => void;
+}> = ({ finding, canWrite, busy, onAction }) => {
+  const available = finding.actions.filter((item) => item.available);
+  const importCapability = finding.actions.find((item) => item.action === 'import');
+  const showUnsupportedReason = !importCapability?.available && Boolean(importCapability?.reason) && (
+    finding.source === 'ue4ss' || finding.source === 'legacy_pak' || finding.state === 'unknown' || finding.state === 'incomplete'
+  );
+  return (
+    <div className="grid min-w-[9rem] gap-2">
+      {canWrite && available.length > 0 && (
+        <div className="flex flex-wrap justify-center gap-1.5">
+          {available.map((capability) => {
+            const key = `${finding.id}:${capability.action}`;
+            const destructive = capability.action === 'delete';
+            return (
+              <button
+                key={capability.action}
+                type="button"
+                title={capability.confirmation_required ? `${localActionLabels[capability.action]}（需要确认）` : localActionLabels[capability.action]}
+                onClick={() => onAction(finding, capability.action)}
+                disabled={busy !== null}
+                className={`inline-flex items-center justify-center gap-1 rounded-md border px-2 py-1.5 text-[10px] font-bold disabled:opacity-50 ${
+                  destructive ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {busy === key ? <RefreshCw size={13} className="animate-spin" /> : <LocalActionIcon action={capability.action} />}
+                {localActionLabels[capability.action]}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {!canWrite && <p className="text-[10px] font-semibold text-slate-400">需要 Mod 管理权限</p>}
+      {showUnsupportedReason && <p className="text-left text-[10px] font-semibold leading-4 text-amber-700">{importCapability?.reason}</p>}
+    </div>
+  );
+};
+
+const LocalFindingCard: React.FC<{
+  finding: LocalModFinding;
+  canWrite: boolean;
+  busy: string | null;
+  onAction: (finding: LocalModFinding, action: LocalModAction) => void;
+}> = ({ finding, canWrite, busy, onAction }) => (
+  <article className="rounded-lg border border-slate-100 bg-white p-4 shadow-sm">
+    <div className="flex items-start justify-between gap-3">
+      <LocalFindingIdentity finding={finding} />
+      <ConfidenceBadge confidence={finding.confidence} />
+    </div>
+    <div className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3">
+      <div>
+        <p className="text-[10px] font-bold text-slate-400">来源</p>
+        <p className="mt-1 text-xs font-bold text-slate-700">{localSourceText[finding.source]}</p>
+        <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{localOwnershipText[finding.ownership]}</p>
+      </div>
+      <div>
+        <p className="mb-1 text-[10px] font-bold text-slate-400">状态</p>
+        <LocalFindingState finding={finding} />
+      </div>
+    </div>
+    <div className="mt-3">
+      <p className="mb-1.5 text-[10px] font-bold text-slate-400">路径</p>
+      <LocalFindingPaths paths={finding.paths} />
+    </div>
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <LocalFindingActions finding={finding} canWrite={canWrite} busy={busy} onAction={onAction} />
+    </div>
+  </article>
+);
+
 const ModPreview: React.FC<{ mod: ModItem }> = ({ mod }) => (
   <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100 text-slate-400">
     {mod.preview_url ? <img src={mod.preview_url} alt="" className="h-full w-full object-cover" loading="lazy" /> : <FileArchive size={16} />}
@@ -900,4 +1654,11 @@ const formatNumber = (value?: number) => {
 const formatSteamTime = (value?: number) => {
   if (!value || value <= 0) return '-';
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value * 1000));
+};
+
+const formatLocalScanTime = (value: string) => {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(parsed);
 };

@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +23,15 @@ func (s Server) palDefenderGMStatus(c *gin.Context) {
 
 func (s Server) palDefenderGMPlayers(c *gin.Context) {
 	response, err := s.defender.RESTPlayers(c.Request.Context())
+	if err != nil {
+		failPalDefenderGM(c, err)
+		return
+	}
+	ok(c, response)
+}
+
+func (s Server) palDefenderGMPlayer(c *gin.Context) {
+	response, err := s.defender.RESTPlayer(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		failPalDefenderGM(c, err)
 		return
@@ -53,26 +64,24 @@ func (s Server) palDefenderGMGiveItems(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	response, err := s.defender.RESTGiveItems(c.Request.Context(), c.Param("id"), request)
-	if err != nil {
-		failPalDefenderGM(c, err)
-		return
-	}
-	ok(c, response)
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RESTGiveItems(ctx, c.Param("id"), request)
+	})
 }
 
 func (s Server) palDefenderGMSendMessage(c *gin.Context) {
-	var request paldefender.SendMessageRequest
-	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+	var input struct {
+		SendType string `json:"SendType"`
+		Message  string `json:"Message"`
+	}
+	if err := bindPalDefenderGMJSON(c, &input); err != nil {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	response, err := s.defender.RESTSendMessage(c.Request.Context(), c.Param("id"), request)
-	if err != nil {
-		failPalDefenderGM(c, err)
-		return
-	}
-	ok(c, response)
+	request := paldefender.SendMessageRequest{SendType: input.SendType, Message: input.Message}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RESTSendMessage(ctx, c.Param("id"), request)
+	})
 }
 
 func (s Server) palDefenderGMBroadcast(c *gin.Context) {
@@ -84,12 +93,9 @@ func (s Server) palDefenderGMBroadcast(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	response, err := s.defender.RESTBroadcast(c.Request.Context(), request.Message, request.Alert)
-	if err != nil {
-		failPalDefenderGM(c, err)
-		return
-	}
-	ok(c, response)
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RESTBroadcast(ctx, request.Message, request.Alert)
+	})
 }
 
 func (s Server) palDefenderGMKick(c *gin.Context) {
@@ -112,17 +118,36 @@ func (s Server) palDefenderGMPunishment(c *gin.Context, action func(ctx context.
 			return
 		}
 	}
-	response, err := action(c.Request.Context(), c.Param("id"), request)
-	if err != nil {
-		failPalDefenderGM(c, err)
-		return
-	}
-	ok(c, response)
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return action(ctx, c.Param("id"), request)
+	})
 }
 
 func failPalDefenderGM(c *gin.Context, err error) {
-	if errors.Is(err, paldefender.ErrRESTTokenMissing) {
+	switch {
+	case errors.Is(err, paldefender.ErrRESTTokenMissing):
 		fail(c, http.StatusConflict, "paldefender_rest_not_configured", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrPalDefenderNotInstalled):
+		fail(c, http.StatusConflict, "paldefender_not_installed", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrPalDefenderNotLoaded):
+		fail(c, http.StatusConflict, "paldefender_not_loaded", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrPalDefenderRESTDisabled):
+		fail(c, http.StatusConflict, "paldefender_rest_disabled", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrRESTInvalidConfiguration):
+		fail(c, http.StatusConflict, "paldefender_rest_invalid_configuration", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrRESTTimeout), errors.Is(err, context.DeadlineExceeded):
+		fail(c, http.StatusGatewayTimeout, "paldefender_rest_timeout", paldefender.ErrRESTTimeout.Error())
+		return
+	case errors.Is(err, paldefender.ErrRESTInvalidResponse), errors.Is(err, paldefender.ErrRESTResponseTooLarge):
+		fail(c, http.StatusBadGateway, "paldefender_invalid_response", paldefender.ErrRESTInvalidResponse.Error())
+		return
+	case errors.Is(err, paldefender.ErrRESTUnavailable):
+		fail(c, http.StatusServiceUnavailable, "paldefender_rest_unavailable", paldefender.ErrRESTUnavailable.Error())
 		return
 	}
 	var restErr *paldefender.RESTError
@@ -145,12 +170,24 @@ func failPalDefenderGM(c *gin.Context, err error) {
 		fail(c, http.StatusBadRequest, "paldefender_invalid_request", err.Error())
 		return
 	}
-	fail(c, http.StatusBadGateway, "paldefender_rest_unavailable", err.Error())
+	fail(c, http.StatusBadGateway, "paldefender_rest_failed", "PalDefender REST request failed")
 }
 
 func bindPalDefenderGMJSON(c *gin.Context, value any) error {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, palDefenderGMRequestLimit)
-	return c.ShouldBindJSON(value)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain exactly one JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 func normalizePalDefenderErrorCode(code string) string {

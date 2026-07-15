@@ -1,6 +1,44 @@
 // Generated from docs/openapi.yaml. Do not edit.
 export interface components {
   schemas: {
+    "AITranslationConfig": {
+      "api_key_present": boolean;
+      "base_url": string;
+      "configured": boolean;
+      "custom_header_names": Array<string>;
+      "model": string;
+      "proxy_configured": boolean;
+      "proxy_url": string;
+      "timeout_seconds": number;
+    };
+    "AITranslationConfigEnvelope": {
+      "data": components["schemas"]["AITranslationConfig"];
+      "ok": true;
+    };
+    "AITranslationConfigUpdate": {
+      "api_key"?: string;
+      "base_url"?: string;
+      "clear_api_key"?: boolean;
+      "clear_custom_headers"?: boolean;
+      "clear_proxy"?: boolean;
+      "custom_headers"?: Record<string, string>;
+      "model"?: string;
+      "proxy_url"?: string;
+      "timeout_seconds"?: number;
+    };
+    "AITranslationTestEnvelope": {
+      "data": components["schemas"]["AITranslationTestResult"];
+      "ok": true;
+    };
+    "AITranslationTestResult": {
+      "base_url": string;
+      "custom_header_names": Array<string>;
+      "message": string;
+      "model": string;
+      "ok": boolean;
+      "proxy_configured": boolean;
+      "timeout_seconds": number;
+    };
     "AuthCredentials": {
       "password": string;
       "username": string;
@@ -82,6 +120,58 @@ export interface components {
       "ok": true;
     };
     "JsonObject": Record<string, unknown>;
+    "LocalModActionCapability": {
+      "action": "import" | "repair" | "ignore" | "unignore" | "delete";
+      "available": boolean;
+      "confirmation_required": boolean;
+      "reason"?: string;
+    };
+    "LocalModActionEnvelope": {
+      "data": components["schemas"]["LocalModActionResult"];
+      "ok": true;
+    };
+    "LocalModActionRequest": {
+      "action": "import" | "repair" | "ignore" | "unignore" | "delete";
+      "confirm"?: boolean;
+      "revision": string;
+    };
+    "LocalModActionResult": {
+      "action": "import" | "repair" | "ignore" | "unignore" | "delete";
+      "finding_id": string;
+      "message": string;
+      "mod"?: components["schemas"]["ModRecord"];
+      "scan": components["schemas"]["LocalScanResult"];
+    };
+    "LocalModFinding": {
+      "actions": Array<components["schemas"]["LocalModActionCapability"]>;
+      "classifications": Array<"managed" | "manual" | "present" | "missing_files" | "unknown" | "disabled" | "duplicate" | "incomplete">;
+      "confidence": "high" | "medium" | "low";
+      "database_mods"?: Array<components["schemas"]["ModRecord"]>;
+      "duplicate": boolean;
+      "enabled": boolean;
+      "id": string;
+      "ignored": boolean;
+      "issues"?: Array<string>;
+      "name": string;
+      "ownership": "managed" | "manual";
+      "package_name"?: string;
+      "paths": Array<string>;
+      "revision": string;
+      "source": "workshop" | "legacy_pak" | "ue4ss" | "database";
+      "state": "present" | "missing_files" | "unknown" | "disabled" | "duplicate" | "incomplete";
+      "version"?: string;
+    };
+    "LocalScanEnvelope": {
+      "data": components["schemas"]["LocalScanResult"];
+      "ok": true;
+    };
+    "LocalScanResult": {
+      "findings": Array<components["schemas"]["LocalModFinding"]>;
+      "scanned_at": string;
+      "server_dir": string;
+      "skipped_paths": Array<string>;
+      "warnings": Array<string>;
+    };
     "ModImportInspectRequest": {
       "source": string;
     };
@@ -94,6 +184,26 @@ export interface components {
     };
     "ModImportUploadRequest": {
       "file": string;
+    };
+    "ModRecord": {
+      "created_at": string;
+      "enabled": boolean;
+      "file_size"?: number;
+      "id": string;
+      "last_checked_at"?: string;
+      "name": string;
+      "package_name": string;
+      "path": string;
+      "preview_url"?: string;
+      "source": string;
+      "steam_url"?: string;
+      "subscriptions"?: number;
+      "summary"?: string;
+      "tags"?: Array<string>;
+      "time_updated"?: number;
+      "updated_at": string;
+      "version"?: string;
+      "workshop_id"?: string;
     };
     "PalDefenderBroadcastRequest": {
       "alert"?: boolean;
@@ -128,6 +238,10 @@ export interface components {
       "available": boolean;
       "configured": boolean;
       "error"?: string;
+      "installed": boolean;
+      "load_verified": boolean;
+      "rest_enabled": boolean;
+      "state": "ready" | "not_installed" | "not_loaded" | "not_configured" | "rest_disabled" | "server_not_running" | "failed";
       "version"?: components["schemas"]["PalDefenderRESTVersion"];
     };
     "PalDefenderGiveItemsRequest": {
@@ -214,6 +328,24 @@ export interface components {
       "name": string;
       "permissions": Array<string>;
       "role": "admin" | "operator" | "viewer";
+    };
+    "SteamWorkshopAuthRequest": {
+      "account_name"?: string;
+    };
+    "SteamWorkshopAuthStatus": {
+      "account_name"?: string;
+      "credentials_secure": boolean;
+      "last_verified_at"?: string;
+      "logged_in": boolean;
+      "login_in_progress": boolean;
+      "message"?: string;
+      "steamcmd_installed": boolean;
+      "supported": boolean;
+      "verification_required": boolean;
+    };
+    "SteamWorkshopAuthStatusEnvelope": {
+      "data": components["schemas"]["SteamWorkshopAuthStatus"];
+      "ok": true;
     };
     "SuccessEnvelope": {
       "data": unknown;

@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"palpanel/internal/appconfig"
@@ -58,5 +60,29 @@ func TestSearchWorkshopMergesInstalledState(t *testing.T) {
 	item := result.Items[0]
 	if !item.Installed || !item.Enabled || !item.UpdateAvailable || item.ModID != "123456" {
 		t.Fatalf("workshop state was not merged: %#v", item)
+	}
+}
+
+func TestDeleteRejectsModPathOutsideManagedRoot(t *testing.T) {
+	manager, store := newImportTestManager(t)
+	outside := t.TempDir()
+	marker := filepath.Join(outside, "must-survive.txt")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mod := db.Mod{ID: "mod_untrusted", Name: "Untrusted", PackageName: "Untrusted", Path: outside}
+	if err := store.UpsertMod(t.Context(), mod); err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.Delete(t.Context(), mod.ID)
+	if err == nil || (!strings.Contains(err.Error(), "mod target") && !strings.Contains(err.Error(), "runtime root")) {
+		t.Fatalf("Delete error = %v", err)
+	}
+	if body, readErr := os.ReadFile(marker); readErr != nil || string(body) != "keep" {
+		t.Fatalf("outside marker was modified: %q, %v", body, readErr)
+	}
+	if _, getErr := store.GetMod(t.Context(), mod.ID); getErr != nil {
+		t.Fatalf("database record should remain after refused deletion: %v", getErr)
 	}
 }

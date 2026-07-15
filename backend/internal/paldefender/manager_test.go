@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"palpanel/internal/appconfig"
@@ -53,6 +54,53 @@ func TestInstallReleaseFromZip(t *testing.T) {
 	}
 }
 
+func TestInstallReleaseRollsBackWhenSecondDLLCannotBeReplaced(t *testing.T) {
+	zipBytes := makePalDefenderZip(t)
+	sum := sha256.Sum256(zipBytes)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBytes)
+	}))
+	defer server.Close()
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	loader := filepath.Join(manager.cfg.Win64Dir(), "d3d9.dll")
+	if err := os.MkdirAll(filepath.Dir(loader), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loader, []byte("old-loader"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(manager.cfg.Win64Dir(), "PalDefender.dll"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	release := Release{TagName: "v-test", Assets: []Asset{{
+		Name: "PalDefender.zip", Digest: "sha256:" + hex.EncodeToString(sum[:]), BrowserDownloadURL: server.URL,
+	}}}
+
+	err := manager.installRelease(t.Context(), release)
+	if err == nil || !strings.Contains(err.Error(), "previous files were restored") {
+		t.Fatalf("installRelease error = %v", err)
+	}
+	body, readErr := os.ReadFile(loader)
+	if readErr != nil || string(body) != "old-loader" {
+		t.Fatalf("loader was not rolled back: %q, %v", body, readErr)
+	}
+}
+
+func TestInstallReleaseRequiresPublishedDigest(t *testing.T) {
+	zipBytes := makePalDefenderZip(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBytes)
+	}))
+	defer server.Close()
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	release := Release{TagName: "v-test", Assets: []Asset{{Name: "PalDefender.zip", BrowserDownloadURL: server.URL}}}
+	if err := manager.installRelease(t.Context(), release); err == nil || !strings.Contains(err.Error(), "no SHA-256 digest") {
+		t.Fatalf("installRelease error = %v", err)
+	}
+}
+
 func TestBundledPalDefenderMetadataAndReplacement(t *testing.T) {
 	info := BundledInfo()
 	if info.Version != "1.8.1" || info.SHA256 != BundledPalDefenderSHA256 || info.Size != 3287552 {
@@ -83,6 +131,53 @@ func TestBundledPalDefenderMetadataAndReplacement(t *testing.T) {
 	}
 	if fileExists(destination + ".palpanel-replaced") {
 		t.Fatal("replacement staging file was not cleaned")
+	}
+}
+
+func TestStatusDistinguishesInstalledFilesFromStartupLogEvidence(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	if err := os.MkdirAll(manager.cfg.Win64Dir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manager.cfg.Win64Dir(), "PalDefender.dll"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manager.cfg.Win64Dir(), "d3d9.dll"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, err := manager.Status(t.Context())
+	if err != nil || !status.Installed || status.LoadVerified {
+		t.Fatalf("status before startup evidence = %#v, %v", status, err)
+	}
+	if err := os.WriteFile(manager.cfg.ServerLogPath(), []byte("PalDefender version 1.8.1 loaded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, err = manager.Status(t.Context())
+	if err != nil || !status.LoadVerified || status.LoadEvidence != "palserver_log" {
+		t.Fatalf("status after startup evidence = %#v, %v", status, err)
+	}
+}
+
+func TestStatusRecognizesNativePalDefenderStartupLog(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	if err := os.MkdirAll(filepath.Join(manager.cfg.PalDefenderDir(), "Logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manager.cfg.Win64Dir(), "PalDefender.dll"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manager.cfg.Win64Dir(), "d3d9.dll"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(manager.cfg.PalDefenderDir(), "Logs", "startup.log")
+	if err := os.WriteFile(logPath, []byte("[info] Starting PalDefender Anti Cheat v1.8.1 (console)"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, err := manager.Status(t.Context())
+	if err != nil || !status.LoadVerified || status.LoadEvidence != "paldefender_log" {
+		t.Fatalf("native startup-log evidence was not detected: %#v, %v", status, err)
 	}
 }
 

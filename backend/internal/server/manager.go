@@ -33,7 +33,20 @@ const (
 	kvStartup     = "startup_config"
 	kvInstalled   = "installed"
 	kvPID         = "windows_pid"
+	kvProcess     = "windows_process"
 )
+
+type windowsProcessRecord struct {
+	PID          int    `json:"pid"`
+	Executable   string `json:"executable"`
+	CreationTime uint64 `json:"creation_time"`
+}
+
+type windowsProcessInfo struct {
+	Running      bool
+	Executable   string
+	CreationTime uint64
+}
 
 type Manager struct {
 	cfg                 appconfig.Config
@@ -43,6 +56,9 @@ type Manager struct {
 	installOrUpdateFunc func(context.Context, string) error
 	jobs                *jobs.Executor
 	operationMu         *sync.Mutex
+	inspectProcess      func(int) (windowsProcessInfo, error)
+	terminateProcess    func(context.Context, int) error
+	downloadClient      *http.Client
 	worldResetTimeout   time.Duration
 	worldResetPoll      time.Duration
 }
@@ -124,6 +140,9 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, exe
 		cfg: cfg, store: store, runner: runner,
 		jobs:              executor,
 		operationMu:       &sync.Mutex{},
+		inspectProcess:    inspectWindowsProcess,
+		terminateProcess:  terminateWindowsProcessTree,
+		downloadClient:    &http.Client{Timeout: 5 * time.Minute},
 		worldResetTimeout: 180 * time.Second,
 		worldResetPoll:    time.Second,
 	}
@@ -201,9 +220,10 @@ func (m Manager) Prerequisites(ctx context.Context) ([]Prerequisite, error) {
 			Prerequisite{ID: "docker_daemon", Label: "Docker daemon", OK: dockerCapability.DaemonReachable, Required: true, Message: daemonMessage},
 		)
 	} else {
+		steamCMDErr := validatePEExecutable(m.cfg.SteamCMDBinaryPath())
 		checks = append(checks,
 			Prerequisite{ID: "windows", Label: "Windows host", OK: runtime.GOOS == "windows", Required: true, Message: runtime.GOOS},
-			Prerequisite{ID: "steamcmd", Label: "SteamCMD", OK: fileExists(m.cfg.SteamCMDBinaryPath()), Required: false, Message: m.cfg.SteamCMDBinaryPath()},
+			Prerequisite{ID: "steamcmd", Label: "SteamCMD", OK: steamCMDErr == nil, Required: false, Message: m.cfg.SteamCMDBinaryPath()},
 		)
 	}
 	return checks, nil
@@ -332,7 +352,12 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 			return false
 		}
 	}
-	if !fileExists(m.cfg.PalServerExePath()) {
+	if mode == RuntimeWindowsSteamCMD {
+		if err := m.validateWindowsServerInstall(); err != nil {
+			m.update(jobID, "failed", 70, action+" verification failed", err.Error()+retainedBackupMessage(backup))
+			return false
+		}
+	} else if !fileExists(m.cfg.PalServerExePath()) {
 		m.update(jobID, "failed", 70, action+" verification failed", "PalServer.exe is missing after SteamCMD completed"+retainedBackupMessage(backup))
 		return false
 	}
@@ -403,7 +428,14 @@ func (m Manager) ValidateStartup(ctx context.Context) []ValidationIssue {
 		return []ValidationIssue{{Severity: "error", Message: err.Error()}}
 	}
 	issues = append(issues, startup.Validate()...)
-	if !fileExists(m.cfg.PalServerExePath()) {
+	mode, modeErr := m.RuntimeMode(ctx)
+	if modeErr != nil {
+		issues = append(issues, ValidationIssue{Field: "runtime", Severity: "error", Message: modeErr.Error()})
+	} else if mode == RuntimeWindowsSteamCMD {
+		if err := m.validateWindowsServerInstall(); err != nil {
+			issues = append(issues, ValidationIssue{Field: "server", Severity: "error", Message: err.Error()})
+		}
+	} else if !fileExists(m.cfg.PalServerExePath()) {
 		issues = append(issues, ValidationIssue{Field: "server", Severity: "error", Message: "PalServer.exe not found; install server first"})
 	}
 	if !fileExists(m.cfg.PalWorldSettingsPath()) {
@@ -498,7 +530,9 @@ func (m Manager) restartUnlocked(ctx context.Context) error {
 		return err
 	}
 	if mode == RuntimeWindowsSteamCMD {
-		_ = m.stopWindows(ctx)
+		if err := m.stopWindows(ctx); err != nil {
+			return fmt.Errorf("stop before restart: %w", err)
+		}
 		err = m.startWindows(ctx, startup.Args(m.cfg))
 	} else {
 		err = m.runner.RestartWithArgs(ctx, startup.Args(m.cfg))
@@ -609,7 +643,7 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 			container = docker.ContainerStatus{Exists: false, Status: "error"}
 		}
 	} else {
-		container = m.windowsStatus(ctx)
+		container, statusErr = m.windowsStatus(ctx)
 	}
 	installedValue, ok, err := m.store.GetKV(ctx, kvInstalled)
 	if err != nil {
@@ -620,7 +654,11 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	installed := ok && installedValue == "true"
-	if !installed {
+	var installErr error
+	if mode == RuntimeWindowsSteamCMD {
+		installErr = m.validateWindowsServerInstall()
+		installed = installErr == nil
+	} else if !installed {
 		installed = fileExists(m.cfg.PalServerExePath())
 	}
 	configExists := fileExists(m.cfg.PalWorldSettingsPath())
@@ -628,6 +666,9 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 	warnings := m.statusWarnings(mode, installed, configExists)
 	if statusErr != nil {
 		warnings = append(warnings, statusErr.Error())
+	}
+	if installErr != nil {
+		warnings = append(warnings, installErr.Error())
 	}
 	return Status{
 		Installed:      installed,
@@ -732,7 +773,8 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 			return
 		}
 		m.update(jobID, "running", 65, "restoring backup archive", "")
-		if err := extractZipSafe(pathAbs, m.cfg.ServerDir); err != nil {
+		validateTarget := func(path string) error { return m.cfg.ValidateManagedPath(path, false) }
+		if err := extractZipSafeValidated(pathAbs, m.cfg.ServerDir, validateTarget); err != nil {
 			m.update(jobID, "failed", 65, "restore failed", err.Error())
 			return
 		}
@@ -762,6 +804,12 @@ func (m Manager) DeleteBackup(name string) error {
 	}
 	if !fileExists(path) {
 		return fmt.Errorf("backup not found")
+	}
+	if err := m.cfg.ValidateManagedPath(path, false); err != nil {
+		return err
+	}
+	if err := m.cfg.ValidateManagedPath(path, false); err != nil {
+		return err
 	}
 	return os.Remove(path)
 }
@@ -795,59 +843,6 @@ func (m Manager) update(jobID, status string, progress int, message, errText str
 	}
 }
 
-func (m Manager) ensureSteamCMD(ctx context.Context) error {
-	if fileExists(m.cfg.SteamCMDBinaryPath()) {
-		return nil
-	}
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("windows_steamcmd runtime requires Windows host")
-	}
-	if err := os.MkdirAll(m.cfg.SteamCMDDir, 0o755); err != nil {
-		return err
-	}
-	zipPath := filepath.Join(m.cfg.ToolsDir, "steamcmd.zip")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("download steamcmd returned status %d", resp.StatusCode)
-	}
-	out, err := os.Create(zipPath)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		_ = out.Close()
-		return err
-	}
-	if err := out.Close(); err != nil {
-		return err
-	}
-	return extractZipSafe(zipPath, m.cfg.SteamCMDDir)
-}
-
-func (m Manager) installOrUpdateWindows(ctx context.Context) error {
-	args := []string{
-		"+force_install_dir", m.cfg.ServerDir,
-		"+login", "anonymous",
-		"+app_update", "2394010", "validate",
-		"+quit",
-	}
-	cmd := exec.CommandContext(ctx, m.cfg.SteamCMDBinaryPath(), args...)
-	cmd.Dir = m.cfg.SteamCMDDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("steamcmd failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 func (m Manager) installOrUpdateRuntime(ctx context.Context, mode string) error {
 	if m.installOrUpdateFunc != nil {
 		return m.installOrUpdateFunc(ctx, mode)
@@ -872,50 +867,205 @@ func (m Manager) startWindows(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, m.cfg.PalServerExePath(), args...)
+	if _, err := fmt.Fprintf(logFile, "%s [palpanel] starting PalServer.exe\n", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		_ = logFile.Close()
+		return fmt.Errorf("write PalServer lifecycle log: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		_ = logFile.Close()
+		return err
+	}
+	cmd := exec.Command(m.cfg.PalServerExePath(), args...)
 	cmd.Dir = m.cfg.ServerDir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	prepareWindowsProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return err
 	}
-	_ = m.store.SetKV(ctx, kvPID, strconv.Itoa(cmd.Process.Pid))
-	go func() {
+	tracked, trackingErr := trackWindowsProcess(cmd.Process)
+	if tracked == nil {
+		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		_ = logFile.Close()
+		return fmt.Errorf("track started PalServer process: %w", trackingErr)
+	}
+	if trackingErr != nil {
+		log.Printf("PalServer PID %d could not be assigned to a Windows Job Object; using native tree cleanup: %v", cmd.Process.Pid, trackingErr)
+	}
+	info, err := m.processInfo(cmd.Process.Pid)
+	if err != nil || !info.Running {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = logFile.Close()
+		finishTrackedWindowsProcess(tracked)
+		if err != nil {
+			return fmt.Errorf("inspect started PalServer process: %w", err)
+		}
+		return fmt.Errorf("PalServer exited before its process identity could be recorded")
+	}
+	record := windowsProcessRecord{PID: cmd.Process.Pid, Executable: info.Executable, CreationTime: info.CreationTime}
+	if err := m.persistWindowsProcess(record); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = logFile.Close()
+		finishTrackedWindowsProcess(tracked)
+		return fmt.Errorf("persist PalServer process identity: %w", err)
+	}
+	go func() {
+		waitErr := cmd.Wait()
+		if waitErr != nil {
+			_, _ = fmt.Fprintf(logFile, "%s [palpanel] PalServer.exe exited: %v\n", time.Now().UTC().Format(time.RFC3339Nano), waitErr)
+		} else {
+			_, _ = fmt.Fprintf(logFile, "%s [palpanel] PalServer.exe exited normally\n", time.Now().UTC().Format(time.RFC3339Nano))
+		}
+		_ = logFile.Close()
+		finishTrackedWindowsProcess(tracked)
+		m.clearWindowsProcessIfMatch(record)
 	}()
 	return nil
 }
 
 func (m Manager) stopWindows(ctx context.Context) error {
-	pid, _, err := m.store.GetKV(ctx, kvPID)
+	record, ok, err := m.loadWindowsProcess(ctx)
 	if err != nil {
 		return err
 	}
-	pid = strings.TrimSpace(pid)
-	if pid == "" {
+	if !ok {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "taskkill", "/PID", pid, "/T", "/F")
-	out, err := cmd.CombinedOutput()
-	if err != nil && !strings.Contains(strings.ToLower(string(out)), "not found") {
-		return fmt.Errorf("taskkill failed: %w: %s", err, strings.TrimSpace(string(out)))
+	running, err := m.verifyWindowsProcess(record)
+	if err != nil {
+		return err
 	}
-	return m.store.SetKV(ctx, kvPID, "")
+	if running {
+		if err := m.terminateProcessTree(ctx, record.PID); err != nil {
+			return err
+		}
+	}
+	return m.clearWindowsProcess(ctx)
 }
 
-func (m Manager) windowsStatus(ctx context.Context) docker.ContainerStatus {
-	pid, _, err := m.store.GetKV(ctx, kvPID)
-	if err != nil || strings.TrimSpace(pid) == "" {
-		return docker.ContainerStatus{Exists: false, Status: "missing"}
+func (m Manager) windowsStatus(ctx context.Context) (docker.ContainerStatus, error) {
+	record, ok, err := m.loadWindowsProcess(ctx)
+	if err != nil {
+		return docker.ContainerStatus{Exists: false, Status: "error"}, err
 	}
-	cmd := exec.CommandContext(ctx, "tasklist", "/FI", "PID eq "+pid)
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), pid) {
-		return docker.ContainerStatus{Exists: false, Status: "missing"}
+	if !ok {
+		return docker.ContainerStatus{Exists: false, Status: "missing"}, nil
 	}
-	return docker.ContainerStatus{Exists: true, Status: "running"}
+	running, err := m.verifyWindowsProcess(record)
+	if err != nil {
+		return docker.ContainerStatus{Exists: false, Status: "error"}, err
+	}
+	if !running {
+		_ = m.clearWindowsProcess(ctx)
+		return docker.ContainerStatus{Exists: false, Status: "missing"}, nil
+	}
+	return docker.ContainerStatus{Exists: true, Status: "running"}, nil
+}
+
+func (m Manager) processInfo(pid int) (windowsProcessInfo, error) {
+	inspect := m.inspectProcess
+	if inspect == nil {
+		inspect = inspectWindowsProcess
+	}
+	return inspect(pid)
+}
+
+func (m Manager) terminateProcessTree(ctx context.Context, pid int) error {
+	terminate := m.terminateProcess
+	if terminate == nil {
+		terminate = terminateWindowsProcessTree
+	}
+	return terminate(ctx, pid)
+}
+
+func (m Manager) persistWindowsProcess(record windowsProcessRecord) error {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.store.SetKV(ctx, kvProcess, string(raw)); err != nil {
+		return err
+	}
+	if err := m.store.SetKV(ctx, kvPID, strconv.Itoa(record.PID)); err != nil {
+		_ = m.store.SetKV(context.Background(), kvProcess, "")
+		return err
+	}
+	return nil
+}
+
+func (m Manager) loadWindowsProcess(ctx context.Context) (windowsProcessRecord, bool, error) {
+	raw, ok, err := m.store.GetKV(ctx, kvProcess)
+	if err != nil {
+		return windowsProcessRecord{}, false, err
+	}
+	if ok && strings.TrimSpace(raw) != "" {
+		var record windowsProcessRecord
+		if err := json.Unmarshal([]byte(raw), &record); err != nil {
+			return windowsProcessRecord{}, false, fmt.Errorf("invalid managed Windows process record: %w", err)
+		}
+		if record.PID <= 0 || strings.TrimSpace(record.Executable) == "" {
+			return windowsProcessRecord{}, false, fmt.Errorf("invalid managed Windows process identity")
+		}
+		return record, true, nil
+	}
+	legacyPID, ok, err := m.store.GetKV(ctx, kvPID)
+	if err != nil {
+		return windowsProcessRecord{}, false, err
+	}
+	if !ok || strings.TrimSpace(legacyPID) == "" {
+		return windowsProcessRecord{}, false, nil
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(legacyPID))
+	if err != nil || pid <= 0 {
+		return windowsProcessRecord{}, false, fmt.Errorf("invalid legacy Windows process ID")
+	}
+	return windowsProcessRecord{PID: pid, Executable: m.cfg.PalServerExePath()}, true, nil
+}
+
+func (m Manager) verifyWindowsProcess(record windowsProcessRecord) (bool, error) {
+	info, err := m.processInfo(record.PID)
+	if err != nil {
+		if isWindowsProcessMissing(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect managed PalServer process %d: %w", record.PID, err)
+	}
+	if !info.Running {
+		return false, nil
+	}
+	if !sameWindowsExecutable(info.Executable, record.Executable) || !sameWindowsExecutable(info.Executable, m.cfg.PalServerExePath()) {
+		return false, fmt.Errorf("refusing to manage PID %d because its executable identity does not match PalServer.exe", record.PID)
+	}
+	if record.CreationTime != 0 && info.CreationTime != record.CreationTime {
+		return false, fmt.Errorf("refusing to manage PID %d because its creation time changed", record.PID)
+	}
+	return true, nil
+}
+
+func (m Manager) clearWindowsProcess(ctx context.Context) error {
+	if err := m.store.SetKV(ctx, kvPID, ""); err != nil {
+		return err
+	}
+	return m.store.SetKV(ctx, kvProcess, "")
+}
+
+func (m Manager) clearWindowsProcessIfMatch(record windowsProcessRecord) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	current, ok, err := m.loadWindowsProcess(ctx)
+	if err != nil || !ok || current.PID != record.PID {
+		return
+	}
+	if current.CreationTime != 0 && record.CreationTime != 0 && current.CreationTime != record.CreationTime {
+		return
+	}
+	_ = m.clearWindowsProcess(ctx)
 }
 
 func (m Manager) statusWarnings(mode string, installed, configExists bool) []string {
@@ -1144,6 +1294,10 @@ func addPathToZip(zw *zip.Writer, base, path string) ([]BackupManifestFile, erro
 }
 
 func extractZipSafe(zipPath, dst string) error {
+	return extractZipSafeValidated(zipPath, dst, nil)
+}
+
+func extractZipSafeValidated(zipPath, dst string, validate func(string) error) error {
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
@@ -1153,20 +1307,59 @@ func extractZipSafe(zipPath, dst string) error {
 	if err != nil {
 		return err
 	}
+	if len(reader.File) > 200_000 {
+		return fmt.Errorf("zip contains too many entries")
+	}
+	if validate != nil {
+		if err := validate(dst); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(reader.File))
+	const maxExtractedBytes int64 = 64 << 30
+	var declaredBytes int64
+	var extractedBytes int64
 	for _, file := range reader.File {
 		if file.Name == ".palpanel-backup.json" {
 			continue
 		}
-		target := filepath.Join(dst, file.Name)
+		if unsafeZipName(file.Name) {
+			return fmt.Errorf("zip contains unsafe path: %s", file.Name)
+		}
+		normalized := strings.ReplaceAll(strings.TrimSuffix(file.Name, "/"), "\\", "/")
+		key := strings.ToLower(normalized)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("zip contains duplicate path: %s", file.Name)
+		}
+		seen[key] = struct{}{}
+		if file.UncompressedSize64 > uint64(maxExtractedBytes) || declaredBytes > maxExtractedBytes-int64(file.UncompressedSize64) {
+			return fmt.Errorf("zip exceeds the extracted size limit")
+		}
+		declaredBytes += int64(file.UncompressedSize64)
+		mode := file.Mode()
+		isDirectory := file.FileInfo().IsDir()
+		if mode&os.ModeSymlink != 0 || (!isDirectory && mode.Type() != 0) {
+			return fmt.Errorf("zip contains unsupported file type: %s", file.Name)
+		}
+		target := filepath.Join(dst, filepath.FromSlash(normalized))
 		targetAbs, err := filepath.Abs(target)
 		if err != nil {
 			return err
 		}
-		if targetAbs != dst && !strings.HasPrefix(targetAbs, dst+string(os.PathSeparator)) {
+		relative, err := filepath.Rel(dst, targetAbs)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 			return fmt.Errorf("zip contains unsafe path: %s", file.Name)
 		}
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(targetAbs, file.Mode()); err != nil {
+		if validate != nil {
+			if err := validate(targetAbs); err != nil {
+				return err
+			}
+		}
+		if isDirectory {
+			if err := os.MkdirAll(targetAbs, 0o755); err != nil {
 				return err
 			}
 			continue
@@ -1174,20 +1367,34 @@ func extractZipSafe(zipPath, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
 			return err
 		}
+		if validate != nil {
+			if err := validate(targetAbs); err != nil {
+				return err
+			}
+		}
 		in, err := file.Open()
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(targetAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.Mode())
+		permissions := mode.Perm()
+		if permissions == 0 {
+			permissions = 0o644
+		}
+		out, err := os.OpenFile(targetAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, permissions)
 		if err != nil {
 			_ = in.Close()
 			return err
 		}
-		_, copyErr := io.Copy(out, in)
+		remaining := maxExtractedBytes - extractedBytes
+		written, copyErr := io.Copy(out, io.LimitReader(in, remaining+1))
+		extractedBytes += written
 		closeErr := out.Close()
 		_ = in.Close()
 		if copyErr != nil {
 			return copyErr
+		}
+		if extractedBytes > maxExtractedBytes {
+			return fmt.Errorf("zip exceeds the extracted size limit")
 		}
 		if closeErr != nil {
 			return closeErr
@@ -1398,11 +1605,41 @@ func readZipFile(file *zip.File) error {
 }
 
 func unsafeZipName(name string) bool {
-	if strings.TrimSpace(name) == "" || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	normalized = strings.TrimSuffix(normalized, "/")
+	if strings.TrimSpace(normalized) == "" || strings.HasPrefix(normalized, "/") || strings.Contains(normalized, ":") {
 		return true
 	}
-	clean := filepath.Clean(name)
-	return clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || filepath.IsAbs(clean)
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(normalized)))
+	if clean != normalized || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || filepath.IsAbs(filepath.FromSlash(clean)) {
+		return true
+	}
+	for _, component := range strings.Split(clean, "/") {
+		if !safeWindowsArchiveComponent(component) {
+			return true
+		}
+	}
+	return false
+}
+
+func safeWindowsArchiveComponent(component string) bool {
+	if component == "" || strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") || strings.ContainsAny(component, `<>"|?*`) {
+		return false
+	}
+	for _, character := range component {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	base := component
+	if index := strings.IndexByte(base, '.'); index >= 0 {
+		base = base[:index]
+	}
+	base = strings.ToUpper(base)
+	if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || base == "CLOCK$" {
+		return false
+	}
+	return !(len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9')
 }
 
 func copyFile(src, dst string) error {

@@ -127,7 +127,12 @@ func TestNewContractRoutes(t *testing.T) {
 		"POST /api/schedules/:id/run",
 		"GET /api/alerts",
 		"POST /api/alerts/:id/ack",
+		"POST /api/mods/local/scan",
+		"POST /api/mods/local/findings/:id/actions",
 		"GET /api/mods/workshop/status",
+		"GET /api/mods/workshop/auth/status",
+		"POST /api/mods/workshop/auth/start",
+		"POST /api/mods/workshop/auth/verify",
 		"GET /api/mods/workshop/search",
 		"GET /api/mods/workshop/:id",
 		"POST /api/mods/workshop/:id/translate",
@@ -154,6 +159,7 @@ func TestNewContractRoutes(t *testing.T) {
 		"GET /api/security/paldefender/gm/status",
 		"GET /api/security/paldefender/gm/items",
 		"GET /api/security/paldefender/gm/players",
+		"GET /api/security/paldefender/gm/players/:id",
 		"GET /api/security/paldefender/gm/players/:id/inventory",
 		"POST /api/security/paldefender/gm/players/:id/items",
 		"POST /api/security/paldefender/gm/players/:id/message",
@@ -167,9 +173,25 @@ func TestNewContractRoutes(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/server/docker/install", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/mods/local/scan", nil)
 	authorizeTestRequest(req)
 	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"findings":[]`) {
+		t.Fatalf("viewer local Mod scan expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/mods/local/findings/localmod_test/actions", strings.NewReader(`{"action":"ignore","revision":"old"}`))
+	req.Header.Set("Content-Type", "application/json")
+	authorizeTestRequest(req)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer local Mod action expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/server/docker/install", nil)
+	authorizeTestRequest(req)
+	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("viewer docker install expected 403, got %d: %s", rec.Code, rec.Body.String())
@@ -255,6 +277,12 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 		Ref string `yaml:"$ref"`
 	}
 	type operation struct {
+		Permission string `yaml:"x-palpanel-permission"`
+		Parameters []struct {
+			Name     string `yaml:"name"`
+			In       string `yaml:"in"`
+			Required bool   `yaml:"required"`
+		} `yaml:"parameters"`
 		RequestBody struct {
 			Content map[string]struct {
 				Schema schemaReference `yaml:"schema"`
@@ -265,6 +293,7 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	var spec struct {
 		Paths map[string]struct {
 			Post operation `yaml:"post"`
+			Put  operation `yaml:"put"`
 		} `yaml:"paths"`
 		Components struct {
 			SecuritySchemes map[string]struct {
@@ -273,6 +302,11 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 				Name   string `yaml:"name"`
 				Scheme string `yaml:"scheme"`
 			} `yaml:"securitySchemes"`
+			Schemas map[string]struct {
+				Properties map[string]struct {
+					WriteOnly bool `yaml:"writeOnly"`
+				} `yaml:"properties"`
+			} `yaml:"schemas"`
 		} `yaml:"components"`
 	}
 	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "openapi.yaml"))
@@ -300,6 +334,50 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	assertRequestSchema("/security/paldefender/gm/players/{id}/items", "application/json", "PalDefenderGiveItemsRequest")
 	assertRequestSchema("/security/paldefender/gm/players/{id}/message", "application/json", "PalDefenderMessageRequest")
 	assertRequestSchema("/security/paldefender/gm/broadcast", "application/json", "PalDefenderBroadcastRequest")
+	for _, path := range []string{
+		"/security/paldefender/gm/players/{id}/items",
+		"/security/paldefender/gm/players/{id}/message",
+		"/security/paldefender/gm/players/{id}/kick",
+		"/security/paldefender/gm/players/{id}/ban",
+		"/security/paldefender/gm/players/{id}/unban",
+		"/security/paldefender/gm/broadcast",
+	} {
+		var found bool
+		for _, parameter := range spec.Paths[path].Post.Parameters {
+			if parameter.Name == "Idempotency-Key" && parameter.In == "header" && parameter.Required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("POST %s must require the Idempotency-Key header", path)
+		}
+	}
+	assertRequestSchema("/ai/translation/test", "application/json", "AITranslationConfigUpdate")
+	if got := spec.Paths["/ai/translation/config"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/AITranslationConfigUpdate" {
+		t.Errorf("PUT /ai/translation/config request schema = %q", got)
+	}
+	for _, property := range []string{"api_key", "proxy_url", "custom_headers"} {
+		if !spec.Components.Schemas["AITranslationConfigUpdate"].Properties[property].WriteOnly {
+			t.Errorf("AITranslationConfigUpdate.%s must be writeOnly", property)
+		}
+	}
+	if permission := spec.Paths["/mods/local/scan"].Post.Permission; permission != "read" {
+		t.Errorf("POST /mods/local/scan permission = %q, want read", permission)
+	}
+	if _, ok := spec.Paths["/mods/local/scan"].Post.Responses["200"]; !ok {
+		t.Error("POST /mods/local/scan does not document its 200 response")
+	}
+	if permission := spec.Paths["/mods/local/findings/{id}/actions"].Post.Permission; permission != "mods:write" {
+		t.Errorf("POST /mods/local/findings/{id}/actions permission = %q, want mods:write", permission)
+	}
+	if permission := spec.Paths["/mods/workshop/auth/start"].Post.Permission; permission != "security:write" {
+		t.Errorf("POST /mods/workshop/auth/start permission = %q, want security:write", permission)
+	}
+	if permission := spec.Paths["/mods/workshop/auth/verify"].Post.Permission; permission != "security:write" {
+		t.Errorf("POST /mods/workshop/auth/verify permission = %q, want security:write", permission)
+	}
+	assertRequestSchema("/mods/local/findings/{id}/actions", "application/json", "LocalModActionRequest")
 
 	responses := spec.Paths["/mods/import"].Post.Responses
 	if _, ok := responses["202"]; !ok {

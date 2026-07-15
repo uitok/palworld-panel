@@ -93,6 +93,12 @@ func failModImport(c *gin.Context, err error) {
 	}
 	status := http.StatusBadRequest
 	switch failure.Code {
+	case "steam_login_required":
+		status = http.StatusUnauthorized
+	case "steam_login_unsupported":
+		status = http.StatusConflict
+	case "steam_login_verify_failed":
+		status = http.StatusBadGateway
 	case "inspection_not_found", "candidate_not_found":
 		status = http.StatusNotFound
 	case "inspection_expired":

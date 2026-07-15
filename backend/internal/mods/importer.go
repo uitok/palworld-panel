@@ -20,6 +20,7 @@ import (
 	"palpanel/internal/db"
 	"palpanel/internal/id"
 	"palpanel/internal/jobs"
+	"palpanel/internal/steamcmd"
 )
 
 const (
@@ -90,13 +91,16 @@ type importRegistry struct {
 	downloader    *safeDownloader
 	githubAPIBase string
 	maxBytes      int64
+	cfg           appconfig.Config
 }
 
 func newImportRegistry(cfg appconfig.Config) *importRegistry {
 	root := ""
 	if strings.TrimSpace(cfg.ServerDir) != "" {
 		root = filepath.Join(cfg.WorkshopModsDir(), ".palpanel-imports")
-		if err := os.RemoveAll(root); err != nil {
+		if err := cfg.ValidateManagedPath(root, false); err != nil {
+			root = ""
+		} else if err := os.RemoveAll(root); err != nil {
 			root = ""
 		}
 	}
@@ -111,6 +115,7 @@ func newImportRegistry(cfg appconfig.Config) *importRegistry {
 		downloader:    newSafeDownloader(),
 		githubAPIBase: "https://api.github.com",
 		maxBytes:      limit,
+		cfg:           cfg,
 	}
 }
 
@@ -126,7 +131,7 @@ func (m Manager) InspectSource(ctx context.Context, source string) (ImportInspec
 	keep := false
 	defer func() {
 		if !keep {
-			_ = os.RemoveAll(record.directory)
+			_ = m.removeManagedDirectory(record.directory)
 		}
 	}()
 
@@ -188,7 +193,7 @@ func (m Manager) InspectUpload(ctx context.Context, reader io.Reader, filename s
 	keep := false
 	defer func() {
 		if !keep {
-			_ = os.RemoveAll(record.directory)
+			_ = m.removeManagedDirectory(record.directory)
 		}
 	}()
 	candidateID, err := newImportIdentifier("candidate")
@@ -233,6 +238,21 @@ func (m Manager) Import(ctx context.Context, inspectionID, candidateID string) (
 	record, candidate, err := m.imports.claim(inspectionID, candidateID)
 	if err != nil {
 		return db.Job{}, err
+	}
+	if candidate.workshopID != "" {
+		if _, err := m.RequireWorkshopLogin(ctx); err != nil {
+			m.imports.release(record)
+			switch {
+			case errors.Is(err, steamcmd.ErrLoginRequired):
+				return db.Job{}, ImportFailure{Code: "steam_login_required", Err: steamcmd.ErrLoginRequired}
+			case errors.Is(err, steamcmd.ErrInteractiveLogin):
+				return db.Job{}, ImportFailure{Code: "steam_login_unsupported", Err: steamcmd.ErrInteractiveLogin}
+			case errors.Is(err, steamcmd.ErrInvalidAccountName):
+				return db.Job{}, ImportFailure{Code: "invalid_steam_account", Err: errors.New("saved Steam account name is invalid")}
+			default:
+				return db.Job{}, ImportFailure{Code: "steam_login_verify_failed", Err: errors.New("Steam login verification failed")}
+			}
+		}
 	}
 	job, err := m.jobs.Submit(ctx, jobs.ClassLifecycle, "mod_import", "queued mod import", func(jobCtx context.Context, jobID string) {
 		defer m.imports.complete(record)
@@ -332,7 +352,7 @@ func (m Manager) inspectGitHub(ctx context.Context, record *importRecord, parsed
 
 func (m Manager) prepareArchiveCandidate(ctx context.Context, record *importRecord, candidate *importCandidateRecord) error {
 	directory := filepath.Join(record.directory, candidate.public.ID)
-	if err := os.RemoveAll(directory); err != nil {
+	if err := m.removeManagedDirectory(directory); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -350,7 +370,7 @@ func (m Manager) prepareArchiveCandidate(ctx context.Context, record *importReco
 
 func (m Manager) analyzeArchiveCandidate(ctx context.Context, record *importRecord, candidate *importCandidateRecord) error {
 	extractDirectory := filepath.Join(filepath.Dir(candidate.archivePath), "extracted")
-	if err := os.RemoveAll(extractDirectory); err != nil {
+	if err := m.removeManagedDirectory(extractDirectory); err != nil {
 		return err
 	}
 	if err := extractArchive(candidate.archivePath, extractDirectory); err != nil {
@@ -440,7 +460,7 @@ func (m Manager) installPrepared(ctx context.Context, sourceRoot, source, worksh
 		return db.Mod{}, statErr
 	}
 	rollbackFiles := func() error {
-		_ = os.RemoveAll(target)
+		_ = m.removeManagedDirectory(target)
 		if targetExisted {
 			return os.Rename(backup, target)
 		}
@@ -498,7 +518,7 @@ func (m Manager) installPrepared(ctx context.Context, sourceRoot, source, worksh
 		}
 	}
 	if targetExisted {
-		if err := os.RemoveAll(backup); err != nil {
+		if err := m.removeManagedDirectory(backup); err != nil {
 			// The new directory and database row are already committed. Leaving a
 			// backup is safer than reporting a failed installation at this point.
 			return mod, nil
@@ -508,18 +528,20 @@ func (m Manager) installPrepared(ctx context.Context, sourceRoot, source, worksh
 }
 
 func (m Manager) runWorkshopImport(ctx context.Context, jobID, itemID string, enableNew bool, meta WorkshopItem, directory string) {
-	m.update(jobID, "running", 10, "building wine runner image", "")
-	if err := m.runner.BuildImage(ctx); err != nil {
-		m.update(jobID, "failed", 10, "build failed", err.Error())
+	downloadRoot := filepath.Join(directory, "workshop")
+	if err := m.cfg.ValidateManagedPath(downloadRoot, false); err != nil {
+		m.update(jobID, "failed", 20, "Workshop staging directory is unsafe", err.Error())
 		return
 	}
-	downloadRoot := filepath.Join(directory, "workshop")
 	if err := os.MkdirAll(downloadRoot, 0o700); err != nil {
 		m.update(jobID, "failed", 20, "create Workshop staging directory failed", err.Error())
 		return
 	}
-	m.update(jobID, "running", 50, "downloading Steam Workshop item", "")
-	if err := m.runner.DownloadWorkshopTo(ctx, itemID, downloadRoot); err != nil {
+	if err := m.cfg.ValidateManagedPath(downloadRoot, false); err != nil {
+		m.update(jobID, "failed", 20, "Workshop staging directory is unsafe", err.Error())
+		return
+	}
+	if err := m.downloadWorkshopTo(ctx, jobID, itemID, downloadRoot); err != nil {
 		m.update(jobID, "failed", 50, "Workshop download failed", err.Error())
 		return
 	}
@@ -612,7 +634,7 @@ func (r *importRegistry) cancelSelection(record *importRecord) {
 		current.preparing = false
 		if !r.now().UTC().Before(current.expiresAt) {
 			delete(r.records, current.inspection.ID)
-			_ = os.RemoveAll(current.directory)
+			_ = r.removeManagedDirectory(current.directory)
 		}
 	}
 }
@@ -627,7 +649,7 @@ func (r *importRegistry) finishSelection(record *importRecord, candidate, staged
 	current.preparing = false
 	if !r.now().UTC().Before(current.expiresAt) {
 		delete(r.records, current.inspection.ID)
-		_ = os.RemoveAll(current.directory)
+		_ = r.removeManagedDirectory(current.directory)
 		return ImportInspection{}, ImportFailure{Code: "inspection_expired", Err: errors.New("import inspection has expired")}
 	}
 	*candidate = *staged
@@ -677,7 +699,7 @@ func (r *importRegistry) complete(record *importRecord) {
 		delete(r.records, record.inspection.ID)
 	}
 	r.mu.Unlock()
-	_ = os.RemoveAll(record.directory)
+	_ = r.removeManagedDirectory(record.directory)
 }
 
 func (r *importRegistry) cleanupExpiredLocked() {
@@ -685,7 +707,7 @@ func (r *importRegistry) cleanupExpiredLocked() {
 	for inspectionID, record := range r.records {
 		if !record.claimed && !record.preparing && !now.Before(record.expiresAt) {
 			delete(r.records, inspectionID)
-			_ = os.RemoveAll(record.directory)
+			_ = r.removeManagedDirectory(record.directory)
 		}
 	}
 }
@@ -695,7 +717,7 @@ func (r *importRegistry) recordLocked(inspectionID string) (*importRecord, error
 	record, ok := r.records[inspectionID]
 	if ok && !record.claimed && !record.preparing && !r.now().UTC().Before(record.expiresAt) {
 		delete(r.records, inspectionID)
-		_ = os.RemoveAll(record.directory)
+		_ = r.removeManagedDirectory(record.directory)
 		r.cleanupExpiredLocked()
 		return nil, ImportFailure{Code: "inspection_expired", Err: errors.New("import inspection has expired")}
 	}
@@ -704,6 +726,16 @@ func (r *importRegistry) recordLocked(inspectionID string) (*importRecord, error
 		return nil, ImportFailure{Code: "inspection_not_found", Err: errors.New("import inspection was not found")}
 	}
 	return record, nil
+}
+
+func (r *importRegistry) removeManagedDirectory(path string) error {
+	if err := r.cfg.ValidateManagedPath(path, false); err != nil {
+		return err
+	}
+	if err := r.cfg.ValidateManagedPath(path, false); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
 }
 
 func newImportIdentifier(prefix string) (string, error) {

@@ -88,6 +88,9 @@ const apiErrorFrom = (error: unknown): ApiError => {
   if (!status && (axiosError?.code === 'ECONNABORTED' || axiosError?.code === 'ETIMEDOUT')) {
     return new ApiError('当前面板后端响应超时，请稍后重试。');
   }
+  if (status === 401 && typeof payload?.error === 'object' && payload.error?.code === 'steam_login_required') {
+    return new ApiError(payload.error.message || 'Steam 登录已失效，请重新登录。', status, payload.error.code);
+  }
   if (status === 401) {
     return new ApiError('登录状态已失效，请重新登录。', status, 'unauthorized');
   }
@@ -130,7 +133,10 @@ const logFallback = (error: unknown, quiet?: boolean) => {
 };
 
 const notifyAuthError = (error: unknown) => {
-  if (getStatusCode(error) === 401 && typeof window !== 'undefined') {
+  const axiosError = error as AxiosError<ApiEnvelope> | undefined;
+  const payloadError = axiosError?.response?.data?.error;
+  const errorCode = typeof payloadError === 'object' ? payloadError?.code : undefined;
+  if (getStatusCode(error) === 401 && errorCode !== 'steam_login_required' && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(appEvents.authError));
   }
 };

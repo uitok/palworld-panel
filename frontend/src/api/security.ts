@@ -1,5 +1,5 @@
 import { apiClient, handleRequest } from './client';
-import type { Job, PalDefenderRelease, PalDefenderStatus, TokenResult } from '../types';
+import type { Job, PalDefenderRelease, PalDefenderStatus, TokenResult, UE4SSDependencyStatus, UE4SSDependencyState } from '../types';
 import { mapJob } from './tasks';
 
 export const palDefenderPanelPermissions = [
@@ -29,6 +29,48 @@ const fallbackStatus: PalDefenderStatus = {
   paths: {},
   rest_api_enabled: false,
   warnings: [],
+  load_verified: false,
+  ue4ss: {
+    state: 'not_checked',
+    installed: false,
+    compatible: false,
+    files: {},
+    path: '',
+    message: 'UE4SS status has not been checked.',
+    load_verified: false,
+  },
+};
+
+const dependencyStates = new Set<UE4SSDependencyState>([
+  'not_checked',
+  'checking',
+  'missing',
+  'installing',
+  'installed',
+  'incompatible',
+  'failed',
+  'rollback_required',
+]);
+
+const mapUE4SS = (raw: unknown): UE4SSDependencyStatus => {
+  const data = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const rawState = String(data.state || 'not_checked') as UE4SSDependencyState;
+  return {
+    state: dependencyStates.has(rawState) ? rawState : 'not_checked',
+    installed: Boolean(data.installed),
+    version: data.version ? String(data.version) : undefined,
+    compatible: Boolean(data.compatible),
+    files:
+      data.files && typeof data.files === 'object' && !Array.isArray(data.files)
+        ? (data.files as Record<string, boolean>)
+        : {},
+    path: String(data.path || ''),
+    message: String(data.message || ''),
+    error: data.error ? String(data.error) : undefined,
+    archive_sha256: data.archive_sha256 ? String(data.archive_sha256) : undefined,
+    load_verified: Boolean(data.load_verified),
+    load_evidence: data.load_evidence ? String(data.load_evidence) : undefined,
+  };
 };
 const mapStatus = (raw: unknown): PalDefenderStatus => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -54,6 +96,9 @@ const mapStatus = (raw: unknown): PalDefenderStatus => {
         : {},
     rest_api_enabled: Boolean(data.rest_api_enabled),
     warnings: Array.isArray(data.warnings) ? data.warnings.map(String) : [],
+    ue4ss: mapUE4SS(data.ue4ss),
+    load_verified: Boolean(data.load_verified),
+    load_evidence: data.load_evidence ? String(data.load_evidence) : undefined,
   };
 };
 

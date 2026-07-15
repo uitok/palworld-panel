@@ -2,19 +2,57 @@ param(
   [string]$Version = "v0.0.0-dev",
   [switch]$SkipTests,
   [switch]$Clean,
-  [string]$MingwGcc = "C:\msys64\mingw64\bin\gcc.exe"
+  [string]$MingwGcc = "C:\msys64\mingw64\bin\gcc.exe",
+  [string]$RuntimeRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RootDir = Split-Path -Parent $ScriptDir
-$PackagesDir = Join-Path $RootDir "dist\packages"
+Set-StrictMode -Version Latest
+$ScriptDir = $PSScriptRoot
+Import-Module (Join-Path $ScriptDir "windows-e2e-common.psm1") -Force
+$RootDir = Get-PalPanelRepositoryRoot
+$MingwGcc = Resolve-PalPanelPath -Path $MingwGcc -BasePath $RootDir
+$MingwBin = Split-Path -Parent $MingwGcc
+$MingwGxx = Join-Path $MingwBin "g++.exe"
+if (-not (Test-Path -LiteralPath $MingwGcc -PathType Leaf)) {
+  throw "MinGW gcc not found: $MingwGcc"
+}
+if (-not (Test-Path -LiteralPath $MingwGxx -PathType Leaf)) {
+  throw "MinGW g++ not found next to gcc: $MingwGxx"
+}
+if ($Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]*$') {
+  throw "Version contains unsafe path or shell characters: $Version"
+}
+
+$ManagedRuntimeRoot = if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+  Join-Path $RootDir "dev-runtime\windows"
+} else {
+  Resolve-PalPanelPath -Path $RuntimeRoot -BasePath $RootDir
+}
+$ManagedRuntimeRoot = Initialize-PalPanelWindowsLayout -RepositoryRoot $RootDir -RuntimeRoot $ManagedRuntimeRoot
+$PackagesDir = if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+  Join-Path $RootDir "dist\packages"
+} else {
+  Join-Path $ManagedRuntimeRoot "package"
+}
 $PackageName = "palpanel_${Version}_windows_amd64"
 $PackageDir = Join-Path $PackagesDir $PackageName
 $Archive = Join-Path $PackagesDir "$PackageName.zip"
 $WebUIEmbedDir = Join-Path $RootDir "backend\internal\webui\embedded"
-$Commit = (& git -C $RootDir rev-parse HEAD).Trim()
-$BuildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$PackageTemp = Join-Path $ManagedRuntimeRoot "temp\package-$PID-$([guid]::NewGuid().ToString('N'))"
+Assert-PalPanelManagedPath -RepositoryRoot $RootDir -TargetPath $PackageTemp | Out-Null
+New-Item -ItemType Directory -Force -Path $PackageTemp | Out-Null
+$PreviousTemp = $env:TEMP
+$PreviousTmp = $env:TMP
+$PreviousGoCache = $env:GOCACHE
+$PreviousNpmCache = $env:NPM_CONFIG_CACHE
+$env:TEMP = $PackageTemp
+$env:TMP = $PackageTemp
+$env:GOCACHE = Join-Path $PackageTemp "go-cache"
+$env:NPM_CONFIG_CACHE = Join-Path $PackageTemp "npm-cache"
+New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
+New-Item -ItemType Directory -Force -Path $env:NPM_CONFIG_CACHE | Out-Null
+$PackageSucceeded = $false
 
 function Invoke-External {
   param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory)
@@ -29,6 +67,39 @@ function Invoke-External {
   }
 }
 
+function Invoke-GoTestsWithWindowsLockRetry {
+  param([string]$WorkingDirectory, [int]$MaxAttempts = 3)
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    Push-Location $WorkingDirectory
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      # Windows PowerShell 5 promotes native stderr to NativeCommandError when
+      # ErrorActionPreference is Stop. Capture all compiler output and decide
+      # success from the native process exit code instead.
+      $ErrorActionPreference = "Continue"
+      $output = @(& go test -p=1 ./... 2>&1)
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+      Pop-Location
+    }
+    $output | ForEach-Object { Write-Host $_ }
+    if ($exitCode -eq 0) {
+      return
+    }
+
+    $outputText = ($output | Out-String)
+    $isTransientWindowsLock = $outputText -match '(?i)process cannot access the file because it is being used by another process'
+    if (-not $isTransientWindowsLock -or $attempt -eq $MaxAttempts) {
+      throw "go test -p=1 ./... failed with exit code $exitCode"
+    }
+
+    Write-Warning "Windows temporarily locked a newly built Go test executable; retrying the full Go test suite ($attempt/$MaxAttempts)."
+    Start-Sleep -Seconds 2
+  }
+}
+
 function Clear-WebUIStage {
   if (-not (Test-Path $WebUIEmbedDir)) { return }
   Get-ChildItem -LiteralPath $WebUIEmbedDir -Force |
@@ -36,31 +107,58 @@ function Clear-WebUIStage {
     Remove-Item -Recurse -Force
 }
 
-if ($Clean -and (Test-Path $PackageDir)) {
-  Remove-Item -Recurse -Force $PackageDir
-}
-if (Test-Path $Archive) {
-  Remove-Item -Force $Archive
-}
-New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+try {
+  $commitOutput = & git -C $RootDir rev-parse HEAD
+  if ($LASTEXITCODE -ne 0) {
+    throw "git rev-parse HEAD failed with exit code $LASTEXITCODE"
+  }
+  $Commit = ($commitOutput | Out-String).Trim()
+  if ([string]::IsNullOrWhiteSpace($Commit)) {
+    throw "git rev-parse HEAD returned an empty commit"
+  }
+  $BuildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+  if (-not [string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+    Assert-PalPanelManagedPath -RepositoryRoot $RootDir -TargetPath $PackageDir | Out-Null
+    Assert-PalPanelManagedPath -RepositoryRoot $RootDir -TargetPath $Archive | Out-Null
+  }
+  if (Test-Path -LiteralPath $PackageDir) {
+    if (-not $Clean) {
+      throw "Package directory already exists: $PackageDir. Rerun with -Clean to replace it safely."
+    }
+    Remove-Item -LiteralPath $PackageDir -Recurse -Force
+  }
+  if (Test-Path $Archive) {
+    Remove-Item -Force $Archive
+  }
+  New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 
 if (-not $SkipTests) {
-  Invoke-External "go" @("test", "-p=1", "./...") (Join-Path $RootDir "backend")
-  if (-not (Test-Path $MingwGcc)) {
-    throw "MinGW gcc not found: $MingwGcc"
-  }
+  Invoke-GoTestsWithWindowsLockRetry (Join-Path $RootDir "backend")
   $oldCgo = $env:CGO_ENABLED
   $oldCc = $env:CC
+  $oldCxx = $env:CXX
+  $oldPath = $env:PATH
   try {
     $env:CGO_ENABLED = "1"
     $env:CC = $MingwGcc
-    Invoke-External "go" @("test", "-p=1", "./...") (Join-Path $RootDir "sav-cli")
+    $env:CXX = $MingwGxx
+    $env:PATH = $MingwBin + [System.IO.Path]::PathSeparator + $oldPath
+    Invoke-GoTestsWithWindowsLockRetry (Join-Path $RootDir "sav-cli")
   } finally {
     $env:CGO_ENABLED = $oldCgo
     $env:CC = $oldCc
+    $env:CXX = $oldCxx
+    $env:PATH = $oldPath
   }
   Invoke-External "npm.cmd" @("ci") (Join-Path $RootDir "frontend")
-  Invoke-External "npm.cmd" @("run", "check") (Join-Path $RootDir "frontend")
+  # CI checks that generated contracts are committed. Local packaging must also
+  # work before a commit, so run the same validation without diffing against HEAD.
+  Invoke-External "npm.cmd" @("run", "generate:api-types") (Join-Path $RootDir "frontend")
+  Invoke-External "npm.cmd" @("run", "typecheck") (Join-Path $RootDir "frontend")
+  Invoke-External "npm.cmd" @("run", "lint") (Join-Path $RootDir "frontend")
+  Invoke-External "npm.cmd" @("run", "test") (Join-Path $RootDir "frontend")
+  Invoke-External "npm.cmd" @("run", "build") (Join-Path $RootDir "frontend")
 } else {
   Invoke-External "npm.cmd" @("ci") (Join-Path $RootDir "frontend")
   Invoke-External "npm.cmd" @("run", "build") (Join-Path $RootDir "frontend")
@@ -72,6 +170,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "licenses") | O
 Copy-Item -Recurse -Force (Join-Path $RootDir "backend\deployments\wine-runner") (Join-Path $PackageDir "backend\deployments\wine-runner")
 Copy-Item -Force (Join-Path $RootDir "scripts\palpanel.env.example") (Join-Path $PackageDir "config\palpanel.env.example")
 Copy-Item -Force (Join-Path $RootDir "scripts\package-README-windows.md") (Join-Path $PackageDir "README.md")
+New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "maintenance") | Out-Null
+foreach ($maintenanceScript in @(
+  "windows-maintenance.psm1",
+  "upgrade-windows.ps1",
+  "uninstall-windows.ps1",
+  "recover-windows-config.ps1"
+)) {
+  Copy-Item -Force (Join-Path $RootDir (Join-Path "scripts" $maintenanceScript)) (Join-Path $PackageDir (Join-Path "maintenance" $maintenanceScript))
+}
 Copy-Item -Force (Join-Path $RootDir "LICENSE") (Join-Path $PackageDir "LICENSE")
 Copy-Item -Force (Join-Path $RootDir "THIRD_PARTY_LICENSES.txt") (Join-Path $PackageDir "THIRD_PARTY_LICENSES.txt")
 Copy-Item -Force (Join-Path $RootDir "sav-cli\LICENSE") (Join-Path $PackageDir "licenses\sav-cli-LICENSE.txt")
@@ -84,6 +191,8 @@ $oldGoos = $env:GOOS
 $oldGoarch = $env:GOARCH
 $oldCgo = $env:CGO_ENABLED
 $oldCc = $env:CC
+$oldCxx = $env:CXX
+$oldPath = $env:PATH
 Clear-WebUIStage
 New-Item -ItemType Directory -Force -Path $WebUIEmbedDir | Out-Null
 Copy-Item -Recurse -Force (Join-Path $RootDir "frontend\dist\*") $WebUIEmbedDir
@@ -94,17 +203,18 @@ try {
   Invoke-External "go" @("build", "-tags", "embed_webui", "-trimpath", "-ldflags", $backendLdflags, "-o", (Join-Path $PackageDir "palpanel-server.exe"), "./cmd/palpanel") (Join-Path $RootDir "backend")
   Invoke-External "go" @("build", "-trimpath", "-ldflags", "$backendLdflags -H windowsgui", "-o", (Join-Path $PackageDir "PalPanel.exe"), "./cmd/palpanel-launcher") (Join-Path $RootDir "backend")
 
-  if (-not (Test-Path $MingwGcc)) {
-    throw "MinGW gcc not found: $MingwGcc"
-  }
   $env:CGO_ENABLED = "1"
   $env:CC = $MingwGcc
+  $env:CXX = $MingwGxx
+  $env:PATH = $MingwBin + [System.IO.Path]::PathSeparator + $oldPath
   Invoke-External "go" @("build", "-trimpath", "-ldflags", $savLdflags, "-o", (Join-Path $PackageDir "sav-cli.exe"), "./cmd/sav_cli") (Join-Path $RootDir "sav-cli")
 } finally {
   $env:GOOS = $oldGoos
   $env:GOARCH = $oldGoarch
   $env:CGO_ENABLED = $oldCgo
   $env:CC = $oldCc
+  $env:CXX = $oldCxx
+  $env:PATH = $oldPath
   Clear-WebUIStage
 }
 
@@ -118,4 +228,16 @@ $checksumLines = Get-ChildItem -LiteralPath $PackageDir -Recurse -File |
   }
 Set-Content -LiteralPath (Join-Path $PackageDir "checksums.txt") -Value $checksumLines -Encoding ASCII
 Compress-Archive -Path $PackageDir -DestinationPath $Archive -Force
-Write-Host "[palpanel] Wrote unsigned Windows release package $Archive"
+  Write-Host "[palpanel] Wrote unsigned Windows release package $Archive"
+  $PackageSucceeded = $true
+} finally {
+  $env:TEMP = $PreviousTemp
+  $env:TMP = $PreviousTmp
+  $env:GOCACHE = $PreviousGoCache
+  $env:NPM_CONFIG_CACHE = $PreviousNpmCache
+  if ($PackageSucceeded -and (Test-Path -LiteralPath $PackageTemp)) {
+    Remove-PalPanelManagedDirectory -RepositoryRoot $RootDir -RuntimeRoot $ManagedRuntimeRoot -TargetPath $PackageTemp
+  } elseif (-not $PackageSucceeded) {
+    Write-Warning "Package staging was retained for diagnosis: $PackageTemp"
+  }
+}

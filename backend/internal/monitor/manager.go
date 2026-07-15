@@ -3,7 +3,6 @@ package monitor
 import (
 	"context"
 	"encoding/csv"
-	"fmt"
 	"net"
 	"os/exec"
 	"runtime"
@@ -20,14 +19,15 @@ import (
 )
 
 type Manager struct {
-	cfg     appconfig.Config
-	store   *db.Store
-	server  Server
-	palrest palrest.Client
-	run     func(context.Context, string, ...string) ([]byte, error)
-	dial    func(string, string, time.Duration) (net.Conn, error)
-	goos    string
-	now     func() time.Time
+	cfg       appconfig.Config
+	store     *db.Store
+	server    Server
+	palrest   palrest.Client
+	run       func(context.Context, string, ...string) ([]byte, error)
+	dial      func(string, string, time.Duration) (net.Conn, error)
+	diskUsage func(string) (int64, int64, error)
+	goos      string
+	now       func() time.Time
 }
 
 type Server interface {
@@ -41,7 +41,8 @@ type Snapshot struct {
 func New(cfg appconfig.Config, store *db.Store, serverManager Server, restClient palrest.Client) Manager {
 	return Manager{
 		cfg: cfg, store: store, server: serverManager, palrest: restClient,
-		run: runCommand, dial: net.DialTimeout, goos: runtime.GOOS, now: time.Now,
+		run: runCommand, dial: net.DialTimeout, diskUsage: platformDiskUsage,
+		goos: runtime.GOOS, now: time.Now,
 	}
 }
 
@@ -235,49 +236,20 @@ func (m Manager) fillWindowsProcessStats(ctx context.Context, sample *db.Monitor
 }
 
 func (m Manager) fillDiskStats(ctx context.Context, sample *db.MonitorSample) {
-	if m.runtimeOS() == "windows" {
-		drive := "C:"
-		if len(m.cfg.DataDir) >= 2 && m.cfg.DataDir[1] == ':' {
-			drive = m.cfg.DataDir[:2]
-		}
-		out, err := m.command(ctx, "powershell", "-NoProfile", "-Command", fmt.Sprintf("(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='%s'\").FreeSpace; (Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='%s'\").Size", drive, drive))
-		m.parseDiskStats(out, err, true, sample)
-		return
-	} else {
-		out, err := m.command(ctx, "df", "-k", m.cfg.DataDir)
-		m.parseDiskStats(out, err, false, sample)
+	_ = ctx
+	diskUsage := m.diskUsage
+	if diskUsage == nil {
+		diskUsage = platformDiskUsage
 	}
-}
-
-func (m Manager) parseDiskStats(out []byte, err error, windows bool, sample *db.MonitorSample) {
+	free, total, err := diskUsage(m.cfg.DataDir)
 	if err != nil {
-		appendReason(sample, "disk: "+strings.TrimSpace(string(out)))
+		appendReason(sample, "disk: "+err.Error())
 		return
 	}
-	lines := nonEmptyLines(string(out))
-	if windows {
-		if len(lines) >= 2 {
-			free, _ := strconv.ParseInt(strings.TrimSpace(lines[0]), 10, 64)
-			total, _ := strconv.ParseInt(strings.TrimSpace(lines[1]), 10, 64)
-			if total > 0 {
-				sample.DiskAvailable = true
-				sample.DiskFreeBytes = free
-				sample.DiskTotalBytes = total
-			}
-		}
-		return
-	}
-	if len(lines) >= 2 {
-		fields := strings.Fields(lines[1])
-		if len(fields) >= 4 {
-			total, _ := strconv.ParseInt(fields[1], 10, 64)
-			free, _ := strconv.ParseInt(fields[3], 10, 64)
-			if total > 0 {
-				sample.DiskAvailable = true
-				sample.DiskTotalBytes = total * 1024
-				sample.DiskFreeBytes = free * 1024
-			}
-		}
+	if total > 0 {
+		sample.DiskAvailable = true
+		sample.DiskFreeBytes = free
+		sample.DiskTotalBytes = total
 	}
 }
 
