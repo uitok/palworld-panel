@@ -12,6 +12,7 @@ import (
 )
 
 const DefaultDockerRunnerBaseImage = "scottyhardy/docker-wine:latest@sha256:477aae36af41923cfb5eefb23923b035f8010caa49eaded952316f937dd8a49b"
+const DefaultRCONPort = 25575
 const DefaultPalDefenderRESTPort = 17993
 const DefaultSteamAPIBaseURL = "https://api.steampowered.com"
 const DefaultSteamAPITimeoutSeconds = 15
@@ -72,6 +73,7 @@ type Config struct {
 	WorkshopAppID                string
 	GamePort                     int
 	QueryPort                    int
+	RCONPort                     int
 	RESTPort                     int
 	PalworldRESTBaseURL          string
 	PalworldRESTUser             string
@@ -200,6 +202,7 @@ func Load() (Config, error) {
 	}
 
 	steamWebAPIKey, steamWebAPIKeySource := resolveSteamWebAPIKey()
+	restPort := envInt("PALPANEL_REST_PORT", 8212)
 	palDefenderRESTPort := envInt("PALPANEL_PALDEFENDER_REST_PORT", DefaultPalDefenderRESTPort)
 	cfg := Config{
 		RuntimeRoot:                  layout.RuntimeRoot,
@@ -238,8 +241,9 @@ func Load() (Config, error) {
 		WorkshopAppID:                env("PALPANEL_WORKSHOP_APP_ID", "1623730"),
 		GamePort:                     envInt("PALPANEL_GAME_PORT", 8211),
 		QueryPort:                    envInt("PALPANEL_QUERY_PORT", 27015),
-		RESTPort:                     envInt("PALPANEL_REST_PORT", 8212),
-		PalworldRESTBaseURL:          env("PALWORLD_REST_BASE_URL", "http://127.0.0.1:8212/v1/api"),
+		RCONPort:                     envInt("PALPANEL_RCON_PORT", DefaultRCONPort),
+		RESTPort:                     restPort,
+		PalworldRESTBaseURL:          env("PALWORLD_REST_BASE_URL", fmt.Sprintf("http://127.0.0.1:%d/v1/api", restPort)),
 		PalworldRESTUser:             env("PALWORLD_REST_USER", "admin"),
 		PalworldRESTPass:             env("PALWORLD_ADMIN_PASSWORD", ""),
 		PalworldRESTReadTimeoutMS:    envInt("PALPANEL_PALWORLD_REST_READ_TIMEOUT_MS", 1200),
@@ -292,6 +296,17 @@ func Load() (Config, error) {
 	}
 	if cfg.MonitorRetentionDays < 0 || cfg.MonitorRetentionDays > 3650 {
 		return Config{}, fmt.Errorf("PALPANEL_MONITOR_RETENTION_DAYS must be between 0 and 3650")
+	}
+	for name, port := range map[string]int{
+		"PALPANEL_GAME_PORT":             cfg.GamePort,
+		"PALPANEL_QUERY_PORT":            cfg.QueryPort,
+		"PALPANEL_RCON_PORT":             cfg.RCONPort,
+		"PALPANEL_REST_PORT":             cfg.RESTPort,
+		"PALPANEL_PALDEFENDER_REST_PORT": cfg.PalDefenderRESTPort,
+	} {
+		if port < 1 || port > 65535 {
+			return Config{}, fmt.Errorf("%s must be between 1 and 65535", name)
+		}
 	}
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
@@ -370,6 +385,13 @@ func (c Config) Win64Dir() string {
 
 func (c Config) PalDefenderDir() string {
 	return filepath.Join(c.Win64Dir(), "PalDefender")
+}
+
+func (c Config) EffectiveRCONPort() int {
+	if c.RCONPort > 0 {
+		return c.RCONPort
+	}
+	return DefaultRCONPort
 }
 
 func (c Config) EffectivePalDefenderRESTPort() int {
@@ -469,6 +491,7 @@ func validateScalarEnvironment() error {
 		"PALPANEL_UE4SS_DOWNLOAD_MAX_MB",
 		"PALPANEL_GAME_PORT",
 		"PALPANEL_QUERY_PORT",
+		"PALPANEL_RCON_PORT",
 		"PALPANEL_REST_PORT",
 		"PALPANEL_PALWORLD_REST_READ_TIMEOUT_MS",
 		"PALPANEL_GAME_DATA_TIMEOUT_MS",

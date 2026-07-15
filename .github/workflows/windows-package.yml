@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Existing release tag to build
         required: true
-        default: v1.0.3-hotfix.1
+        default: v1.1.0
 
 permissions:
   contents: read

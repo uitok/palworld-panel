@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	palDefenderGMIdempotencyHeader = "Idempotency-Key"
-	palDefenderGMReplayHeader      = "Idempotency-Replayed"
-	palDefenderGMIdempotencyTTL    = 10 * time.Minute
-	maxGMIdempotencyEntries        = 1024
+	palDefenderGMRequestHeader  = "Idempotency-Key"
+	palDefenderGMReplayHeader   = "Idempotency-Replayed"
+	palDefenderGMIdempotencyTTL = 10 * time.Minute
+	maxGMIdempotencyEntries     = 1024
 )
 
 var (
@@ -128,13 +128,13 @@ func (s *gmIdempotencyStore) do(
 }
 
 func (s Server) runPalDefenderGMWrite(c *gin.Context, request any, action func(context.Context) (any, error)) {
-	key := c.GetHeader(palDefenderGMIdempotencyHeader)
+	key := c.GetHeader(palDefenderGMRequestHeader)
 	if key == "" {
-		fail(c, http.StatusBadRequest, "idempotency_key_required", palDefenderGMIdempotencyHeader+" is required for GM write operations")
+		fail(c, http.StatusBadRequest, "idempotency_key_required", palDefenderGMRequestHeader+" is required for GM write operations")
 		return
 	}
 	if !gmIdempotencyKeyPattern.MatchString(key) {
-		fail(c, http.StatusBadRequest, "invalid_idempotency_key", palDefenderGMIdempotencyHeader+" must contain 8 to 128 safe ASCII characters")
+		fail(c, http.StatusBadRequest, "invalid_idempotency_key", palDefenderGMRequestHeader+" must contain 8 to 128 safe ASCII characters")
 		return
 	}
 	payload, err := json.Marshal(request)

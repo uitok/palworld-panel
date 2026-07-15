@@ -151,5 +151,8 @@ func newWorkshopAuthTestServer(t *testing.T) (Server, func()) {
 		t.Fatal(err)
 	}
 	server := Server{cfg: cfg, store: store, mods: mods.NewManager(cfg, store, docker.NewRunner(cfg))}
+	if err := store.SetKV(t.Context(), "runtime_mode", "windows_steamcmd"); err != nil {
+		t.Fatal(err)
+	}
 	return server, func() { _ = store.Close() }
 }

@@ -108,11 +108,17 @@ verify_portable_failure() {
     printf 'portable startup accepted an unexpected %s exit\n' "$exiting" >&2
     exit 1
   fi
-  ! grep -Fq 'PalPanel started:' "$tmp/portable-$exiting.out"
+  if grep -Fq 'PalPanel started:' "$tmp/portable-$exiting.out"; then
+    printf 'portable startup reported success after an unexpected %s exit\n' "$exiting" >&2
+    exit 1
+  fi
   grep -qx 'sav-cli-start' "$events"
   if [[ "$exiting" == "sav-cli" ]]; then
     grep -qx 'sav-cli-exit' "$events"
-    ! grep -qx 'backend-start' "$events"
+    if grep -qx 'backend-start' "$events"; then
+      printf 'backend started after the sav-cli fixture had already exited\n' >&2
+      exit 1
+    fi
   else
     grep -qx 'backend-start' "$events"
     grep -qx 'backend-exit' "$events"
@@ -136,7 +142,10 @@ if PALPANEL_FAKE_PREEXISTING_HEALTH=1 \
   printf 'portable startup accepted a pre-existing health endpoint\n' >&2
   exit 1
 fi
-! grep -Fq 'PalPanel started:' "$preexisting_out"
+if grep -Fq 'PalPanel started:' "$preexisting_out"; then
+  printf 'portable startup reported success while the health endpoint was already occupied\n' >&2
+  exit 1
+fi
 grep -Fq 'health endpoint is already responding before startup' "$preexisting_err"
 [[ ! -e "$portable_test/run/supervisor.pid" && ! -e "$portable_test/run/ready" ]]
 
@@ -153,6 +162,7 @@ export PALPANEL_SKIP_SYSTEMD=0
 [[ "$(stat -c '%a' "$(readlink -f "$PALPANEL_INSTALL_ROOT/current")")" == "755" ]]
 [[ "$(stat -c '%a' "$PALPANEL_ETC_DIR")" == "750" ]]
 [[ "$(stat -c '%a' "$PALPANEL_ETC_DIR/palpanel.env")" == "600" ]]
+grep -Eq '^PALWORLD_ADMIN_PASSWORD=[A-Za-z0-9_-]{40,}$' "$PALPANEL_ETC_DIR/palpanel.env"
 installed_dir="$(readlink -f "$PALPANEL_INSTALL_ROOT/current")"
 [[ -f "$installed_dir/LICENSE" ]]
 [[ -f "$installed_dir/licenses/GPL-3.0.txt" ]]

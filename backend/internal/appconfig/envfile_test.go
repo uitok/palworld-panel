@@ -92,6 +92,13 @@ func TestInitFileCreatesPrivateRegistrationConfigOnce(t *testing.T) {
 	if err != nil || !strings.Contains(string(body), "PALPANEL_REQUIRE_AUTH=true") {
 		t.Fatalf("config does not contain browser-registration settings: %v, %s", err, body)
 	}
+	values, err := ParseEnvFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values["PALWORLD_ADMIN_PASSWORD"]) < 40 {
+		t.Fatal("production configuration did not generate a strong Palworld administrator password")
+	}
 	secondCreated, err := InitFile(path)
 	if err != nil || secondCreated {
 		t.Fatalf("second InitFile = %v, %v", secondCreated, err)

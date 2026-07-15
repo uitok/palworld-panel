@@ -33,6 +33,7 @@ export PALPANEL_SAVE_INDEXER_PORT="$sav_port"
 "$package_dir/bin/sav-cli" --version | grep -F "$version"
 "$package_dir/palpanelctl" init >"$tmp/init.txt"
 [[ "$(stat -c '%a' "$package_dir/config/palpanel.env")" == "600" ]]
+grep -Eq '^PALWORLD_ADMIN_PASSWORD=[A-Za-z0-9_-]{40,}$' "$package_dir/config/palpanel.env"
 
 "$package_dir/palpanelctl" start
 "$package_dir/palpanelctl" status

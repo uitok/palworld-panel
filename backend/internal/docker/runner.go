@@ -236,10 +236,13 @@ func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot 
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
-		"-e", "STEAM_USERNAME=" + os.Getenv("STEAM_USERNAME"),
-		"-e", "STEAM_PASSWORD=" + os.Getenv("STEAM_PASSWORD"),
 		"-e", "PALPANEL_WORKSHOP_APP_ID=" + r.cfg.WorkshopAppID,
 		"-v", volume(destinationRoot, "/data/workshop"),
+	}
+	if strings.TrimSpace(os.Getenv("STEAM_USERNAME")) != "" && os.Getenv("STEAM_PASSWORD") != "" {
+		// Pass credential names through the Docker CLI environment without placing
+		// secret values in process arguments, job errors, or support logs.
+		args = append(args, "-e", "STEAM_USERNAME", "-e", "STEAM_PASSWORD")
 	}
 	args = append(args, containerProxyEnvArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
@@ -279,7 +282,8 @@ func (r Runner) StartWithArgs(ctx context.Context, serverArgs []string) error {
 		"-v", volume(r.cfg.LogsDir, "/data/logs"),
 		"-p", fmt.Sprintf("%d:%d/udp", gamePort, gamePort),
 		"-p", fmt.Sprintf("%d:27015/udp", r.cfg.QueryPort),
-		"-p", fmt.Sprintf("127.0.0.1:%d:8212/tcp", r.cfg.RESTPort),
+		"-p", fmt.Sprintf("127.0.0.1:%d:%d/tcp", r.cfg.RESTPort, r.cfg.RESTPort),
+		"-p", fmt.Sprintf("127.0.0.1:%d:%d/tcp", r.cfg.EffectiveRCONPort(), r.cfg.EffectiveRCONPort()),
 		"-p", fmt.Sprintf("127.0.0.1:%d:%d/tcp", r.cfg.EffectivePalDefenderRESTPort(), r.cfg.EffectivePalDefenderRESTPort()),
 	}
 	args = append(args, hostUserRunArgs()...)

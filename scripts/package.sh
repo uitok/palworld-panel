@@ -74,7 +74,12 @@ cp -R "$root_dir/frontend/dist/." "$webui_embed_dir/"
 copy_common_files() {
   local package_dir="$1"
   local gooz_dir
+  (cd "$root_dir/sav-cli" && go mod download github.com/oriath-net/gooz)
   gooz_dir="$(cd "$root_dir/sav-cli" && go list -m -f '{{.Dir}}' github.com/oriath-net/gooz)"
+  [[ -n "$gooz_dir" && -f "$gooz_dir/COPYING" ]] || {
+    printf 'Unable to locate downloaded gooz license source\n' >&2
+    exit 69
+  }
   mkdir -p "$package_dir/bin" "$package_dir/config" "$package_dir/backend/deployments" "$package_dir/systemd" "$package_dir/licenses"
   cp -R "$root_dir/backend/deployments/wine-runner" "$package_dir/backend/deployments/wine-runner"
   cp "$root_dir/scripts/palpanel.env.example" "$package_dir/config/palpanel.env.example"

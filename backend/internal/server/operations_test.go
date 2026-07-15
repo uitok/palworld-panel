@@ -145,7 +145,9 @@ func TestDockerHostPlansAndHelpers(t *testing.T) {
 	if err != nil || mirrorPlan.Mirror != "one_ms" {
 		t.Fatalf("DockerMirrorPlan = %#v, %v", mirrorPlan, err)
 	}
-	if _, err := manager.ConfigureDockerMirrors(t.Context(), DockerMirrorRequest{Mirror: "one_ms"}); err == nil {
+	// The stub marks this specific mirror unavailable, so configuration must
+	// fail before any host mutation even when the test itself runs as root.
+	if _, err := manager.ConfigureDockerMirrors(t.Context(), DockerMirrorRequest{Mirror: "daocloud"}); err == nil {
 		t.Fatal("expected mirror configuration to be unavailable in test host")
 	}
 

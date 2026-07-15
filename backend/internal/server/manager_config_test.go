@@ -29,6 +29,7 @@ func TestInitializeConfigEnablesRESTForPanelOverview(t *testing.T) {
 		DockerContainer:     "test-container",
 		GamePort:            8211,
 		QueryPort:           27015,
+		RCONPort:            35575,
 		RESTPort:            63108,
 		PalworldRESTBaseURL: "http://127.0.0.1:63108/v1/api",
 		PalworldRESTUser:    "admin",
@@ -40,6 +41,8 @@ func TestInitializeConfigEnablesRESTForPanelOverview(t *testing.T) {
 	if err := palconfig.Write(cfg.DefaultPalWorldSettingsPath(), palconfig.Settings{
 		"RESTAPIEnabled": "False",
 		"RESTAPIPort":    "8212",
+		"RCONEnabled":    "False",
+		"RCONPort":       "25575",
 		"AdminPassword":  "",
 		"ServerName":     "Default Palworld Server",
 	}); err != nil {
@@ -67,5 +70,8 @@ func TestInitializeConfigEnablesRESTForPanelOverview(t *testing.T) {
 	}
 	if settings["AdminPassword"] != "secret-admin-password" {
 		t.Fatalf("AdminPassword was not copied from config")
+	}
+	if settings["RCONEnabled"] != "True" || settings["RCONPort"] != strconv.Itoa(cfg.RCONPort) {
+		t.Fatalf("RCON settings = enabled %q, port %q", settings["RCONEnabled"], settings["RCONPort"])
 	}
 }

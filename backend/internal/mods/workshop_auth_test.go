@@ -3,9 +3,12 @@ package mods
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"palpanel/internal/db"
+	"palpanel/internal/server"
 	"palpanel/internal/steamcmd"
 )
 
@@ -49,6 +52,7 @@ func (f *fakeWorkshopAuthenticator) RequireLogin(_ context.Context, account stri
 
 func TestWorkshopAuthStatusReloadsPersistedAccountAndProbesCachedSession(t *testing.T) {
 	manager, store := newImportTestManager(t)
+	useNativeWorkshopAuth(t, store)
 	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "persisted_user"); err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +70,7 @@ func TestWorkshopAuthStatusReloadsPersistedAccountAndProbesCachedSession(t *test
 
 func TestWorkshopAuthStatusDoesNotInstallSteamCMD(t *testing.T) {
 	manager, store := newImportTestManager(t)
+	useNativeWorkshopAuth(t, store)
 	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "persisted_user"); err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +84,7 @@ func TestWorkshopAuthStatusDoesNotInstallSteamCMD(t *testing.T) {
 
 func TestStartWorkshopLoginPersistsValidatedAccount(t *testing.T) {
 	manager, store := newImportTestManager(t)
+	useNativeWorkshopAuth(t, store)
 	fake := &fakeWorkshopAuthenticator{status: steamcmd.LoginStatus{Supported: true, SteamCMDInstalled: true}}
 	manager.steamAuth = fake
 	if _, err := manager.StartWorkshopLogin(t.Context(), " fixture_user "); err != nil {
@@ -92,6 +98,7 @@ func TestStartWorkshopLoginPersistsValidatedAccount(t *testing.T) {
 
 func TestVerifyWorkshopLoginReusesPersistedAccount(t *testing.T) {
 	manager, store := newImportTestManager(t)
+	useNativeWorkshopAuth(t, store)
 	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "persisted_user"); err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +114,7 @@ func TestVerifyWorkshopLoginReusesPersistedAccount(t *testing.T) {
 
 func TestWorkshopImportRejectsMissingLoginBeforeSubmittingJobAndReleasesClaim(t *testing.T) {
 	manager, store := newImportTestManager(t)
+	useNativeWorkshopAuth(t, store)
 	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "persisted_user"); err != nil {
 		t.Fatal(err)
 	}
@@ -131,5 +139,58 @@ func TestWorkshopImportRejectsMissingLoginBeforeSubmittingJobAndReleasesClaim(t 
 	jobs, listErr := store.ListJobs(t.Context(), 10)
 	if listErr != nil || len(jobs) != 0 {
 		t.Fatalf("jobs = %#v, error = %v", jobs, listErr)
+	}
+}
+
+func TestDockerWorkshopAuthUsesCompleteEnvironmentCredentials(t *testing.T) {
+	manager, store := newImportTestManager(t)
+	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STEAM_USERNAME", " fixture_user ")
+	t.Setenv("STEAM_PASSWORD", "fixture-password")
+
+	status, err := manager.WorkshopAuthStatus(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Supported || !status.LoggedIn || !status.CredentialsSecure || status.VerificationRequired || status.AccountName != "fixture_user" {
+		t.Fatalf("Docker/Wine auth status = %#v", status)
+	}
+	if _, err := manager.RequireWorkshopLogin(t.Context()); err != nil {
+		t.Fatalf("RequireWorkshopLogin returned error: %v", err)
+	}
+	if _, err := manager.VerifyWorkshopLogin(t.Context(), ""); err != nil {
+		t.Fatalf("VerifyWorkshopLogin returned error: %v", err)
+	}
+}
+
+func TestDockerWorkshopAuthRequiresBothEnvironmentCredentials(t *testing.T) {
+	manager, store := newImportTestManager(t)
+	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STEAM_USERNAME", "fixture_user")
+	t.Setenv("STEAM_PASSWORD", "")
+
+	status, err := manager.WorkshopAuthStatus(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LoggedIn || !status.VerificationRequired || status.CredentialsSecure {
+		t.Fatalf("incomplete Docker/Wine auth status = %#v", status)
+	}
+	if _, err := manager.RequireWorkshopLogin(t.Context()); !errors.Is(err, steamcmd.ErrLoginRequired) || !strings.Contains(err.Error(), "STEAM_PASSWORD") {
+		t.Fatalf("RequireWorkshopLogin error = %v", err)
+	}
+	if _, err := manager.StartWorkshopLogin(t.Context(), "fixture_user"); !errors.Is(err, steamcmd.ErrInteractiveLogin) {
+		t.Fatalf("StartWorkshopLogin error = %v", err)
+	}
+}
+
+func useNativeWorkshopAuth(t *testing.T, store *db.Store) {
+	t.Helper()
+	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWindowsSteamCMD); err != nil {
+		t.Fatal(err)
 	}
 }

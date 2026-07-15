@@ -47,6 +47,9 @@ func TestLoadAllowsExplicitDevNoAuth(t *testing.T) {
 	if cfg.PalDefenderRESTPort != 17993 {
 		t.Fatalf("PalDefenderRESTPort = %d", cfg.PalDefenderRESTPort)
 	}
+	if cfg.RCONPort != DefaultRCONPort {
+		t.Fatalf("RCONPort = %d", cfg.RCONPort)
+	}
 }
 
 func TestLoadUsesPalDefenderRESTOverrides(t *testing.T) {
@@ -71,6 +74,19 @@ func TestLoadUsesPalDefenderRESTOverrides(t *testing.T) {
 	}
 	if cfg.PalDefenderRESTPort != 28080 {
 		t.Fatalf("PalDefenderRESTPort = %d", cfg.PalDefenderRESTPort)
+	}
+}
+
+func TestLoadDerivesPalworldRESTURLFromConfiguredPort(t *testing.T) {
+	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
+	t.Setenv("PALPANEL_REST_PORT", "18212")
+	t.Setenv("PALWORLD_REST_BASE_URL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RESTPort != 18212 || cfg.PalworldRESTBaseURL != "http://127.0.0.1:18212/v1/api" {
+		t.Fatalf("REST configuration = port %d, base URL %q", cfg.RESTPort, cfg.PalworldRESTBaseURL)
 	}
 }
 
@@ -126,6 +142,7 @@ func TestLoadRejectsInvalidScalarConfiguration(t *testing.T) {
 		"PALPANEL_REQUIRE_AUTH":                   "sometimes",
 		"PALPANEL_STEAM_API_TIMEOUT_SECONDS":      "soon",
 		"PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS": "0",
+		"PALPANEL_RCON_PORT":                      "70000",
 		"PALPANEL_LISTEN_ADDR":                    "127.0.0.1:not-a-port",
 		"PALPANEL_MONITOR_RETENTION_DAYS":         "-1",
 	}

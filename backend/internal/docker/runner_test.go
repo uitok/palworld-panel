@@ -200,7 +200,7 @@ func TestStartPublishesManagementPortsOnLoopback(t *testing.T) {
 	cfg := appconfig.Config{
 		DockerBinary: fakeDocker, DockerImage: "image", DockerContainer: "container",
 		ServerDir: filepath.Join(root, "server"), WinePrefixDir: filepath.Join(root, "wineprefix"), LogsDir: filepath.Join(root, "logs"),
-		GamePort: 8211, QueryPort: 27015, RESTPort: 18212, PalDefenderRESTPort: 18080,
+		GamePort: 8211, QueryPort: 27015, RCONPort: 25585, RESTPort: 18212, PalDefenderRESTPort: 18080,
 	}
 	if err := NewRunner(cfg).StartWithArgs(t.Context(), []string{"-port=8211", "-log"}); err != nil {
 		t.Fatal(err)
@@ -226,17 +226,52 @@ func TestStartPublishesManagementPortsOnLoopback(t *testing.T) {
 	for _, binding := range []string{
 		"8211:8211/udp",
 		"27015:27015/udp",
-		"127.0.0.1:18212:8212/tcp",
+		"127.0.0.1:18212:18212/tcp",
+		"127.0.0.1:25585:25585/tcp",
 		"127.0.0.1:18080:18080/tcp",
 	} {
 		if !containsAdjacent(args, "-p", binding) {
 			t.Errorf("Docker start arguments do not publish %q:\n%s", binding, string(body))
 		}
 	}
-	for _, forbidden := range []string{"18212:8212/tcp", "18080:18080/tcp"} {
+	for _, forbidden := range []string{"18212:18212/tcp", "25585:25585/tcp", "18080:18080/tcp"} {
 		if containsExact(args, forbidden) {
 			t.Errorf("management port was published on all host interfaces as %q:\n%s", forbidden, string(body))
 		}
+	}
+}
+
+func TestWorkshopCredentialsAreNotPlacedInDockerArguments(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
+		"exit 0\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STEAM_USERNAME", "fixture_user")
+	t.Setenv("STEAM_PASSWORD", "never-log-this-password")
+	runner := NewRunner(appconfig.Config{DockerBinary: fakeDocker, DockerImage: "image", WorkshopAppID: "1623730"})
+	if err := runner.DownloadWorkshopTo(t.Context(), "3625364851", filepath.Join(root, "download")); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(body)), "\n")
+	for _, name := range []string{"STEAM_USERNAME", "STEAM_PASSWORD"} {
+		if !containsAdjacent(args, "-e", name) {
+			t.Errorf("Docker arguments do not pass %s by environment name:\n%s", name, string(body))
+		}
+	}
+	if strings.Contains(string(body), "never-log-this-password") || strings.Contains(string(body), "STEAM_PASSWORD=") {
+		t.Fatalf("Docker arguments exposed the Workshop password:\n%s", string(body))
 	}
 }
 

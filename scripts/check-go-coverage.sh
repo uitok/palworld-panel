@@ -9,7 +9,8 @@ check_package() {
   local module_dir="$1"
   local package="$2"
   local minimum="$3"
-  local profile="$tmp_dir/$(basename "$module_dir")-$(basename "$package").cover"
+  local profile
+  profile="$tmp_dir/$(basename "$module_dir")-$(basename "$package").cover"
   local coverage
 
   (

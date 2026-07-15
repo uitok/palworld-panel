@@ -416,8 +416,10 @@ func (m Manager) InitializeConfig(ctx context.Context) error {
 func applyPanelDefaults(settings palconfig.Settings, cfg appconfig.Config) {
 	settings["RESTAPIEnabled"] = "True"
 	settings["RESTAPIPort"] = strconv.Itoa(cfg.RESTPort)
+	settings["RCONPort"] = strconv.Itoa(cfg.EffectiveRCONPort())
 	if cfg.PalworldRESTPass != "" {
 		settings["AdminPassword"] = cfg.PalworldRESTPass
+		settings["RCONEnabled"] = "True"
 	}
 }
 
@@ -681,6 +683,7 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 		Ports: map[string]int{
 			"game":  startup.Normalize(m.cfg).Port,
 			"query": m.cfg.QueryPort,
+			"rcon":  m.cfg.EffectiveRCONPort(),
 			"rest":  m.cfg.RESTPort,
 		},
 		Warnings: warnings,
@@ -1108,8 +1111,6 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 	for _, root := range []string{
 		filepath.Join(m.cfg.ServerDir, "Pal", "Saved"),
 		m.cfg.ModsDir(),
-		m.cfg.PalWorldSettingsPath(),
-		m.cfg.PalModSettingsPath(),
 		m.cfg.PalDefenderDir(),
 		filepath.Join(m.cfg.Win64Dir(), "PalDefender.dll"),
 		filepath.Join(m.cfg.Win64Dir(), "d3d9.dll"),

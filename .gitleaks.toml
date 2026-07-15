@@ -10,6 +10,9 @@ paths = [
   '''(^|/)(backend|sav-cli)/go\.sum$''',
   '''(^|/).*_test\.go$''',
   '''(^|/).*\.test\.(ts|tsx)$''',
+  # Generated public localization data contains item IDs such as
+  # TreasureBoxKey01 that resemble generic credential assignments.
+  '''(^|/)backend/internal/pallocalize/catalog\.zh-CN\.json$''',
   '''(^|/)data/''',
   '''(^|/)node_modules/''',
   '''(^|/)dist/''',

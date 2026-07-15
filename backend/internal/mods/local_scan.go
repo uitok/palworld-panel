@@ -250,7 +250,7 @@ func (s *localScanner) resolveKnownDirectories(components ...string) ([]string, 
 			}
 			for _, entry := range entries {
 				if entry.info.IsDir() && strings.EqualFold(filepath.Base(entry.path), component) {
-					next = appendUniquePaths(next, entry.path)
+					next = appendUniqueFilesystemPaths(next, entry.path)
 				}
 			}
 		}
@@ -260,6 +260,32 @@ func (s *localScanner) resolveKnownDirectories(components ...string) ([]string, 
 		}
 	}
 	return current, nil
+}
+
+// appendUniqueFilesystemPaths preserves directories that differ only by case
+// on a case-sensitive host. Palworld files are Windows-oriented and component
+// matching remains case-insensitive, but Linux may legitimately contain both
+// "PAL" and "Pal" trees and both must be traversed before a full layout is
+// selected.
+func appendUniqueFilesystemPaths(paths []string, candidates ...string) []string {
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		found := false
+		for _, existing := range paths {
+			if runtime.GOOS == "windows" {
+				found = strings.EqualFold(filepath.Clean(existing), candidate)
+			} else {
+				found = filepath.Clean(existing) == candidate
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			paths = append(paths, candidate)
+		}
+	}
+	return paths
 }
 
 func (s *localScanner) readWorkshopSettings(modsRoot string) (ModSettings, bool) {

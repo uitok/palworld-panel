@@ -2,6 +2,8 @@ package appconfig
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -152,10 +154,17 @@ func InitFile(path string) (created bool, err error) {
 	} else if !os.IsNotExist(statErr) {
 		return false, statErr
 	}
+	adminPasswordBytes := make([]byte, 32)
+	if _, err := rand.Read(adminPasswordBytes); err != nil {
+		return false, fmt.Errorf("generate Palworld administrator password: %w", err)
+	}
+	adminPassword := base64.RawURLEncoding.EncodeToString(adminPasswordBytes)
 	body := strings.Join([]string{
 		"# PalPanel production configuration. Parsed as data; shell syntax is not executed.",
 		"PALPANEL_REQUIRE_AUTH=true",
 		"PALPANEL_LISTEN_ADDR=127.0.0.1:8080",
+		"# Random game administrator credential used by Palworld REST and loopback RCON.",
+		"PALWORLD_ADMIN_PASSWORD=" + adminPassword,
 		"PALPANEL_SAVE_INDEXER_ENABLED=true",
 		"PALPANEL_SAVE_INDEXER_URL=http://127.0.0.1:8090",
 		"PALPANEL_LOG_LEVEL=info",

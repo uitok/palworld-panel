@@ -82,7 +82,7 @@ func (s Server) requireWorkshopLogin(c *gin.Context) bool {
 		return true
 	}
 	if errors.Is(err, steamcmd.ErrLoginRequired) {
-		fail(c, http.StatusUnauthorized, "steam_login_required", steamcmd.ErrLoginRequired.Error())
+		fail(c, http.StatusUnauthorized, "steam_login_required", err.Error())
 		return false
 	}
 	failSteamAuth(c, "verify", err)
