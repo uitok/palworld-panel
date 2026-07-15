@@ -133,7 +133,25 @@ public static class PalPanelMutationFixture
     }
 }
 '@
-  Add-Type -TypeDefinition $source -Language CSharp -OutputAssembly $Path -OutputType ConsoleApplication
+  $frameworkRoots = @(
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+  )
+  $compiler = $frameworkRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+  if (-not $compiler) {
+    throw "C# compiler is unavailable"
+  }
+
+  $sourcePath = [System.IO.Path]::ChangeExtension($Path, ".cs")
+  [System.IO.File]::WriteAllText($sourcePath, $source, [System.Text.UTF8Encoding]::new($false))
+  try {
+    & $compiler /nologo /target:exe "/out:$Path" $sourcePath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+      throw "failed to compile mutating launcher"
+    }
+  } finally {
+    Remove-Item -LiteralPath $sourcePath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Assert-FileHashEqual {

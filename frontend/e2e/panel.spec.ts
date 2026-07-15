@@ -16,7 +16,7 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
   let authorization = '';
   let loginBody: unknown;
   let authenticated = initiallyAuthenticated;
-  await page.route('**/api/**', async (route) => {
+  await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const request = route.request();
     if (request.headers().authorization) authorization = request.headers().authorization;
     const path = new URL(request.url()).pathname;
@@ -121,9 +121,9 @@ test('viewer session cannot see the world reset command', async ({ page }) => {
 test('renders task and schedule data from the API contract', async ({ page }) => {
   await installFakeBackend(page);
   await page.goto('/tasks');
-  await expect(page.getByText('backup completed')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'backup completed', exact: true })).toBeVisible();
   await page.getByRole('button', { name: /计划任务/ }).click();
-  await expect(page.getByText('每 60 分钟')).toBeVisible();
+  await expect(page.getByRole('cell', { name: '每 60 分钟', exact: true })).toBeVisible();
 });
 
 test('loads schema-backed server settings', async ({ page }) => {
