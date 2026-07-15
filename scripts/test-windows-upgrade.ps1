@@ -181,9 +181,9 @@ try {
     Copy-Item -LiteralPath $entry.FullName -Destination $install -Recurse -Force
   }
 
-  $PowerShellExecutable = Join-Path $PSHOME "powershell.exe"
-  if (-not (Test-Path -LiteralPath $PowerShellExecutable -PathType Leaf)) {
-    throw "Windows PowerShell executable is missing: $PowerShellExecutable"
+  $PowerShellExecutable = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+  if ([string]::IsNullOrWhiteSpace($PowerShellExecutable) -or -not (Test-Path -LiteralPath $PowerShellExecutable -PathType Leaf)) {
+    throw "Windows PowerShell executable is missing"
   }
   Copy-Item -LiteralPath $PowerShellExecutable -Destination (Join-Path $install "palpanel-server.exe") -Force
   $outsideExecutable = Join-Path $TestRoot "outside\palpanel-server.exe"
