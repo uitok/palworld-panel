@@ -13,6 +13,7 @@ import type {
   Job,
   Prerequisite,
   RuntimeMode,
+  ServerImportResult,
   SudoCapability,
   StartupConfig,
   StartupResponse,
@@ -74,6 +75,18 @@ const emptySudoCapability: SudoCapability = {
 };
 
 const mapRuntimeMode = (value: unknown): RuntimeMode => (value === 'windows_steamcmd' ? 'windows_steamcmd' : 'wine_docker');
+
+const mapServerImportResult = (raw: unknown): ServerImportResult => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    path: String(data.path || ''),
+    manifest_path: String(data.manifest_path || ''),
+    build_id: String(data.build_id || ''),
+    config_exists: Boolean(data.config_exists),
+    already_bound: Boolean(data.already_bound),
+    original_input: String(data.original_input || ''),
+  };
+};
 
 const mapDockerCapability = (raw: unknown): DockerCapability => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -308,6 +321,13 @@ export const setupApi = {
       () => apiClient.put('/server/runtime', { mode }),
       { mode },
       { quiet: true, fallbackOnError: false },
+    ),
+
+  importServerDirectory: (path: string) =>
+    handleRequest<unknown, ServerImportResult>(
+      () => apiClient.post('/server/import', { path }),
+      { path: '', manifest_path: '', build_id: '', config_exists: false, already_bound: false, original_input: path },
+      { map: mapServerImportResult, quiet: true, fallbackOnError: false },
     ),
 
   getStartup: () =>

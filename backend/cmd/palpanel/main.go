@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +23,7 @@ import (
 	panelauth "palpanel/internal/auth"
 	"palpanel/internal/buildinfo"
 	"palpanel/internal/db"
+	"palpanel/internal/debuglog"
 	"palpanel/internal/docker"
 	"palpanel/internal/jobs"
 	"palpanel/internal/mods"
@@ -131,6 +133,27 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer store.Close()
+	debugEnabled := cfg.LogLevel == "debug"
+	if value, found, readErr := store.GetKV(context.Background(), "debug_logging_enabled"); readErr != nil {
+		return fmt.Errorf("read debug logging state: %w", readErr)
+	} else if found {
+		if parsed, parseErr := strconv.ParseBool(value); parseErr == nil {
+			debugEnabled = parsed
+		}
+	}
+	debugLogger, err := debuglog.New(cfg.DebugLogPath(), debugEnabled)
+	if err != nil {
+		return fmt.Errorf("open debug log: %w", err)
+	}
+	defer debugLogger.Close()
+	previousLogOutput := log.Writer()
+	log.SetOutput(io.MultiWriter(errorOutput, debugLogger))
+	defer log.SetOutput(previousLogOutput)
+	cfg.DebugLogger = debugLogger
+	debugLogger.Printf("startup version=%s data_dir=%s listen=%s", buildinfo.Current().Version, cfg.DataDir, cfg.ListenAddr)
+	if err := server.RestoreImportedServerDirectory(context.Background(), cfg, store); err != nil {
+		return fmt.Errorf("restore imported server directory: %w", err)
+	}
 	jobExecutor := jobs.New(store, 4)
 	interrupted, err := jobExecutor.Reconcile(context.Background())
 	if err != nil {

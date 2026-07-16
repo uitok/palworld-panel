@@ -77,6 +77,11 @@ func (c Config) ValidateManagedPath(path string, allowRoot bool) error {
 		return fmt.Errorf("managed target must not equal runtime root: %s", targetAbs)
 	}
 	if !pathWithin(rootAbs, targetAbs) {
+		if c.ServerDirectoryImported() {
+			if err := validateImportedServerPath(c.ServerDirectory(), targetAbs); err == nil {
+				return nil
+			}
+		}
 		return fmt.Errorf("managed path escapes runtime root: %s", targetAbs)
 	}
 	if c.RepositoryRoot != "" && samePath(c.RepositoryRoot, targetAbs) {
@@ -102,6 +107,31 @@ func (c Config) ValidateManagedPath(path string, allowRoot bool) error {
 		if !pathWithin(resolvedRepository, resolvedRoot) {
 			return fmt.Errorf("development runtime root escapes repository through a link or reparse point: %s", rootAbs)
 		}
+	}
+	return nil
+}
+
+func validateImportedServerPath(serverRoot, target string) error {
+	serverAbs, err := filepath.Abs(filepath.Clean(serverRoot))
+	if err != nil {
+		return err
+	}
+	if isVolumeRoot(serverAbs) {
+		return fmt.Errorf("imported server directory must not be a volume root: %s", serverAbs)
+	}
+	if !pathWithin(serverAbs, target) {
+		return fmt.Errorf("managed path escapes imported server directory: %s", target)
+	}
+	resolvedServer, err := resolveExistingPath(serverAbs)
+	if err != nil {
+		return fmt.Errorf("resolve imported server directory: %w", err)
+	}
+	resolvedTarget, err := resolveExistingPath(target)
+	if err != nil {
+		return fmt.Errorf("resolve imported server path: %w", err)
+	}
+	if !pathWithin(resolvedServer, resolvedTarget) {
+		return fmt.Errorf("managed path escapes imported server directory through a link or reparse point: %s", target)
 	}
 	return nil
 }

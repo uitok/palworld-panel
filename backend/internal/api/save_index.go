@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"palpanel/internal/paldefender"
 	"palpanel/internal/pallocalize"
 	"palpanel/internal/saveindex"
 )
@@ -30,6 +31,10 @@ func (s Server) saveIndexRebuild(c *gin.Context) {
 		ok(c, gin.H{"status": status, "index": index})
 		return
 	}
+	if source, sourceErr := s.store.ActiveSaveSource(c.Request.Context()); sourceErr == nil {
+		_ = s.store.UpdateSaveSourceIndex(c.Request.Context(), source.ID, index.Snapshot.Fingerprint, index.Parser, index.Warnings, index.GeneratedAt)
+	}
+	s.triggerAstrBotCatalogSync()
 	ok(c, gin.H{"status": status, "index": index})
 }
 
@@ -189,9 +194,29 @@ func (s Server) listMapEntities(c *gin.Context) {
 	if err != nil && !status.Stale {
 		index = saveindex.EmptyIndex()
 	}
+	online := s.onlinePlayers(c)
+	status = statusWithOnlineState(status, online)
+	liveSource := online.Source
+	liveAvailable := online.Available
+	if palDefenderOnline, available := s.palDefenderMapPlayers(c); available {
+		online.Players = mergeOnlinePlayers(online.Players, palDefenderOnline)
+		liveSource = "paldefender"
+		liveAvailable = true
+	}
+	entities := buildMapEntities(index, online.Players)
 	limit, offset := limitOffset(c)
-	paged, summary := paginate(index.MapEntities, limit, offset)
-	ok(c, gin.H{"entities": flattenMapEntities(paged), "status": status, "summary": summary})
+	paged, summary := paginate(entities, limit, offset)
+	ok(c, gin.H{
+		"entities": paged,
+		"status":   status,
+		"summary":  summary,
+		"live": gin.H{
+			"available":      liveAvailable,
+			"source":         liveSource,
+			"online_players": countOnlineMapEntities(entities),
+			"refreshed_at":   time.Now().UTC().Format(time.RFC3339),
+		},
+	})
 }
 
 func (s Server) currentSaveIndex(c *gin.Context) (saveindex.Index, saveindex.Status, error) {
@@ -237,7 +262,6 @@ func flattenPlayer(player saveindex.Player) gin.H {
 		"inventory_summary": player.InventorySummary,
 		"ping":              player.Ping,
 		"ip":                player.IP,
-		"raw":               player.Raw,
 	}
 }
 
@@ -267,7 +291,6 @@ func flattenBase(base saveindex.Base) gin.H {
 		"pals_count":       palsCount,
 		"status":           firstNonEmpty(base.Status, "Safe"),
 		"online_members":   []string{},
-		"raw":              base.Raw,
 	}
 }
 
@@ -311,7 +334,6 @@ func flattenPal(pal saveindex.Pal, lookup map[string]saveindex.Player) gin.H {
 		"health":           0,
 		"max_health":       0,
 		"status":           status,
-		"raw":              pal.Raw,
 	}
 }
 
@@ -398,6 +420,95 @@ func flattenMapEntities(entities []saveindex.MapEntity) []gin.H {
 	return out
 }
 
+func buildMapEntities(index saveindex.Index, online map[string]onlinePlayer) []gin.H {
+	players := overlayOnlinePlayers(index.Players, online)
+	entities := make([]gin.H, 0, len(players)+len(index.Bases)+len(index.Pals)+len(index.MapEntities))
+	for _, player := range players {
+		liveLocation := player.IsOnline && onlinePlayerHasCoordinates(online, player)
+		entities = append(entities, gin.H{
+			"type":       "player",
+			"id":         firstNonEmpty(player.PlayerUID, player.SteamID),
+			"label":      firstNonEmpty(player.Nickname, player.SteamID, player.PlayerUID, "未知玩家"),
+			"location":   player.Location,
+			"x":          player.Location.X,
+			"y":          player.Location.Y,
+			"z":          player.Location.Z,
+			"is_online":  player.IsOnline,
+			"live":       liveLocation,
+			"source":     mapEntitySource(liveLocation),
+			"guild_id":   player.GuildID,
+			"guild_name": pallocalize.GuildName(player.GuildName),
+			"level":      player.Level,
+			"ping":       player.Ping,
+		})
+	}
+	for _, base := range index.Bases {
+		entities = append(entities, gin.H{
+			"type":       "base",
+			"id":         base.ID,
+			"label":      pallocalize.BaseName(base.Name),
+			"raw_label":  base.Name,
+			"location":   base.Location,
+			"x":          base.Location.X,
+			"y":          base.Location.Y,
+			"z":          base.Location.Z,
+			"source":     "save",
+			"guild_id":   base.GuildID,
+			"guild_name": pallocalize.GuildName(base.GuildName),
+			"pals_count": len(base.Workers),
+		})
+	}
+	for _, pal := range index.Pals {
+		if pal.Location.X == 0 && pal.Location.Y == 0 && pal.Location.Z == 0 {
+			continue
+		}
+		speciesName := pallocalize.PalName(pal.CharacterID)
+		entities = append(entities, gin.H{
+			"type":      "pal",
+			"id":        pal.InstanceID,
+			"label":     firstNonEmpty(pal.Nickname, speciesName, pal.CharacterID),
+			"raw_label": firstNonEmpty(pal.Nickname, pal.CharacterID),
+			"location":  pal.Location,
+			"x":         pal.Location.X,
+			"y":         pal.Location.Y,
+			"z":         pal.Location.Z,
+			"source":    "save",
+			"level":     pal.Level,
+			"owner_id":  pal.OwnerPlayerUID,
+			"guild_id":  pal.GuildID,
+		})
+	}
+	for _, entity := range flattenMapEntities(index.MapEntities) {
+		if entity["type"] != "map_object" {
+			continue
+		}
+		location, _ := entity["location"].(saveindex.Coordinates)
+		entity["x"] = location.X
+		entity["y"] = location.Y
+		entity["z"] = location.Z
+		entity["source"] = "save"
+		entities = append(entities, entity)
+	}
+	return entities
+}
+
+func mapEntitySource(live bool) string {
+	if live {
+		return "live"
+	}
+	return "save"
+}
+
+func countOnlineMapEntities(entities []gin.H) int {
+	count := 0
+	for _, entity := range entities {
+		if entity["type"] == "player" && entity["is_online"] == true {
+			count++
+		}
+	}
+	return count
+}
+
 func playerLookup(players []saveindex.Player) map[string]saveindex.Player {
 	out := make(map[string]saveindex.Player, len(players)*2)
 	for _, player := range players {
@@ -419,9 +530,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 type onlinePlayersResult struct {
-	Players map[string]onlinePlayer
-	Stale   bool
-	Error   string
+	Players   map[string]onlinePlayer
+	Available bool
+	Source    string
+	Stale     bool
+	Error     string
 }
 
 func overlayOnlinePlayers(players []saveindex.Player, online map[string]onlinePlayer) []saveindex.Player {
@@ -429,7 +542,7 @@ func overlayOnlinePlayers(players []saveindex.Player, online map[string]onlinePl
 	seen := map[string]bool{}
 	for i := range out {
 		for _, key := range []string{out[i].PlayerUID, out[i].SteamID} {
-			if item, ok := online[strings.ToLower(key)]; ok {
+			if item, ok := online[normalizedPlayerKey(key)]; ok {
 				out[i].IsOnline = true
 				out[i].Ping = item.Ping
 				out[i].IP = item.IP
@@ -442,13 +555,16 @@ func overlayOnlinePlayers(players []saveindex.Player, online map[string]onlinePl
 				if item.PlayerUID != "" {
 					out[i].PlayerUID = item.PlayerUID
 				}
-				out[i].Location = item.Location
-				seen[strings.ToLower(key)] = true
+				if coordinatesAvailable(item.Location) {
+					out[i].Location = item.Location
+				}
+				markOnlinePlayerSeen(seen, item)
+				markOnlinePlayerSeen(seen, onlinePlayer{PlayerUID: out[i].PlayerUID, SteamID: out[i].SteamID})
 			}
 		}
 	}
-	for key, item := range online {
-		if seen[key] || item.SteamID == "" {
+	for _, item := range online {
+		if onlinePlayerSeen(seen, item) || (strings.TrimSpace(item.PlayerUID) == "" && strings.TrimSpace(item.SteamID) == "") {
 			continue
 		}
 		out = append(out, saveindex.Player{
@@ -460,8 +576,43 @@ func overlayOnlinePlayers(players []saveindex.Player, online map[string]onlinePl
 			Ping:      item.Ping,
 			IP:        item.IP,
 		})
+		markOnlinePlayerSeen(seen, item)
 	}
 	return out
+}
+
+func normalizedPlayerKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func markOnlinePlayerSeen(seen map[string]bool, player onlinePlayer) {
+	for _, value := range []string{player.PlayerUID, player.SteamID} {
+		if key := normalizedPlayerKey(value); key != "" {
+			seen[key] = true
+		}
+	}
+}
+
+func onlinePlayerSeen(seen map[string]bool, player onlinePlayer) bool {
+	for _, value := range []string{player.PlayerUID, player.SteamID} {
+		if key := normalizedPlayerKey(value); key != "" && seen[key] {
+			return true
+		}
+	}
+	return false
+}
+
+func onlinePlayerHasCoordinates(online map[string]onlinePlayer, player saveindex.Player) bool {
+	for _, value := range []string{player.PlayerUID, player.SteamID} {
+		if item, ok := online[normalizedPlayerKey(value)]; ok && coordinatesAvailable(item.Location) {
+			return true
+		}
+	}
+	return false
+}
+
+func coordinatesAvailable(location saveindex.Coordinates) bool {
+	return location.X != 0 || location.Y != 0 || location.Z != 0
 }
 
 type onlinePlayer struct {
@@ -482,9 +633,66 @@ func (s Server) onlinePlayers(c *gin.Context) onlinePlayersResult {
 		return parseOnlinePlayers(resp.Body), nil
 	})
 	if err != nil {
-		return onlinePlayersResult{Players: map[string]onlinePlayer{}, Stale: true, Error: err.Error()}
+		return onlinePlayersResult{Players: map[string]onlinePlayer{}, Source: "palworld_rest", Stale: true, Error: err.Error()}
 	}
-	return onlinePlayersResult{Players: players, Stale: status == cacheStatusStale}
+	return onlinePlayersResult{Players: players, Available: true, Source: "palworld_rest", Stale: status == cacheStatusStale}
+}
+
+func (s Server) palDefenderMapPlayers(c *gin.Context) (map[string]onlinePlayer, bool) {
+	players, _, err := cachedAs(s, c, cacheKey(cacheKeySavePrefix, "paldefender-map-players"), 2*time.Second, func(ctx context.Context) (map[string]onlinePlayer, error) {
+		response, err := s.defender.RESTPlayers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return onlinePlayersFromPalDefender(response), nil
+	})
+	if err != nil {
+		return map[string]onlinePlayer{}, false
+	}
+	return players, true
+}
+
+func onlinePlayersFromPalDefender(response paldefender.RESTPlayersResponse) map[string]onlinePlayer {
+	out := map[string]onlinePlayer{}
+	for _, player := range response.Players {
+		if !strings.EqualFold(strings.TrimSpace(player.Status), "online") {
+			continue
+		}
+		location := player.WorldLocation
+		if location.X == 0 && location.Y == 0 && location.Z == 0 {
+			location = player.MapLocation
+		}
+		item := onlinePlayer{
+			PlayerUID: player.PlayerUID,
+			SteamID:   player.UserID,
+			Nickname:  player.Name,
+			Location:  saveindex.Coordinates{X: location.X, Y: location.Y, Z: location.Z},
+			IP:        player.IP,
+		}
+		for _, key := range []string{player.PlayerUID, player.UserID} {
+			key = strings.ToLower(strings.TrimSpace(key))
+			if key != "" {
+				out[key] = item
+			}
+		}
+	}
+	return out
+}
+
+func mergeOnlinePlayers(primary, preferred map[string]onlinePlayer) map[string]onlinePlayer {
+	merged := make(map[string]onlinePlayer, len(primary)+len(preferred))
+	for key, player := range primary {
+		merged[key] = player
+	}
+	for key, player := range preferred {
+		if !coordinatesAvailable(player.Location) {
+			if fallback, ok := merged[key]; ok && coordinatesAvailable(fallback.Location) {
+				player.Location = fallback.Location
+			}
+		}
+		merged[key] = player
+	}
+	return merged
 }
 
 func parseOnlinePlayers(bodyValue any) map[string]onlinePlayer {

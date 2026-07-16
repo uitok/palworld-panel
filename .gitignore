@@ -27,6 +27,15 @@
 /frontend/playwright-report/
 /frontend/test-results/
 
+# Generated Python and .NET build output
+**/__pycache__/
+*.py[cod]
+/palcalc-bridge/bin/
+/palcalc-bridge/obj/
+
+# Local design reference used while rebuilding the client
+/PalPanel-Frontend-Preview.zip
+
 # Local environment overrides
 *.local
 .env

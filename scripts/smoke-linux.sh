@@ -26,8 +26,10 @@ package_dir="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 
 panel_port="$((20000 + RANDOM % 15000))"
 sav_port="$((35001 + RANDOM % 15000))"
+palcalc_port="$((50002 + RANDOM % 10000))"
 export PALPANEL_LISTEN_ADDR="127.0.0.1:$panel_port"
 export PALPANEL_SAVE_INDEXER_PORT="$sav_port"
+export PALPANEL_PALCALC_PORT="$palcalc_port"
 
 "$package_dir/bin/palpanel" --version | grep -F "$version"
 "$package_dir/bin/sav-cli" --version | grep -F "$version"
@@ -39,6 +41,7 @@ grep -Eq '^PALWORLD_ADMIN_PASSWORD=[A-Za-z0-9_-]{40,}$' "$package_dir/config/pal
 "$package_dir/palpanelctl" status
 curl --fail --silent "http://127.0.0.1:$panel_port/api/health" | grep -F "\"version\":\"$version\""
 curl --fail --silent "http://127.0.0.1:$sav_port/health" | grep -F "\"build_version\":\"$version\""
+curl --fail --silent "http://127.0.0.1:$palcalc_port/health" | grep -F '"upstream_version":"v1.17.6"'
 unauthorized="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$panel_port/api/auth/me")"
 [[ "$unauthorized" == "401" ]]
 curl --fail --silent --cookie-jar "$tmp/cookies.txt" \
@@ -53,8 +56,8 @@ curl --fail --silent "http://127.0.0.1:$panel_port/api/health" >/dev/null
 curl --fail --silent --cookie "$tmp/cookies.txt" "http://127.0.0.1:$panel_port/api/auth/me" | grep -F '"role":"admin"'
 "$package_dir/palpanelctl" stop
 
-[[ ! -e "$package_dir/run/backend.pid" && ! -e "$package_dir/run/sav-cli.pid" ]]
-if pgrep -f "$package_dir/bin/(palpanel|sav-cli)" >/dev/null 2>&1; then
+[[ ! -e "$package_dir/run/backend.pid" && ! -e "$package_dir/run/sav-cli.pid" && ! -e "$package_dir/run/palcalc-bridge.pid" ]]
+if pgrep -f "$package_dir/bin/(palpanel|sav-cli|palcalc-bridge)" >/dev/null 2>&1; then
   printf 'orphan process remains after stop\n' >&2
   exit 1
 fi

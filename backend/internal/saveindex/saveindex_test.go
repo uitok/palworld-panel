@@ -1,12 +1,14 @@
 package saveindex
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,6 +154,61 @@ func TestRebuildFailureKeepsStaleCache(t *testing.T) {
 	}
 	if !status.Stale || status.State != "error" || len(index.Players) != 1 {
 		t.Fatalf("expected stale cached index after failure, got status=%#v index=%#v", status, index)
+	}
+}
+
+func TestRebuildNeverReturnsRawBinarySidecarPayload(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	rawSave := append([]byte("GVAS"), bytes.Repeat([]byte{0x00, 0xff, 0x81, 0x10}, 256)...)
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(rawSave)
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+
+	_, status, err := NewManager(cfg).Rebuild(t.Context())
+	if err == nil {
+		t.Fatal("expected a non-JSON sidecar response to fail")
+	}
+	for _, message := range []string{err.Error(), status.Error} {
+		if strings.ContainsRune(message, '\x00') || strings.Contains(message, "GVAS") || strings.Contains(message, "\\x00") {
+			t.Fatalf("binary save content leaked into diagnostic text: %q", message)
+		}
+		if !strings.Contains(message, "non-JSON response") {
+			t.Fatalf("unexpected safe diagnostic: %q", message)
+		}
+	}
+}
+
+func TestRebuildNeverReturnsBinaryTextFromStructuredSidecarError(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": false,
+			"error": map[string]any{
+				"code":    "parse_failed",
+				"message": "GVAS \\x00\\xff raw payload",
+			},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+
+	_, status, err := NewManager(cfg).Rebuild(t.Context())
+	if err == nil {
+		t.Fatal("expected structured sidecar error to fail")
+	}
+	for _, message := range []string{err.Error(), status.Error} {
+		if strings.Contains(message, "GVAS") || strings.Contains(message, "\\x") || strings.ContainsRune(message, '\x00') {
+			t.Fatalf("sidecar error payload leaked into diagnostic text: %q", message)
+		}
+		if !strings.Contains(message, "inspect the sav-cli text logs") {
+			t.Fatalf("unexpected safe diagnostic: %q", message)
+		}
 	}
 }
 

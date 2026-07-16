@@ -1,5 +1,13 @@
 package indexer
 
+import (
+	"regexp"
+	"strings"
+	"unicode"
+)
+
+var escapedBytePattern = regexp.MustCompile(`\\[xX][0-9A-Fa-f]{2}`)
+
 const IndexVersion = 1
 
 type Coordinates struct {
@@ -19,7 +27,7 @@ type Player struct {
 	LastOnlineTime   string         `json:"last_online_time"`
 	Location         Coordinates    `json:"location"`
 	InventorySummary map[string]any `json:"inventory_summary,omitempty"`
-	Raw              any            `json:"raw,omitempty"`
+	Raw              any            `json:"-"`
 }
 
 type GuildMember struct {
@@ -35,7 +43,7 @@ type Guild struct {
 	Members           []GuildMember `json:"members"`
 	BaseIDs           []string      `json:"base_ids"`
 	OnlineMemberCount int           `json:"online_member_count"`
-	Raw               any           `json:"raw,omitempty"`
+	Raw               any           `json:"-"`
 }
 
 type Worker struct {
@@ -55,7 +63,7 @@ type Base struct {
 	Workers         []Worker    `json:"workers"`
 	Containers      []string    `json:"containers"`
 	Status          string      `json:"status"`
-	Raw             any         `json:"raw,omitempty"`
+	Raw             any         `json:"-"`
 }
 
 type Pal struct {
@@ -64,13 +72,23 @@ type Pal struct {
 	Nickname       string      `json:"nickname"`
 	Level          int         `json:"level"`
 	OwnerPlayerUID string      `json:"owner_player_uid"`
+	OldOwnerUIDs   []string    `json:"old_owner_uids"`
 	GuildID        string      `json:"guild_id"`
 	ContainerID    string      `json:"container_id"`
+	SlotIndex      int         `json:"slot_index"`
+	LocationType   string      `json:"location_type"`
 	Location       Coordinates `json:"location"`
+	Gender         string      `json:"gender"`
+	Rank           int         `json:"rank"`
+	IVHP           int         `json:"iv_hp"`
+	IVAttack       int         `json:"iv_attack"`
+	IVDefense      int         `json:"iv_defense"`
 	Skills         []string    `json:"skills"`
+	EquippedSkills []string    `json:"equipped_skills"`
 	Passives       []string    `json:"passives"`
+	OnExpedition   bool        `json:"on_expedition"`
 	Status         string      `json:"status"`
-	Raw            any         `json:"raw,omitempty"`
+	Raw            any         `json:"-"`
 }
 
 type Slot struct {
@@ -151,6 +169,9 @@ func (i *Index) Finalize() {
 	if i.Warnings == nil {
 		i.Warnings = []string{}
 	}
+	for index, warning := range i.Warnings {
+		i.Warnings[index] = safeDiagnostic(warning)
+	}
 	if i.Players == nil {
 		i.Players = []Player{}
 	}
@@ -177,4 +198,20 @@ func (i *Index) Finalize() {
 		Containers:  len(i.Containers),
 		MapEntities: len(i.MapEntities),
 	}
+}
+
+func safeDiagnostic(value string) string {
+	value = strings.ToValidUTF8(value, "")
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return -1
+		}
+		return r
+	}, value)
+	value = escapedBytePattern.ReplaceAllString(value, "[byte]")
+	runes := []rune(value)
+	if len(runes) > 512 {
+		value = string(runes[:512]) + "…"
+	}
+	return value
 }

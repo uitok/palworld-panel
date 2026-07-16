@@ -1,7 +1,7 @@
 [Unit]
 Description=PalPanel web application
-Wants=palpanel-sav-cli.service
-After=network-online.target palpanel-sav-cli.service
+Wants=palpanel-sav-cli.service palpanel-palcalc.service
+After=network-online.target palpanel-sav-cli.service palpanel-palcalc.service
 Wants=network-online.target
 
 [Service]
@@ -14,6 +14,7 @@ Environment=PALPANEL_BACKEND_DIR=/opt/palpanel/current/backend
 Environment=PALPANEL_RUNNER_DIR=/opt/palpanel/current/backend/deployments/wine-runner
 Environment=PALPANEL_SAVE_INDEXER_ENABLED=true
 Environment=PALPANEL_SAVE_INDEXER_URL=http://127.0.0.1:8090
+Environment=PALPANEL_PALCALC_URL=http://127.0.0.1:8091
 ExecStart=/opt/palpanel/current/bin/palpanel --config /etc/palpanel/palpanel.env
 Restart=on-failure
 RestartSec=3s

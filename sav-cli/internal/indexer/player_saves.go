@@ -36,8 +36,11 @@ func normalizePlayerSaves(index *Index, playersDir string) {
 	}
 
 	type result struct {
-		containerIDs []string
-		err          error
+		containerIDs  []string
+		partyID       string
+		palboxID      string
+		auxiliaryPals []Pal
+		err           error
 	}
 	parsed := map[string]result{}
 	for playerPosition := range index.Players {
@@ -55,6 +58,13 @@ func normalizePlayerSaves(index *Index, playersDir string) {
 					inventory.err = fmt.Errorf("%s could not be parsed: %w", filepath.Base(path), err)
 				} else {
 					inventory.containerIDs, inventory.err = playerInventoryContainerIDs(file)
+					if inventory.err == nil {
+						inventory.partyID, inventory.palboxID = playerPalContainerIDs(file)
+						dpsPath := strings.TrimSuffix(path, filepath.Ext(path)) + "_dps.sav"
+						if _, statErr := os.Stat(dpsPath); statErr == nil {
+							inventory.auxiliaryPals, inventory.err = readAuxiliaryPals(dpsPath, player.PlayerUID, "dimensional_pal_storage", player.PlayerUID+"_DPS")
+						}
+					}
 					if inventory.err != nil {
 						inventory.err = fmt.Errorf("%s has invalid inventory data: %w", filepath.Base(path), inventory.err)
 					}
@@ -74,7 +84,87 @@ func normalizePlayerSaves(index *Index, playersDir string) {
 				index.Containers[position].OwnerID = player.PlayerUID
 			}
 		}
+		for palPosition := range index.Pals {
+			pal := &index.Pals[palPosition]
+			if pal.OwnerPlayerUID != player.PlayerUID {
+				continue
+			}
+			switch canonicalSaveID(pal.ContainerID) {
+			case canonicalSaveID(inventory.partyID):
+				if inventory.partyID != "" {
+					pal.LocationType = "player_party"
+				}
+			case canonicalSaveID(inventory.palboxID):
+				if inventory.palboxID != "" {
+					pal.LocationType = "palbox"
+				}
+			}
+		}
+		index.Pals = append(index.Pals, inventory.auxiliaryPals...)
 	}
+	globalPath := filepath.Join(filepath.Dir(playersDir), "GlobalPalStorage.sav")
+	if _, err := os.Stat(globalPath); err == nil {
+		ownerUID := ""
+		if len(index.Players) > 0 {
+			ownerUID = index.Players[0].PlayerUID
+		}
+		pals, parseErr := readAuxiliaryPals(globalPath, ownerUID, "global_pal_storage", "GLOBAL_PAL_STORAGE")
+		if parseErr != nil {
+			index.Warnings = append(index.Warnings, "global pal storage warning: "+parseErr.Error())
+		} else {
+			index.Pals = append(index.Pals, pals...)
+		}
+	}
+}
+
+func readAuxiliaryPals(path, ownerUID, locationType, containerID string) ([]Pal, error) {
+	file, err := readPlayerSave(path)
+	if err != nil {
+		return nil, err
+	}
+	entries := asList(getField(file.Properties, "SaveParameterArray"))
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("%s does not contain SaveParameterArray", filepath.Base(path))
+	}
+	result := make([]Pal, 0, len(entries))
+	for slotIndex, entry := range entries {
+		saveParam := getField(entry, "SaveParameter")
+		if saveParam == nil {
+			saveParam = entry
+		}
+		individualID := firstNonEmptyAny(getField(entry, "InstanceId"), getField(saveParam, "InstanceId"))
+		instanceID := asString(firstNonEmptyAny(getField(individualID, "InstanceId"), getField(saveParam, "InstanceId")))
+		characterID := asString(firstNonEmptyAny(getField(saveParam, "CharacterID"), getField(saveParam, "CharacterId")))
+		if instanceID == "" || characterID == "" || isZeroGUID(instanceID) {
+			continue
+		}
+		gender := "male"
+		if strings.Contains(strings.ToLower(asString(getField(saveParam, "Gender"))), "female") {
+			gender = "female"
+		}
+		result = append(result, Pal{
+			InstanceID: instanceID, CharacterID: characterID, Nickname: asString(getField(saveParam, "NickName")),
+			Level: asIntDefault(getField(saveParam, "Level"), 1), OwnerPlayerUID: ownerUID,
+			OldOwnerUIDs: stringSlice(firstNonEmptyAny(getField(saveParam, "OldOwnerPlayerUIds"), getField(saveParam, "OldOwnerPlayerUIDs"))),
+			ContainerID:  containerID, SlotIndex: slotIndex, LocationType: locationType, Gender: gender,
+			Rank: asIntDefault(getField(saveParam, "Rank"), 1), IVHP: asInt(getField(saveParam, "Talent_HP")),
+			IVAttack:       asInt(firstNonEmptyAny(getField(saveParam, "Talent_Shot"), getField(saveParam, "Talent_Attack"))),
+			IVDefense:      asInt(getField(saveParam, "Talent_Defense")),
+			Skills:         stringSlice(firstNonEmptyAny(getField(saveParam, "MasteredWaza"), getField(saveParam, "SkillList"))),
+			EquippedSkills: stringSlice(getField(saveParam, "EquipWaza")), Passives: stringSlice(getField(saveParam, "PassiveSkillList")),
+			OnExpedition: asString(getField(saveParam, "MapObjectConcreteInstanceIdAssignedToExpedition")) != "", Status: "Healthy",
+		})
+	}
+	return result, nil
+}
+
+func playerPalContainerIDs(file *gvas.File) (partyID, palboxID string) {
+	saveData, ok := asMap(getField(file.Properties, "SaveData"))
+	if !ok {
+		return "", ""
+	}
+	return containerIDFromAny(getField(saveData, "OtomoCharacterContainerId")),
+		containerIDFromAny(getField(saveData, "PalStorageContainerId"))
 }
 
 func playerSaveFiles(playersDir string) (map[string]string, error) {

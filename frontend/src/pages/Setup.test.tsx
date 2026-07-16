@@ -14,6 +14,7 @@ const setupApiMock = vi.hoisted(() => ({
   installDocker: vi.fn(),
   configureDockerMirrors: vi.fn(),
   setRuntime: vi.fn(),
+  importServerDirectory: vi.fn(),
   bootstrap: vi.fn(),
   initializeConfig: vi.fn(),
   setStartup: vi.fn(),
@@ -55,6 +56,14 @@ describe('Setup', () => {
     setupApiMock.getHost.mockResolvedValue(linuxHost());
     setupApiMock.getDockerPlan.mockResolvedValue(linuxDockerPlan({ can_auto_install: false, requires_manual: true }));
     setupApiMock.getDockerMirrorPlan.mockResolvedValue(linuxDockerMirrorPlan());
+    setupApiMock.importServerDirectory.mockResolvedValue({
+      path: String.raw`D:\SteamLibrary\steamapps\common\PalServer`,
+      manifest_path: String.raw`D:\SteamLibrary\steamapps\appmanifest_2394010.acf`,
+      build_id: '123456',
+      config_exists: true,
+      already_bound: false,
+      original_input: String.raw`D:\SteamLibrary\steamapps\common\PalServer`,
+    });
     tasksApiMock.getJobs.mockResolvedValue([]);
   });
 
@@ -192,9 +201,34 @@ describe('Setup', () => {
 
     render(<Setup />);
 
+    expect(await screen.findByRole('button', { name: /^我已有服务器/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^帮我安装服务器/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '先选择开服方式' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^帮我安装服务器/ }));
     expect(await screen.findByRole('button', { name: '安装 SteamCMD 和帕鲁服务端' })).not.toBeDisabled();
     expect(screen.queryByRole('button', { name: '安装 Docker 环境' })).not.toBeInTheDocument();
     expect(screen.queryByText('需要手动安装 Docker 环境')).not.toBeInTheDocument();
+  });
+
+  it('imports an existing Windows server directory without copying files', async () => {
+    setupApiMock.getRuntime.mockResolvedValue({ mode: 'windows_steamcmd' as RuntimeMode });
+    setupApiMock.getPrerequisites.mockResolvedValue([
+      { id: 'windows', label: 'Windows host', ok: true, required: true },
+    ]);
+    setupApiMock.getHost.mockResolvedValue(windowsHost());
+    setupApiMock.getDockerPlan.mockResolvedValue(windowsDockerPlan());
+    setupApiMock.getDockerMirrorPlan.mockResolvedValue(windowsDockerMirrorPlan());
+
+    render(<Setup />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^我已有服务器/ }));
+    const path = String.raw`D:\SteamLibrary\steamapps\common\PalServer`;
+    fireEvent.change(screen.getByLabelText('现有服务端目录'), { target: { value: path } });
+    fireEvent.click(screen.getByRole('button', { name: '检查并接管' }));
+
+    await waitFor(() => expect(setupApiMock.importServerDirectory).toHaveBeenCalledWith(path));
+    expect(await screen.findByText(`已接管现有服务端：${path}`)).toBeInTheDocument();
+    expect(screen.getByText(/接管不会复制游戏文件/)).toBeInTheDocument();
   });
 
   it('keeps advanced settings collapsed until opened', async () => {
@@ -248,6 +282,7 @@ const baseStatus = (): ServerStatus => ({
   ports: { game: 8211, query: 27015, rest: 8212 },
   warnings: [],
   paths: {},
+  server_imported: false,
 });
 
 const baseVersion = (): ServerVersionInfo => ({

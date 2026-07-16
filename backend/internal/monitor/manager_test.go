@@ -116,6 +116,66 @@ OptionSettings=(AdminPassword="secret",RCONEnabled=False)`
 	}
 }
 
+func TestRESTHealthUsesCurrentServerPasswordInsteadOfStalePanelPassword(t *testing.T) {
+	root := t.TempDir()
+	store, err := db.Open(filepath.Join(root, "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	restServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, password, ok := r.BasicAuth()
+		if !ok || password != "from-settings" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"current_players":1,"max_players":8}`))
+	}))
+	defer restServer.Close()
+	cfg := appconfig.Config{DataDir: root, ServerDir: filepath.Join(root, "server"), MonitorRetentionDays: 0}
+	if err := os.MkdirAll(filepath.Dir(cfg.PalWorldSettingsPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.PalWorldSettingsPath(), []byte(`[/Script/Pal.PalGameWorldSettings]
+OptionSettings=(RESTAPIEnabled=True,AdminPassword="from-settings",RCONEnabled=False)`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(cfg, store, fakeStatusServer{status: server.Status{RuntimeMode: server.RuntimeWindowsSteamCMD}}, palrest.New(restServer.URL, "admin", "stale-panel-password"))
+	manager.diskUsage = func(string) (int64, int64, error) { return 1, 2, nil }
+	sample, err := manager.Sample(t.Context())
+	if err != nil || !sample.RESTHealthy || sample.CurrentPlayers != 1 {
+		t.Fatalf("Sample = %#v, %v", sample, err)
+	}
+}
+
+func TestDockerHealthExplainsManagementPortMismatch(t *testing.T) {
+	root := t.TempDir()
+	store, err := db.Open(filepath.Join(root, "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	cfg := appconfig.Config{DataDir: root, ServerDir: filepath.Join(root, "server"), RESTPort: 8212, RCONPort: 25575, MonitorRetentionDays: 0}
+	if err := os.MkdirAll(filepath.Dir(cfg.PalWorldSettingsPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.PalWorldSettingsPath(), []byte(`[/Script/Pal.PalGameWorldSettings]
+OptionSettings=(RESTAPIEnabled=True,RESTAPIPort=18212,RCONEnabled=True,RCONPort=25570,AdminPassword="secret")`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(cfg, store, fakeStatusServer{status: server.Status{RuntimeMode: server.RuntimeWineDocker}}, palrest.New("http://127.0.0.1:8212/v1/api", "admin", "secret"))
+	manager.diskUsage = func(string) (int64, int64, error) { return 1, 2, nil }
+	sample, err := manager.Sample(t.Context())
+	if err != nil || sample.RESTHealthy || sample.RCONHealthy {
+		t.Fatalf("Sample = %#v, %v", sample, err)
+	}
+	for _, want := range []string{"RESTAPIPort and PALPANEL_REST_PORT", "RCONPort and PALPANEL_RCON_PORT"} {
+		if !strings.Contains(sample.UnavailableReason, want) {
+			t.Fatalf("reason %q does not contain %q", sample.UnavailableReason, want)
+		}
+	}
+}
+
 func TestSampleCollectsWindowsStatsAndCanDisableHistory(t *testing.T) {
 	root := t.TempDir()
 	store, err := db.Open(filepath.Join(root, "monitor.db"))

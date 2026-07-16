@@ -18,6 +18,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
@@ -59,7 +63,8 @@ jobs:
           tmp="$(mktemp -d)"
           sed 's|ExecStart=/opt/palpanel/current/bin/palpanel.*|ExecStart=/bin/true|' scripts/systemd/palpanel.service > "$tmp/palpanel.service"
           sed 's|ExecStart=/opt/palpanel/current/bin/sav-cli.*|ExecStart=/bin/true|' scripts/systemd/palpanel-sav-cli.service > "$tmp/palpanel-sav-cli.service"
-          systemd-analyze verify "$tmp/palpanel.service" "$tmp/palpanel-sav-cli.service"
+          sed 's|ExecStart=/opt/palpanel/current/bin/palcalc-bridge.*|ExecStart=/bin/true|' scripts/systemd/palpanel-palcalc.service > "$tmp/palpanel-palcalc.service"
+          systemd-analyze verify "$tmp/palpanel.service" "$tmp/palpanel-sav-cli.service" "$tmp/palpanel-palcalc.service"
       - name: Build and smoke Linux package
         run: |
           scripts/package.sh --version "$CI_PACKAGE_VERSION" --targets linux-amd64 --skip-tests --clean
@@ -76,6 +81,11 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
@@ -137,6 +147,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod

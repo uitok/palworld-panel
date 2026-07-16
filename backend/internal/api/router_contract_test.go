@@ -118,6 +118,7 @@ func TestNewContractRoutes(t *testing.T) {
 		"POST /api/server/docker/install",
 		"GET /api/server/docker/mirrors/plan",
 		"POST /api/server/docker/mirrors/configure",
+		"POST /api/server/import",
 		"GET /api/monitor/snapshot",
 		"GET /api/monitor/history",
 		"GET /api/schedules",

@@ -158,7 +158,8 @@ func normalizeCharacters(index *Index, world map[string]any, memberGuild map[str
 			continue
 		}
 		ownerUID := asString(getField(saveParam, "OwnerPlayerUId"))
-		containerID := containerIDFromAny(firstNonEmptyAny(getField(saveParam, "SlotID"), getField(saveParam, "SlotId"), getField(saveParam, "EquipItemContainerId")))
+		slot := firstNonEmptyAny(getField(saveParam, "SlotID"), getField(saveParam, "SlotId"), getField(saveParam, "EquipItemContainerId"))
+		containerID := containerIDFromAny(slot)
 		if ownerUID == "" && (groupID == "" || isZeroGUID(groupID)) && containerID == "" {
 			continue
 		}
@@ -166,17 +167,31 @@ func normalizeCharacters(index *Index, world map[string]any, memberGuild map[str
 		if guild.ID == "" {
 			guild = guildByID[groupID]
 		}
+		gender := "male"
+		if strings.Contains(strings.ToLower(asString(getField(saveParam, "Gender"))), "female") {
+			gender = "female"
+		}
 		pal := Pal{
 			InstanceID:     instanceID,
 			CharacterID:    asString(firstNonEmptyAny(getField(saveParam, "CharacterID"), getField(saveParam, "CharacterId"))),
 			Nickname:       asString(getField(saveParam, "NickName")),
 			Level:          asIntDefault(getField(saveParam, "Level"), 1),
 			OwnerPlayerUID: ownerUID,
+			OldOwnerUIDs:   stringSlice(firstNonEmptyAny(getField(saveParam, "OldOwnerPlayerUIds"), getField(saveParam, "OldOwnerPlayerUIDs"))),
 			GuildID:        guild.ID,
 			ContainerID:    containerID,
+			SlotIndex:      asInt(firstNonEmptyAny(getField(slot, "SlotIndex"), getField(saveParam, "SlotIndex"))),
+			LocationType:   "palbox",
 			Location:       location,
-			Skills:         stringSlice(firstNonEmptyAny(getField(saveParam, "SkillList"), getField(saveParam, "EquipWaza"), getField(saveParam, "MasteredWaza"))),
+			Gender:         gender,
+			Rank:           asIntDefault(getField(saveParam, "Rank"), 1),
+			IVHP:           asInt(getField(saveParam, "Talent_HP")),
+			IVAttack:       asInt(firstNonEmptyAny(getField(saveParam, "Talent_Shot"), getField(saveParam, "Talent_Attack"))),
+			IVDefense:      asInt(getField(saveParam, "Talent_Defense")),
+			Skills:         stringSlice(firstNonEmptyAny(getField(saveParam, "MasteredWaza"), getField(saveParam, "SkillList"))),
+			EquippedSkills: stringSlice(getField(saveParam, "EquipWaza")),
 			Passives:       stringSlice(getField(saveParam, "PassiveSkillList")),
+			OnExpedition:   asString(getField(saveParam, "MapObjectConcreteInstanceIdAssignedToExpedition")) != "",
 			Status:         "Healthy",
 			Raw:            map[string]any{"key": key, "save_parameter": saveParam},
 		}
@@ -239,6 +254,12 @@ func normalizeBases(index *Index, world map[string]any) {
 					base.Workers = append(base.Workers, Worker{
 						InstanceID: pal.InstanceID, CharacterID: pal.CharacterID, Nickname: pal.Nickname, Level: pal.Level,
 					})
+					for palPosition := range index.Pals {
+						if index.Pals[palPosition].InstanceID == instanceID {
+							index.Pals[palPosition].LocationType = "base"
+							break
+						}
+					}
 				}
 			}
 		}
@@ -399,9 +420,10 @@ func normalizeMapObjects(index *Index, world map[string]any) {
 		concrete := getField(object, "ConcreteModel")
 		for _, moduleAny := range asList(getField(concrete, "ModuleMap")) {
 			module, ok := rawMap(moduleAny)
-			if !ok || asString(module["key"]) != "EPalMapObjectConcreteModelModuleType::ItemContainer" {
+			if !ok {
 				continue
 			}
+			moduleType := asString(module["key"])
 			moduleValue, _ := asMap(module["value"])
 			raw := bytesFromAny(getField(moduleValue, "RawData"))
 			if len(raw) < 16 {
@@ -409,6 +431,20 @@ func normalizeMapObjects(index *Index, world map[string]any) {
 			}
 			containerID, err := gvas.NewReader(raw).GUID()
 			if err != nil || isZeroGUID(containerID) {
+				continue
+			}
+			if moduleType == "EPalMapObjectConcreteModelModuleType::CharacterContainer" {
+				locationType := mapObjectPalLocationType(label)
+				if locationType != "" {
+					for palPosition := range index.Pals {
+						if canonicalSaveID(index.Pals[palPosition].ContainerID) == canonicalSaveID(containerID) {
+							index.Pals[palPosition].LocationType = locationType
+						}
+					}
+				}
+				continue
+			}
+			if moduleType != "EPalMapObjectConcreteModelModuleType::ItemContainer" {
 				continue
 			}
 			if containerPosition, found := containerIndex[containerID]; found {
@@ -419,6 +455,19 @@ func normalizeMapObjects(index *Index, world map[string]any) {
 				index.Bases[baseIndex].Containers = appendUnique(index.Bases[baseIndex].Containers, containerID)
 			}
 		}
+	}
+}
+
+func mapObjectPalLocationType(label string) string {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "displaycharacter":
+		return "viewing_cage"
+	case "dimensionpalstorage":
+		return "dimensional_pal_storage"
+	case "globalpalstorage":
+		return "global_pal_storage"
+	default:
+		return ""
 	}
 }
 

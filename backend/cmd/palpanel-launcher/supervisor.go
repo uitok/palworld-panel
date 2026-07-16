@@ -20,6 +20,11 @@ type promptEvent struct {
 	cancel func()
 }
 
+type namedChild struct {
+	name  string
+	child *childProcess
+}
+
 func startAsyncPrompt(show func() error, dismiss func(finished <-chan struct{})) promptEvent {
 	done := make(chan error, 1)
 	finished := make(chan struct{})
@@ -89,17 +94,23 @@ func childExitError(err error) error {
 }
 
 func waitForPromptOrChildren(prompt promptEvent, savChild, serverChild *childProcess) error {
+	return waitForPromptOrManagedChildren(prompt, namedChild{"sav-cli", savChild}, namedChild{"palpanel server", serverChild})
+}
+
+func waitForPromptOrManagedChildren(prompt promptEvent, children ...namedChild) error {
+	result := make(chan error, len(children))
+	for _, managed := range children {
+		go func(item namedChild) {
+			result <- managedChildExitError(item.name, <-item.child.done)
+		}(managed)
+	}
 	select {
 	case err := <-prompt.done:
 		return err
-	case err := <-savChild.done:
+	case err := <-result:
 		prompt.cancel()
 		<-prompt.done
-		return managedChildExitError("sav-cli", err)
-	case err := <-serverChild.done:
-		prompt.cancel()
-		<-prompt.done
-		return managedChildExitError("palpanel server", err)
+		return err
 	}
 }
 

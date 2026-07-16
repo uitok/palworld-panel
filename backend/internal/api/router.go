@@ -21,7 +21,9 @@ import (
 
 	"palpanel/internal/aitranslation"
 	"palpanel/internal/appconfig"
+	"palpanel/internal/astrbotclient"
 	panelauth "palpanel/internal/auth"
+	"palpanel/internal/breeding"
 	"palpanel/internal/buildinfo"
 	"palpanel/internal/db"
 	"palpanel/internal/id"
@@ -46,6 +48,8 @@ type Server struct {
 	monitor       monitor.Manager
 	scheduler     scheduler.Manager
 	saveIndex     *saveindex.Manager
+	breeding      *breeding.Service
+	astrbot       *astrbotclient.Client
 	ai            *aitranslation.Service
 	auth          *panelauth.Service
 	authLimiter   *authRateLimiter
@@ -57,13 +61,18 @@ type Server struct {
 func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	webFiles, _ := webui.Load(cfg.FrontendDist)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveindex.NewManager(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
+	saveManager := saveindex.NewManager(cfg)
+	initializeSaveSources(cfg, store, saveManager)
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))
 	r.Use(GzipMiddleware())
 	r.Use(CORSMiddleware(cfg.CORSOrigins))
 	s.registerRoutes(r)
+	if s.astrbot.Enabled() {
+		go s.runAstrBotCatalogSync()
+	}
 	return r
 }
 
@@ -84,7 +93,7 @@ func (s Server) ready(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "database_unavailable", "database is unavailable")
 		return
 	}
-	for _, path := range []string{s.cfg.DataDir, s.cfg.ServerDir, s.cfg.LogsDir, s.cfg.BackupsDir} {
+	for _, path := range []string{s.cfg.DataDir, s.cfg.ServerDirectory(), s.cfg.LogsDir, s.cfg.BackupsDir} {
 		info, err := os.Stat(path)
 		if err != nil || !info.IsDir() {
 			fail(c, http.StatusServiceUnavailable, "data_directory_unavailable", "a required data directory is unavailable")
@@ -272,6 +281,23 @@ func (s Server) putRuntime(c *gin.Context) {
 	}
 	s.invalidateServerCaches()
 	ok(c, gin.H{"mode": req.Mode})
+}
+
+func (s Server) importServerDirectory(c *gin.Context) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	result, err := s.server.ImportServerDirectory(c.Request.Context(), req.Path)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "server_import_failed", err.Error())
+		return
+	}
+	s.invalidateServerCaches()
+	ok(c, result)
 }
 
 func (s Server) serverDockerPlan(c *gin.Context) {

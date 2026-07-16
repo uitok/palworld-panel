@@ -150,8 +150,8 @@ describe('Mods Workshop store', () => {
     mocks.serverApi.getStatus.mockResolvedValue({ pending_restart: false });
     mocks.securityApi.status.mockResolvedValue({
       installed: true,
-      version: '1.8.1+bundled',
-      bundled: { version: '1.8.1', sha256: 'test', size: 1 },
+      version: '1.8.3',
+      release_source: 'github_latest',
       needs_first_start: false,
       files: { 'PalDefender.dll': true },
       paths: {},
@@ -298,7 +298,7 @@ describe('Mods Workshop store', () => {
     expect(screen.getByText('UE4SS')).toBeInTheDocument();
     expect(screen.getByText('v3.0.1')).toBeInTheDocument();
     expect(screen.getByText('PalDefender')).toBeInTheDocument();
-    expect(screen.getByText('1.8.1+bundled')).toBeInTheDocument();
+    expect(screen.getByText('1.8.3')).toBeInTheDocument();
     expect(screen.getAllByText('启动日志已确认')).toHaveLength(2);
   });
 

@@ -128,7 +128,7 @@ func (m Manager) ScanLocal(ctx context.Context) (LocalScanResult, error) {
 	if m.store == nil {
 		return LocalScanResult{}, fmt.Errorf("local Mod scan requires a database store")
 	}
-	serverDir := strings.TrimSpace(m.cfg.ServerDir)
+	serverDir := strings.TrimSpace(m.cfg.ServerDirectory())
 	if serverDir == "" {
 		return LocalScanResult{}, fmt.Errorf("local Mod scan requires PALPANEL_SERVER_DIR")
 	}

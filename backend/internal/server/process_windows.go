@@ -380,3 +380,55 @@ func canonicalWindowsPath(path string) string {
 func isWindowsProcessMissing(err error) bool {
 	return errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_FOUND)
 }
+
+func unmanagedWindowsServerProcess(serverRoot string) (string, bool, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return "", false, err
+	}
+	defer windows.CloseHandle(snapshot)
+
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	for {
+		name := windows.UTF16ToString(entry.ExeFile[:])
+		if isPalworldServerExecutableName(name) {
+			info, inspectErr := inspectWindowsProcess(int(entry.ProcessID))
+			if inspectErr != nil && !isWindowsProcessMissing(inspectErr) {
+				return "", false, fmt.Errorf("inspect running Palworld process %d: %w", entry.ProcessID, inspectErr)
+			}
+			if inspectErr == nil && info.Running && windowsPathWithin(serverRoot, info.Executable) {
+				return info.Executable, true, nil
+			}
+		}
+		err = windows.Process32Next(snapshot, &entry)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+}
+
+func isPalworldServerExecutableName(name string) bool {
+	name = filepath.Base(strings.TrimSpace(name))
+	return strings.EqualFold(name, "PalServer.exe") ||
+		(strings.HasPrefix(strings.ToLower(name), "palserver-win64-") && strings.HasSuffix(strings.ToLower(name), "-cmd.exe"))
+}
+
+func windowsPathWithin(root, target string) bool {
+	root = canonicalWindowsPath(root)
+	target = canonicalWindowsPath(target)
+	relative, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)))
+}

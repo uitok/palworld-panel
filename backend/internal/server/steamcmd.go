@@ -21,24 +21,29 @@ func (m Manager) ensureSteamCMD(ctx context.Context) error {
 }
 
 func (m Manager) installOrUpdateWindows(ctx context.Context) error {
-	for _, path := range []string{m.cfg.SteamCMDDir, m.cfg.ServerDir} {
+	for _, path := range []string{m.cfg.SteamCMDDir, m.cfg.ServerDirectory()} {
 		if err := m.cfg.ValidateManagedPath(path, false); err != nil {
 			return err
 		}
 	}
-	if err := m.nativeSteamCMD().InstallOrUpdate(ctx, palworldServerAppID, m.cfg.ServerDir); err != nil {
+	if err := m.nativeSteamCMD().InstallOrUpdate(ctx, palworldServerAppID, m.cfg.ServerDirectory()); err != nil {
 		return err
 	}
 	return m.validateWindowsServerInstall()
 }
 
 func (m Manager) validateWindowsServerInstall() error {
-	if err := validatePEExecutable(m.cfg.PalServerExePath()); err != nil {
+	return validateWindowsServerDirectory(m.cfg.ServerDirectory())
+}
+
+func validateWindowsServerDirectory(serverRoot string) error {
+	palServerPath := filepath.Join(serverRoot, "PalServer.exe")
+	if err := validatePEExecutable(palServerPath); err != nil {
 		return fmt.Errorf("Palworld server installation is incomplete: %w", err)
 	}
 	commandCandidates := []string{
-		filepath.Join(m.cfg.Win64Dir(), "PalServer-Win64-Shipping-Cmd.exe"),
-		filepath.Join(m.cfg.Win64Dir(), "PalServer-Win64-Test-Cmd.exe"),
+		filepath.Join(serverRoot, "Pal", "Binaries", "Win64", "PalServer-Win64-Shipping-Cmd.exe"),
+		filepath.Join(serverRoot, "Pal", "Binaries", "Win64", "PalServer-Win64-Test-Cmd.exe"),
 	}
 	commandFound := false
 	for _, path := range commandCandidates {
@@ -53,7 +58,7 @@ func (m Manager) validateWindowsServerInstall() error {
 			commandCandidates[0], commandCandidates[1],
 		)
 	}
-	manifest := m.appManifestPath()
+	manifest := appManifestPathForRoot(serverRoot)
 	if info, err := os.Stat(manifest); err != nil || info.IsDir() || info.Size() == 0 {
 		if err == nil {
 			err = fmt.Errorf("manifest is not a non-empty file")

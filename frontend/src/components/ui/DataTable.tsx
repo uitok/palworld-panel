@@ -81,19 +81,20 @@ export function DataTable<T>({
   const paginationPages = pagination ? visiblePages(pagination.currentPage, pagination.totalPages) : [];
 
   return (
-    <div className="w-full bg-white">
-      <div className="flex flex-col gap-4 border-b border-slate-100 pb-5 lg:flex-row lg:items-center lg:justify-between">
+    <div className="w-full min-w-0">
+      <div className="flex flex-col gap-4 border-b border-slate-200/80 pb-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
-          {title && <h3 className="text-[15px] font-bold text-slate-800">{title}</h3>}
+          {title && <h3 className="text-base font-bold tracking-tight text-slate-900">{title}</h3>}
           {onSearchChange !== undefined && (
             <div className="relative w-full sm:w-72">
-              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
               <input
                 type="search"
+                aria-label={searchPlaceholder}
                 placeholder={searchPlaceholder}
                 value={searchText || ''}
                 onChange={(event) => onSearchChange(event.target.value)}
-                className="w-full rounded-xl border border-slate-200 py-2 pl-9 pr-4 text-xs font-medium text-slate-700 placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-4 text-sm font-medium text-slate-700 shadow-sm placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/10"
               />
             </div>
           )}
@@ -101,7 +102,7 @@ export function DataTable<T>({
 
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
           {tabs && tabs.length > 0 && activeTab && onTabChange && (
-            <div className="flex max-w-full items-center overflow-x-auto rounded-xl border border-slate-100/70 bg-slate-100/60 p-0.5">
+            <div className="flex max-w-full items-center overflow-x-auto rounded-lg border border-slate-200/80 bg-slate-100 p-1">
               {tabs.map((tab) => {
                 const isActive = activeTab === tab.id;
                 return (
@@ -109,9 +110,9 @@ export function DataTable<T>({
                     type="button"
                     key={tab.id}
                     onClick={() => onTabChange(tab.id)}
-                    className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
+                    className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
                       isActive
-                        ? 'border border-slate-100/70 bg-white text-slate-900 shadow-sm'
+                        ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200/70'
                         : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
@@ -131,7 +132,7 @@ export function DataTable<T>({
           {safeData.length > 0 ? (
             safeData.map((item, index) => <React.Fragment key={index}>{renderCard?.(item, index)}</React.Fragment>)
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-10 text-center text-xs font-semibold text-slate-400">
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-10 text-center text-sm font-medium text-slate-500">
               {emptyText}
             </div>
           )}
@@ -142,13 +143,14 @@ export function DataTable<T>({
         ref={scrollRef}
         className={`${showCards ? 'hidden overflow-x-auto md:block' : 'overflow-x-auto'} ${useVirtualRows ? 'max-h-[680px] overflow-y-auto' : ''}`}
       >
-        <table className="w-full border-collapse text-left">
-          <thead>
-            <tr className="border-b border-slate-100/80 bg-slate-50/40">
+        <table className="w-full border-collapse text-left" aria-label={title || '数据表格'}>
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b border-slate-200/80 bg-slate-50/95 backdrop-blur">
               {headers.map((header) => (
                 <th
                   key={header.key}
-                  className={`px-6 py-3.5 text-[11px] font-bold uppercase text-slate-400 ${
+                  scope="col"
+                  className={`whitespace-nowrap px-5 py-3.5 text-xs font-bold text-slate-500 ${
                     header.align === 'center' ? 'text-center' : header.align === 'right' ? 'text-right' : 'text-left'
                   }`}
                 >
@@ -157,7 +159,7 @@ export function DataTable<T>({
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100/60">
+          <tbody className="divide-y divide-slate-100">
             {safeData.length > 0 ? (
               <>
                 {topPadding > 0 && (
@@ -176,7 +178,7 @@ export function DataTable<T>({
               </>
             ) : (
               <tr>
-                <td colSpan={headers.length} className="px-6 py-12 text-center text-xs font-semibold text-slate-400">
+                <td colSpan={headers.length} className="px-6 py-14 text-center text-sm font-medium text-slate-500">
                   {emptyText}
                 </td>
               </tr>
@@ -186,8 +188,8 @@ export function DataTable<T>({
       </div>
 
       {pagination && (
-        <div className="mt-2 flex flex-col gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-[11px] font-semibold text-slate-400">
+        <div className="mt-2 flex flex-col gap-3 border-t border-slate-200/80 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <span className="text-xs font-semibold text-slate-500">
             显示 {pagination.totalItems === 0 ? 0 : (pagination.currentPage - 1) * pagination.itemsPerPage + 1} -{' '}
             {Math.min(pagination.totalItems, pagination.currentPage * pagination.itemsPerPage)} 条，共{' '}
             {pagination.totalItems} 条
@@ -199,7 +201,7 @@ export function DataTable<T>({
               onClick={() => pagination.onPageChange(Math.max(1, pagination.currentPage - 1))}
               disabled={pagination.currentPage === 1}
               aria-label="上一页"
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200/80 text-slate-500 transition-all hover:bg-slate-50 disabled:opacity-40"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40"
             >
               <ChevronLeft size={14} />
             </button>
@@ -211,10 +213,10 @@ export function DataTable<T>({
                   type="button"
                   key={page}
                   onClick={() => pagination.onPageChange(page)}
-                  className={`h-8 w-8 rounded-lg text-xs font-bold transition-all ${
+                  className={`h-9 w-9 rounded-lg text-xs font-bold transition-colors ${
                     isActive
-                      ? 'bg-sky-500 text-white shadow-md shadow-sky-100'
-                      : 'border border-slate-200/80 text-slate-500 hover:bg-slate-50'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
                   {page}
@@ -227,7 +229,7 @@ export function DataTable<T>({
               onClick={() => pagination.onPageChange(Math.min(pagination.totalPages, pagination.currentPage + 1))}
               disabled={pagination.currentPage === pagination.totalPages}
               aria-label="下一页"
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200/80 text-slate-500 transition-all hover:bg-slate-50 disabled:opacity-40"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40"
             >
               <ChevronRight size={14} />
             </button>

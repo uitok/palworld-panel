@@ -243,6 +243,12 @@ export const Dashboard: React.FC = () => {
       : latestChart?.memoryGiB != null
         ? `${latestChart.memoryGiB.toFixed(1)} GB 内存`
         : `内存 ${formatRAM(status?.memory_usage_bytes)}`;
+  const serverFacts = [
+    { label: '游戏端口', value: status?.ports?.game || 8211, detail: `REST ${status?.ports?.rest || 8212}`, icon: <Bell size={16} />, tone: 'text-sky-700 bg-sky-50' },
+    { label: '帕鲁总数', value: metrics?.total_pals || 0, detail: '来自存档与监控数据', icon: <Sword size={16} />, tone: 'text-blue-700 bg-blue-50' },
+    { label: '活跃基地', value: metrics?.active_bases || 0, detail: '当前世界统计', icon: <Home size={16} />, tone: 'text-amber-700 bg-amber-50' },
+    { label: 'Server FPS', value: metrics?.server_fps || 0, detail: `${metrics?.frame_time || 0} ms / frame`, icon: <Activity size={16} />, tone: 'text-emerald-700 bg-emerald-50' },
+  ];
 
   if (loading && !status) {
     return (
@@ -256,7 +262,7 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
       {queryNotice && (
-        <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">
+        <div className="rounded-xl border border-sky-200/80 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-800">
           {queryNotice}
         </div>
       )}
@@ -268,30 +274,36 @@ export const Dashboard: React.FC = () => {
         <StatCard title="世界运行时间" value={formatUptime(metrics?.uptime)} icon={<Clock size={16} />} trend={status?.pending_restart ? '配置等待重启' : '配置已生效'} trendType={status?.pending_restart ? 'down' : 'up'} color="emerald" />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="服务端口" value={status?.ports?.game || 8211} icon={<Bell size={16} />} trend={`REST ${status?.ports?.rest || 8212}`} trendType="neutral" color="sky" />
-        <StatCard title="帕鲁总数" value={metrics?.total_pals || 0} icon={<Sword size={16} />} trend="后端未提供时显示 0" trendType="neutral" color="blue" />
-        <StatCard title="活跃基地" value={metrics?.active_bases || 0} icon={<Home size={16} />} trend="来自 metrics" trendType="neutral" color="amber" />
-        <StatCard title="Server FPS" value={metrics?.server_fps || 0} icon={<Activity size={16} />} trend={`${metrics?.frame_time || 0} ms/frame`} trendType="info" color="emerald" />
-      </div>
+      <section className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 lg:grid-cols-4">
+        {serverFacts.map((fact) => (
+          <div key={fact.label} className="flex min-w-0 items-center gap-3 bg-white px-4 py-4 sm:px-5">
+            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${fact.tone}`}>{fact.icon}</span>
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-semibold text-slate-500">{fact.label}</span>
+              <strong className="mt-0.5 block truncate text-lg font-bold tracking-tight text-slate-900">{fact.value}</strong>
+              <span className="hidden truncate text-[11px] font-medium text-slate-400 sm:block">{fact.detail}</span>
+            </span>
+          </div>
+        ))}
+      </section>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] xl:col-span-2">
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6 xl:col-span-2">
           <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="text-[14px] font-bold text-slate-800">在线人数与系统负载</h3>
-            <span className="text-[11px] font-semibold text-slate-400">来自监控历史入库</span>
+            <h3 className="text-base font-bold tracking-tight text-slate-900">在线人数与系统负载</h3>
+            <span className="text-xs font-semibold text-slate-500">来自监控历史入库</span>
           </div>
           <div className="grid h-[420px] grid-cols-1 gap-6 lg:h-64 lg:grid-cols-2">
             <div className="flex min-h-0 flex-col gap-2">
-              <span className="text-[11px] font-bold text-slate-400">在线趋势</span>
+              <span className="text-xs font-bold text-slate-500">在线趋势</span>
               {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-                    <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} allowDecimals={false} />
-                    <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-                    <Line type="monotone" dataKey="players" name="玩家数" stroke="#0ea5e9" strokeWidth={2.5} dot={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#edf1f6" />
+                    <XAxis dataKey="time" stroke="#8997aa" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis stroke="#8997aa" fontSize={10} tickLine={false} axisLine={false} allowDecimals={false} />
+                    <Tooltip contentStyle={{ fontSize: '12px', borderRadius: '10px', border: '1px solid #dce3ec', boxShadow: '0 12px 30px -18px rgba(8,17,31,.35)' }} />
+                    <Line type="monotone" dataKey="players" name="玩家数" stroke="#18aa9a" strokeWidth={2.5} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
@@ -299,22 +311,22 @@ export const Dashboard: React.FC = () => {
               )}
             </div>
             <div className="flex min-h-0 flex-col gap-2">
-              <span className="text-[11px] font-bold text-slate-400">CPU / 内存波动</span>
+              <span className="text-xs font-bold text-slate-500">CPU / 内存波动</span>
               {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-                    <YAxis yAxisId="percent" stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#edf1f6" />
+                    <XAxis dataKey="time" stroke="#8997aa" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis yAxisId="percent" stroke="#8997aa" fontSize={10} tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
                     {!hasMemoryPercent && hasMemoryUsage && (
-                      <YAxis yAxisId="memory" orientation="right" stroke="#94a3b8" fontSize={10} tickLine={false} width={34} tickFormatter={(value) => `${value}G`} />
+                      <YAxis yAxisId="memory" orientation="right" stroke="#8997aa" fontSize={10} tickLine={false} axisLine={false} width={34} tickFormatter={(value) => `${value}G`} />
                     )}
-                    <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-                    <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
+                    <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '12px', borderRadius: '10px', border: '1px solid #dce3ec', boxShadow: '0 12px 30px -18px rgba(8,17,31,.35)' }} />
+                    <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#4f7cff" fill="#dfe9ff" strokeWidth={1.5} connectNulls />
                     {hasMemoryPercent ? (
-                      <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                      <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#18aa9a" fill="#d2f7f0" strokeWidth={1.5} connectNulls />
                     ) : hasMemoryUsage ? (
-                      <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                      <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#18aa9a" fill="#d2f7f0" strokeWidth={1.5} connectNulls />
                     ) : null}
                   </AreaChart>
                 </ResponsiveContainer>
@@ -325,13 +337,13 @@ export const Dashboard: React.FC = () => {
           </div>
         </section>
 
-        <section className="flex flex-col justify-between rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
+        <section className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
           <div>
-            <h3 className="text-[14px] font-bold text-slate-800">进程控制</h3>
-            <p className="mt-3 text-xs font-medium leading-relaxed text-slate-400">
+            <h3 className="text-base font-bold tracking-tight text-slate-900">进程控制</h3>
+            <p className="mt-2 text-sm font-medium leading-6 text-slate-500">
               普通停止由面板托管进程，强制停止会调用 Palworld 官方 REST `/stop`。
             </p>
-            <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <div className="mt-5 rounded-xl border border-slate-200/80 bg-slate-50 p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-xs font-semibold text-slate-600">当前状态</span>
                 <StatusBadge status={status?.status || 'stopped'} />
@@ -346,7 +358,7 @@ export const Dashboard: React.FC = () => {
               type="button"
               onClick={() => control('start')}
               disabled={status?.status === 'running' || status?.status === 'starting'}
-              className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 py-3 text-xs font-semibold text-white transition-all hover:bg-emerald-600 disabled:opacity-40"
+              className="flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 text-xs font-bold text-white transition-colors hover:bg-emerald-700 disabled:opacity-40"
             >
               <Play size={14} />
               启动
@@ -355,7 +367,7 @@ export const Dashboard: React.FC = () => {
               type="button"
               onClick={() => control('stop')}
               disabled={status?.status === 'stopped' || status?.status === 'stopping'}
-              className="flex items-center justify-center gap-2 rounded-2xl bg-rose-500 py-3 text-xs font-semibold text-white transition-all hover:bg-rose-600 disabled:opacity-40"
+              className="flex h-10 items-center justify-center gap-2 rounded-xl bg-rose-600 px-3 text-xs font-bold text-white transition-colors hover:bg-rose-700 disabled:opacity-40"
             >
               <Square size={14} />
               停止
@@ -364,7 +376,7 @@ export const Dashboard: React.FC = () => {
               type="button"
               onClick={() => control('forceStop')}
               disabled={status?.status === 'stopped' || status?.status === 'stopping'}
-              className="flex items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 py-3 text-xs font-semibold text-amber-700 transition-all hover:bg-amber-100 disabled:opacity-40"
+              className="flex h-10 items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-800 transition-colors hover:bg-amber-100 disabled:opacity-40"
             >
               <Zap size={14} />
               强停
@@ -374,7 +386,7 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => void openWorldReset()}
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 py-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100"
+              className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100"
             >
               <Trash2 size={14} />
               重置世界
@@ -383,15 +395,15 @@ export const Dashboard: React.FC = () => {
         </section>
       </div>
 
-      <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <div className="rounded-lg bg-slate-100 p-1.5 text-slate-500">
+            <div className="rounded-lg bg-slate-100 p-2 text-slate-600">
               <Terminal size={15} />
             </div>
-            <h3 className="text-[14px] font-bold text-slate-800">实时日志</h3>
+            <h3 className="text-base font-bold tracking-tight text-slate-900">实时日志</h3>
             {logResponse && (
-              <span className="truncate rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+              <span className="truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-500">
                 {logResponse.source === 'file' ? '持久日志' : logResponse.source === 'docker' ? 'Docker 输出' : '无采集源'}
               </span>
             )}
@@ -399,9 +411,9 @@ export const Dashboard: React.FC = () => {
           <button
             type="button"
             onClick={() => void refreshDashboard()}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200/60 bg-slate-50 px-3 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-100"
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
           >
-            <RefreshCw size={10} />
+            <RefreshCw size={13} />
             刷新
           </button>
         </div>
@@ -411,12 +423,12 @@ export const Dashboard: React.FC = () => {
             value={logSearch}
             onChange={(event) => setLogSearch(event.target.value)}
             placeholder="搜索日志关键字"
-            className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none"
           />
           <select
             value={logLevel}
             onChange={(event) => setLogLevel(event.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none"
           >
             <option value="">全部级别</option>
             <option value="error">Error</option>
@@ -424,7 +436,7 @@ export const Dashboard: React.FC = () => {
             <option value="info">Info</option>
           </select>
         </div>
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] leading-relaxed text-emerald-300">
+        <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-[12px] leading-6 text-emerald-300 shadow-inner">
           {logEmptyText}
         </pre>
       </section>
@@ -509,7 +521,7 @@ export const Dashboard: React.FC = () => {
 };
 
 const EmptyChart = () => (
-  <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-xs font-semibold text-slate-400">
+  <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm font-medium text-slate-500">
     暂无历史采样
   </div>
 );

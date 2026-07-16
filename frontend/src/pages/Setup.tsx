@@ -7,7 +7,9 @@ import {
   Download,
   FileDown,
   FileText,
+  FolderOpen,
   Gauge,
+  HardDriveDownload,
   Play,
   RefreshCw,
   Save,
@@ -63,6 +65,8 @@ type NextActionKind =
   | 'blocked'
   | 'loading';
 
+type WindowsServerSource = 'existing' | 'install' | null;
+
 const recoverableSetupJobTypes = new Set([
   'bootstrap',
   'install',
@@ -117,6 +121,9 @@ export const Setup: React.FC = () => {
   const [showManualScript, setShowManualScript] = useState(false);
   const [showMirrorScript, setShowMirrorScript] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [windowsServerSource, setWindowsServerSource] = useState<WindowsServerSource>(null);
+  const [existingServerPath, setExistingServerPath] = useState('');
+  const [importingServer, setImportingServer] = useState(false);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -188,6 +195,14 @@ export const Setup: React.FC = () => {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (host?.os !== 'windows' || status?.installed) return;
+    if (status?.server_imported) {
+      setWindowsServerSource('existing');
+      setExistingServerPath((current) => current || status.paths.server || '');
+    }
+  }, [host, status]);
 
   const trackJob = useCallback(async (job: Job) => {
     if (!job.id) return;
@@ -293,6 +308,30 @@ export const Setup: React.FC = () => {
     }
   };
 
+  const importExistingServer = async () => {
+    const path = existingServerPath.trim();
+    if (!path) {
+      setMessage('请填写现有服务端目录');
+      return;
+    }
+    setImportingServer(true);
+    try {
+      const imported = await setupApi.importServerDirectory(path);
+      setRuntime('windows_steamcmd');
+      setExistingServerPath(imported.path);
+      await refresh();
+      setMessage(
+        imported.config_exists
+          ? `已接管现有服务端：${imported.path}`
+          : `已接管现有服务端：${imported.path}。下一步初始化配置文件。`,
+      );
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setImportingServer(false);
+    }
+  };
+
   const changeDockerSource = async (source: DockerSourceID) => {
     setDockerSource(source);
     try {
@@ -388,7 +427,7 @@ export const Setup: React.FC = () => {
   const platformText = host ? platformLabel(host) : '检测中';
   const dockerManualCommand = dockerPlan ? dockerManualCommandFor(dockerPlan, addDockerGroup) : '';
   const dockerMirrorManualCommand = dockerMirrorPlan ? dockerMirrorManualCommandFor(dockerMirrorPlan) : '';
-  const nextAction = getNextAction({
+  const detectedNextAction = getNextAction({
     loading,
     status,
     host,
@@ -398,6 +437,17 @@ export const Setup: React.FC = () => {
     requiredSystemMissing,
     isJobRunning,
   });
+  const needsWindowsSource = Boolean(isWindowsHost && status && !status.installed);
+  const nextAction: NextAction = needsWindowsSource && windowsServerSource !== 'install'
+    ? {
+        kind: 'blocked',
+        label: windowsServerSource === 'existing' ? '等待导入现有目录' : '先选择开服方式',
+        description: windowsServerSource === 'existing'
+          ? '填写现有 Palworld 服务端目录并完成接管。'
+          : '先选择接管已有服务器，或由 PalPanel 自动安装。',
+        disabled: true,
+      }
+    : detectedNextAction;
   const simpleStatuses = getSimpleStatuses({
     loading,
     host,
@@ -442,6 +492,17 @@ export const Setup: React.FC = () => {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      {needsWindowsSource && (
+        <WindowsServerSourcePanel
+          source={windowsServerSource}
+          path={existingServerPath}
+          importing={importingServer}
+          onSourceChange={setWindowsServerSource}
+          onPathChange={setExistingServerPath}
+          onImport={importExistingServer}
+        />
+      )}
+
       <SetupHero
         action={nextAction}
         platformText={platformText}
@@ -663,6 +724,118 @@ const SetupHero: React.FC<{
     {activeJob && <JobProgress job={activeJob} />}
   </section>
 );
+
+const WindowsServerSourcePanel: React.FC<{
+  source: WindowsServerSource;
+  path: string;
+  importing: boolean;
+  onSourceChange: (source: Exclude<WindowsServerSource, null>) => void;
+  onPathChange: (path: string) => void;
+  onImport: () => void;
+}> = ({ source, path, importing, onSourceChange, onPathChange, onImport }) => {
+  const step = source ? 2 : 1;
+  return (
+    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-950 text-white shadow-lg shadow-slate-200/50">
+      <div className="flex flex-col gap-5 border-b border-white/10 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-7">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-400">Windows 开服向导</p>
+          <h3 className="mt-2 text-xl font-bold">选择服务端来源</h3>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+            已经装过服务端就直接接管原目录；还没有的话，让 PalPanel 通过 SteamCMD 安装。
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] font-bold text-slate-400" aria-label={`当前第 ${step} 步，共 3 步`}>
+          {['选择方式', '准备服务端', '完成配置'].map((label, index) => {
+            const number = index + 1;
+            const active = number <= step;
+            return (
+              <React.Fragment key={label}>
+                {index > 0 && <span className={`h-px w-5 ${active ? 'bg-sky-500' : 'bg-slate-700'}`} />}
+                <span className="flex flex-col items-center gap-1">
+                  <span className={`flex h-7 w-7 items-center justify-center rounded-full ${active ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
+                    {number}
+                  </span>
+                  <span className="hidden sm:block">{label}</span>
+                </span>
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid gap-4 p-5 sm:grid-cols-2 sm:p-7">
+        <button
+          type="button"
+          aria-label="我已有服务器"
+          onClick={() => onSourceChange('existing')}
+          className={`group rounded-2xl border p-6 text-left transition ${
+            source === 'existing'
+              ? 'border-sky-400 bg-sky-500/10 ring-2 ring-sky-500/20'
+              : 'border-white/10 bg-white/[0.04] hover:border-sky-500/60 hover:bg-white/[0.07]'
+          }`}
+        >
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-sky-600 shadow-sm">
+            <FolderOpen size={24} />
+          </span>
+          <span className="mt-5 block text-base font-bold">我已有服务器</span>
+          <span className="mt-2 block text-sm leading-6 text-slate-400">
+            指定 PalServer.exe 所在目录，继续使用原来的配置、存档和 Mod。
+          </span>
+        </button>
+
+        <button
+          type="button"
+          aria-label="帮我安装服务器"
+          onClick={() => onSourceChange('install')}
+          className={`group rounded-2xl border p-6 text-left transition ${
+            source === 'install'
+              ? 'border-sky-400 bg-sky-500/10 ring-2 ring-sky-500/20'
+              : 'border-white/10 bg-white/[0.04] hover:border-sky-500/60 hover:bg-white/[0.07]'
+          }`}
+        >
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-sky-600 shadow-sm">
+            <HardDriveDownload size={24} />
+          </span>
+          <span className="mt-5 block text-base font-bold">帮我安装服务器</span>
+          <span className="mt-2 block text-sm leading-6 text-slate-400">
+            下载 SteamCMD，并把服务端安装到 PalPanel 自己的数据目录。
+          </span>
+        </button>
+      </div>
+
+      {source === 'existing' && (
+        <div className="border-t border-white/10 bg-white/[0.03] px-5 py-5 sm:px-7">
+          <label htmlFor="existing-palserver-path" className="text-sm font-bold text-white">
+            现有服务端目录
+          </label>
+          <div className="mt-3 flex flex-col gap-3 lg:flex-row">
+            <input
+              id="existing-palserver-path"
+              type="text"
+              value={path}
+              onChange={(event) => onPathChange(event.target.value)}
+              placeholder={String.raw`D:\SteamLibrary\steamapps\common\PalServer`}
+              className="min-w-0 flex-1 rounded-xl border border-white/15 bg-slate-900 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-600 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+            />
+            <button
+              type="button"
+              onClick={onImport}
+              disabled={importing || !path.trim()}
+              className="flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-6 py-3 text-sm font-bold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {importing ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+              {importing ? '正在检查' : '检查并接管'}
+            </button>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-400">
+            常见路径是 <code className="text-sky-300">D:\SteamLibrary\steamapps\common\PalServer</code>。
+            也可以填写 Steam 库目录，面板会自动查找。接管不会复制游戏文件，之后的更新、备份和 Mod 操作会直接作用于这个目录。
+          </p>
+        </div>
+      )}
+    </section>
+  );
+};
 
 const SimpleStatusStrip: React.FC<{ items: SimpleStatus[] }> = ({ items }) => (
   <section className="grid grid-cols-1 gap-3 md:grid-cols-3">

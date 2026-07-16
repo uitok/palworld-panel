@@ -55,6 +55,7 @@ export interface ServerStatus {
   ports: Record<string, number>;
   warnings: string[];
   paths: Record<string, string>;
+  server_imported: boolean;
   cpu_percent?: number;
   memory_usage_bytes?: number;
   port?: number;
@@ -128,6 +129,14 @@ export interface MonitorSample {
 
 export interface MonitorSnapshot {
   sample: MonitorSample;
+}
+
+export interface DebugLogStatus {
+  enabled: boolean;
+  path: string;
+  size: number;
+  max_bytes: number;
+  max_files: number;
 }
 
 export interface Prerequisite {
@@ -422,6 +431,15 @@ export interface WorkshopStatus {
   app_id: string;
 }
 
+export interface ServerImportResult {
+  path: string;
+  manifest_path: string;
+  build_id: string;
+  config_exists: boolean;
+  already_bound: boolean;
+  original_input: string;
+}
+
 export type SteamWorkshopAuthStatus = components['schemas']['SteamWorkshopAuthStatus'];
 
 export interface BackupInfo {
@@ -553,11 +571,7 @@ export interface UE4SSDependencyStatus {
 export interface PalDefenderStatus {
   installed: boolean;
   version?: string;
-  bundled: {
-    version: string;
-    sha256: string;
-    size: number;
-  };
+  release_source: string;
   needs_first_start: boolean;
   files: Record<string, boolean>;
   paths: Record<string, string>;
@@ -580,6 +594,96 @@ export type PalDefenderItemCatalogEntry = components['schemas']['PalDefenderItem
 export type PalDefenderItemCatalog = components['schemas']['PalDefenderItemCatalog'];
 export type PalDefenderMessageRequest = components['schemas']['PalDefenderMessageRequest'];
 export type PalDefenderPunishmentRequest = components['schemas']['PalDefenderPunishmentRequest'];
+export type PalDefenderProgressionGrantRequest = components['schemas']['PalDefenderProgressionGrantRequest'];
+export type PalDefenderPalGrant = components['schemas']['PalDefenderPalGrant'];
+export type PalDefenderGivePalsRequest = components['schemas']['PalDefenderGivePalsRequest'];
+export type PalDefenderGivePalTemplatesRequest = components['schemas']['PalDefenderGivePalTemplatesRequest'];
+export type PalDefenderPalTemplate = components['schemas']['PalDefenderPalTemplate'];
+export type PalDefenderExportedPalTemplateInfo = components['schemas']['PalDefenderExportedPalTemplateInfo'];
+export type PalDefenderAccessSettingsUpdate = components['schemas']['PalDefenderAccessSettingsUpdate'];
+
+export interface PalDefenderTechnologyRequest {
+  Technology: string | string[];
+}
+
+export interface PalDefenderProgression {
+  Meta: { PlayerUID: string; Player: string };
+  Progression: {
+    Player: { level: number; exp: number; unusedStatusPoints: number };
+    Currencies: { relics: Record<string, number>; technologyPoints: number; ancientTechnologyPoints: number };
+    Bosses: Record<string, unknown>;
+    Captures: Record<string, unknown>;
+    Activities: Record<string, unknown>;
+  };
+}
+
+export interface PalDefenderProgressionGrantResult {
+  Granted: Record<string, unknown>;
+  Totals: Record<string, unknown>;
+}
+
+export interface PalDefenderTechs {
+  Meta: { PlayerUID: string; Player: string; UnlockedCount: number; LockedCount: number; TotalCount: number };
+  Techs: { Unlocked: string[] };
+}
+
+export interface PalDefenderTechnologyResult {
+  UnlockedCount?: number;
+  Unlocked?: string[];
+  ForgottenCount?: number;
+  Forgotten?: string[] | 'All';
+  Skipped: string[];
+}
+
+export interface PalDefenderGMPals {
+  Meta: { PlayerUID: string; Player: string; TeamCount: number; PalboxCount: number; BaseCampCount: number };
+  Pals: Record<string, unknown>;
+}
+
+export interface PalDefenderGivePalsResult {
+  Granted: { Pals: number };
+}
+
+export interface PalDefenderGivePalTemplatesResult {
+  Granted: { PalTemplates: number };
+}
+
+export interface PalDefenderPalTemplateInfo {
+  name: string;
+  path: string;
+  size: number;
+  modified_at: string;
+}
+
+export interface PalDefenderRCONResult {
+  command: string;
+  output: string;
+  entries: string[];
+}
+
+export interface PalDefenderCommandCatalogEntry {
+  name: string;
+  syntax: string;
+  description: string;
+  category: string;
+  transport: 'rest' | 'rcon';
+  destructive: boolean;
+  reference_url: string;
+}
+
+export interface PalDefenderAccessSettings extends PalDefenderAccessSettingsUpdate {
+  reload_required: boolean;
+  reference_url: string;
+}
+
+export interface PalDefenderCatalogReferences {
+  pals: string;
+  pal_creator: string;
+  technology: string;
+  passives: string;
+  skills: string;
+  commands: string;
+}
 
 export interface PalDefenderGiveItemsResult {
   Granted: {
@@ -610,6 +714,31 @@ export interface Player {
   ping?: number;
   ip?: string;
   inventory_summary?: Record<string, unknown>;
+}
+
+export interface SaveInventorySlot {
+  slot: number;
+  item_id: string;
+  item_name: string;
+  count: number;
+  durability: number;
+}
+
+export interface SaveInventoryContainer {
+  container_id: string;
+  owner_type: string;
+  owner_id: string;
+  slots: SaveInventorySlot[];
+}
+
+export interface SavePlayerDetail {
+  player: Player;
+  status: SaveIndexStatus;
+}
+
+export interface SavePlayerInventory {
+  containers: SaveInventoryContainer[];
+  status: SaveIndexStatus;
 }
 
 export interface PalSkill {
@@ -649,6 +778,16 @@ export interface Pal {
   owner_steam_id: string;
   guild_id?: string;
   container_id?: string;
+  slot_index?: number;
+  location_type?: string;
+  gender?: 'male' | 'female' | 'wildcard' | string;
+  rank?: number;
+  iv_hp?: number;
+  iv_attack?: number;
+  iv_defense?: number;
+  equipped_skills?: string[];
+  old_owner_uids?: string[];
+  on_expedition?: boolean;
   skills: PalSkill[];
   passives?: string[];
   raw_passives?: string[];
@@ -721,6 +860,105 @@ export interface SaveIndexStatus {
   counts: SaveIndexCounts;
   parser?: string;
   cache_path?: string;
+}
+
+export interface SaveSource {
+  id: string;
+  name: string;
+  kind: 'server' | 'import' | string;
+  path?: string;
+  active: boolean;
+  fingerprint?: string;
+  parser_version?: string;
+  warnings?: string[];
+  indexed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BreedingCatalogItem {
+  id: string;
+  name: string;
+}
+
+export interface BreedingPassive extends BreedingCatalogItem {
+  supports_surgery: boolean;
+  surgery_cost: number;
+}
+
+export interface BreedingCatalog {
+  version: string;
+  pals: BreedingCatalogItem[];
+  passives: BreedingPassive[];
+  active_skills: BreedingCatalogItem[];
+}
+
+export interface BreedingTreeNode {
+  type: 'owned' | 'composite_owned' | 'wild' | 'bred' | 'surgery' | string;
+  pal_id: string;
+  pal_name: string;
+  gender: string;
+  passives: string[];
+  effort_seconds: number;
+  self_effort_seconds: number;
+  cost: number;
+  probability?: number;
+  eggs?: number;
+  instance_id?: string;
+  owner_player_id?: string;
+  container_id?: string;
+  slot_index?: number;
+  location_type?: string;
+  operations?: string[];
+  children?: BreedingTreeNode[];
+}
+
+export interface BreedingSolveResult {
+  pal_id: string;
+  pal_name: string;
+  gender: string;
+  passives: string[];
+  effort_seconds: number;
+  breeding_steps: number;
+  eggs: number;
+  wild_pals: number;
+  gold_cost: number;
+  tree: BreedingTreeNode;
+}
+
+export type MapEntityType = 'player' | 'base' | 'pal' | 'map_object' | string;
+
+export interface MapEntity {
+  type: MapEntityType;
+  id: string;
+  label: string;
+  raw_label?: string;
+  x: number;
+  y: number;
+  z: number;
+  is_online?: boolean;
+  live?: boolean;
+  source: 'live' | 'save' | string;
+  guild_id?: string;
+  guild_name?: string;
+  level?: number;
+  ping?: number;
+  owner_id?: string;
+  pals_count?: number;
+}
+
+export interface MapLiveStatus {
+  available: boolean;
+  source: string;
+  online_players: number;
+  refreshed_at: string;
+}
+
+export interface MapEntitiesResponse {
+  entities: MapEntity[];
+  status: SaveIndexStatus;
+  summary: ListSummary;
+  live: MapLiveStatus;
 }
 
 export interface ListSummary {

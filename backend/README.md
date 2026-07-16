@@ -54,10 +54,21 @@ Static authentication variables from older releases are ignored. After upgrading
 
 Named provider settings are `PALPANEL_STEAM_API_BASE_URL`, `PALPANEL_STEAM_API_TIMEOUT_SECONDS` (15 seconds), and `PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS` (90 seconds). Optional `PALPANEL_LOG_LEVEL` accepts `debug`, `info`, `warn`, or `error`.
 
+Runtime Debug logging is independently switchable through
+`GET/PUT /api/system/debug`, persists in SQLite, and mirrors standard logs plus
+request timing and health-probe results into the bounded
+`LogsDir/palpanel-debug.log`. It never records request bodies or credentials.
+
 ## Runtime Modes
 
 - `windows_steamcmd`: recommended for production Windows hosts. The backend downloads SteamCMD into `data/tools/steamcmd` when needed and installs the Windows dedicated server with `steamcmd +login anonymous +app_update 2394010 validate +quit`.
 - `wine_docker`: keeps the existing Docker + Wine flow for Windows edition server mods and containerized operation. Official Palworld docs warn against Docker Desktop for production save-data IO, so update operations create backups first. Version checks use the existing Wine runner image; build or install once before checking remote version in this mode.
+
+Official REST and RCON health checks distinguish authentication failures,
+disabled services, and Docker mapping mismatches. `PALPANEL_RCON_HOST` defaults
+to loopback but can target a container DNS name or host gateway during a legacy
+container migration. In Wine Docker mode, loopback checks require
+`RESTAPIPort=PALPANEL_REST_PORT` and `RCONPort=PALPANEL_RCON_PORT`.
 
 The Wine runner build uses `PALPANEL_DOCKER_RUNNER_BASE_IMAGE` as its base image and keeps the pinned digest by default. If Docker Hub metadata requests time out, the backend retries the same image through comma-separated `PALPANEL_DOCKER_RUNNER_BASE_IMAGE_MIRRORS` prefixes such as `docker.1ms.run` or `registry.cyou`.
 
@@ -77,11 +88,13 @@ Admins configure an OpenAI-compatible Base URL, model, and API key from Settings
 
 Workshop detail translation always fetches the authoritative description from Steam instead of accepting arbitrary browser text. Cached translations are keyed by Workshop ID, source SHA-256, target language, provider URL, and model, so source or model changes invalidate the cache automatically.
 
-## PalDefender 1.8.1 And GM
+## PalDefender Latest Stable And GM
 
-The release binary embeds `PalDefender.dll` 1.8.1 with SHA-256 `18b9f63eea2dd407f29b77a262f9d33b1dcd4b744328892c13d5822701418d03`. The official v1.8.1 Release publishes `d3d9.dll`, `PalDefender.dll`, and `PalDefender.zip`. Installation obtains the `d3d9.dll` loader from that Release, using the ZIP when present, but always installs the local embedded, hash-pinned `PalDefender.dll` instead of the DLL published in the Release.
+Install and update jobs query `Ultimeit/PalDefender` through GitHub's latest stable Release endpoint. They prefer the official `d3d9.dll` and `PalDefender.dll` assets, require GitHub-published SHA-256 digests for both downloads, and transactionally replace the installed files with backup and rollback. A digest-verified `PalDefender.zip` is accepted only when the direct DLL assets are absent. The installed version is persisted from the Release tag, so the current v1.8.3 is installed without pinning future updates to 1.8.3. PalPanel no longer embeds a PalDefender binary.
 
-The `/gm` frontend uses typed PalPanel DTOs instead of calling PalDefender from the browser. The backend proxy covers version/status, player lists and individual player details, six inventory containers, batches of up to 100 item grants, direct messages, broadcasts, alerts, kick, ban, IP-ban and unban operations. The local catalog contains 2,455 ItemIDs with Chinese names and item-identification WebP artwork for search suggestions.
+The `/gm` frontend uses typed PalPanel DTOs instead of calling PalDefender from the browser. The backend proxy covers version/status, player lists and individual player details, six inventory containers, progression and technology reads/writes, Pal reads, direct Pal grants, PalTemplate grants, batches of up to 100 item grants, direct messages, broadcasts, alerts, kick, ban, IP-ban and unban operations. PalTemplate files are managed transactionally under the PalDefender directory and expose the supported level, IV, soul, skill, passive and work-suitability fields. Player exports written by `/exportpals` under `Pals/Exported/<UserId>/` can be listed and read through typed endpoints, then saved as a new managed template before granting. The local catalog contains 2,455 ItemIDs with Chinese names and item-identification WebP artwork for search suggestions.
+
+Whitelist listing and mutation, session-scoped `/setadmin`, Pal export, live technology/skin catalogs and runtime command discovery use typed Source RCON operations. PalPanel never accepts an arbitrary RCON command from the browser. RCON connects only to `127.0.0.1`, requires Palworld `RCONEnabled=True` and a non-empty `AdminPassword`, and refuses commands while PalDefender `RCONbase64` is enabled. Access settings cover `useWhitelist`, `whitelistMessage`, `useAdminWhitelist`, `adminAutoLogin` and `adminIPs`; changes require an explicit PalDefender config reload. `/setadmin` toggles the current server session and is not persistent across a Palworld restart.
 
 GM reads require `read`; item grants, messages and punishments require `players:write`. Every GM write also requires an `Idempotency-Key` containing 8-128 safe ASCII characters. Repeating the same key and normalized request within ten minutes replays the first result without contacting PalDefender again; reusing it for another route or payload returns `409 idempotency_key_reused`. This bounded cache belongs to the current backend process, so after a process restart an operator must inspect the audit log and player state before retrying an operation whose outcome was uncertain.
 
@@ -135,6 +148,8 @@ PALPANEL_SAVE_INDEX_CACHE_DIR=../data/save-index
 
 The sidecar is the self-developed Go `sav-cli` in `sav-cli/` and never writes back to `.sav`. Packaged launchers start it automatically with the panel. It reads per-player `Players/*.sav` files and associates `InventoryInfo` container IDs with `OwnerType=player`; a missing or damaged individual player save adds a warning while the rest of the world index continues. Unsupported world containers or schema changes are reported as `parser_incompatible`; the backend keeps the last successful cache when available and does not block other panel features.
 
+`GET /api/map/entities` combines that save snapshot with online-player data. PalDefender `WorldLocation` is preferred, with `MapLocation` as its fallback; the official Palworld REST player list remains the availability fallback when PalDefender REST is unavailable. Live data is cached for two seconds. The `/map` frontend polls on the same interval and renders a schematic SVG coordinate view without external tiles or game terrain assets. Players and bases are enabled by default, while pals and map objects are opt-in filters.
+
 ## Version Checks
 
 Steam Build IDs remain the authoritative update signal for AppID `2394010`. The local Build ID comes from `data/server/steamapps/appmanifest_2394010.acf`; the latest public Build ID comes from SteamCMD `app_info_print 2394010`.
@@ -162,7 +177,7 @@ Metrics retain the existing frontend fields and additionally map `basecampnum` t
 - Mods: `GET /api/mods`, `POST /api/mods/import/inspect`, `POST /api/mods/import/inspect/{id}/select`, `POST /api/mods/import`, `GET /api/mods/workshop/auth/status`, `POST /api/mods/workshop/auth/start`, `POST /api/mods/workshop/auth/verify`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/workshop/{id}/translate`, plus compatible `/api/mods/upload` and `/api/mods/workshop` endpoints
 - AI translation: `GET/PUT /api/ai/translation/config`, `POST /api/ai/translation/test`
 - PalDefender: `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
-- PalDefender GM: `GET /api/security/paldefender/gm/status`, `GET /api/security/paldefender/gm/players`, `GET /api/security/paldefender/gm/players/{id}`, `GET /api/security/paldefender/gm/items`, `GET /api/security/paldefender/gm/players/{id}/inventory`, item/message/kick/ban/unban writes under `/api/security/paldefender/gm/players/{id}`, and `POST /api/security/paldefender/gm/broadcast`
+- PalDefender GM: status, players, inventory, progression, technologies, Pals, item grants, PalTemplate management/grants, messages and punishments under `/api/security/paldefender/gm`; typed RCON catalogs and commands under `/api/security/paldefender/gm/commands` and `/api/security/paldefender/gm/catalog`; access settings, whitelist and session-admin operations under `/api/security/paldefender/access`, `/api/security/paldefender/whitelist` and `/api/security/paldefender/admins`
 
 ## Paths
 

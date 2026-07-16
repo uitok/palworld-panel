@@ -30,6 +30,15 @@ Frontend dependencies
   Autoprefixer, oxlint, jsdom, and Testing Library packages: permissive MIT,
   Apache-2.0, BSD, or ISC upstream licenses as declared by each package.
 
+PalCalc breeding solver
+-----------------------
+- tylercamp/palcalc v1.17.6, pinned at commit
+  8b7e2f779e47fddae16ddcb973e828ba20c02b80: MIT.
+- PalPanel references only PalCalc.Model and PalCalc.Solver from the
+  cross-platform `palcalc-bridge`; the WPF UI, GraphSharp, and Windows-only
+  save reader are not linked. The complete license is included as
+  licenses/PalCalc-MIT.txt.
+
 Localization data
 -----------------
 - Palworld localization-derived catalog under backend/internal/pallocalize:
@@ -44,14 +53,24 @@ Localization data
   18df587bd9e62d0f890b8cef1c32985fa6e9ba39. Palworld and its artwork are
   property of Pocketpair, Inc. and are not relicensed under PalPanel's GPL.
 
-Bundled PalDefender
--------------------
-- PalDefender.dll 1.8.1, copyright Ultimeit: MIT. The bundled binary has
-  SHA-256 18b9f63eea2dd407f29b77a262f9d33b1dcd4b744328892c13d5822701418d03.
-  The complete license is included as licenses/PalDefender-MIT.txt.
-- The current official PalDefender Release supplies d3d9.dll as its loader.
-  PalPanel downloads that loader during an explicitly requested installation;
-  it is not the locally embedded PalDefender.dll described above.
+Runtime-downloaded PalDefender
+------------------------------
+- PalDefender, copyright Ultimeit: MIT. The complete license is included as
+  licenses/PalDefender-MIT.txt.
+- PalPanel does not bundle PalDefender binaries. During an explicitly requested
+  install or update, it downloads d3d9.dll and PalDefender.dll from the latest
+  stable official GitHub Release and verifies the published SHA-256 digests.
+  A digest-verified PalDefender.zip is used only when the direct DLL assets are
+  not present in that Release.
+
+Runtime community icon references
+---------------------------------
+- The player center can request Pal icons from the public GitHub Raw paths in
+  bingyouxue/palworld-server-tool-gm. These images are not copied into or
+  redistributed with PalPanel packages; failed requests fall back to Lucide.
+- Palworld names, characters, and artwork remain property of Pocketpair, Inc.
+  Referencing a remote image does not relicense that artwork under PalPanel's
+  GPL.
 
 The release SBOM provides the exact package/version inventory. Corresponding
 license texts remain available from each dependency's source distribution and

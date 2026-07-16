@@ -73,7 +73,7 @@ function New-FakeWindowsPackage {
   $packageName = "palpanel_${Version}_windows_amd64"
   $package = Join-Path $Parent $packageName
   New-Item -ItemType Directory -Force -Path $package | Out-Null
-  foreach ($executable in @("PalPanel.exe", "palpanel-server.exe", "sav-cli.exe")) {
+  foreach ($executable in @("PalPanel.exe", "palpanel-server.exe", "sav-cli.exe", "palcalc-bridge.exe")) {
     Write-FakePE -Path (Join-Path $package $executable) -Marker "$Marker-$executable"
   }
   Write-TextFile -Path (Join-Path $package "README.md") -Text "fixture package $Marker"
@@ -84,6 +84,7 @@ function New-FakeWindowsPackage {
   Write-TextFile -Path (Join-Path $package "licenses\sav-cli-LICENSE.txt") -Text "sav-cli $Marker"
   Write-TextFile -Path (Join-Path $package "licenses\pallocalize-Apache-2.0.txt") -Text "pallocalize $Marker"
   Write-TextFile -Path (Join-Path $package "licenses\PalDefender-MIT.txt") -Text "paldefender $Marker"
+  Write-TextFile -Path (Join-Path $package "licenses\PalCalc-MIT.txt") -Text "palcalc $Marker"
   New-Item -ItemType Directory -Force -Path (Join-Path $package "maintenance") | Out-Null
   foreach ($scriptName in @(
     "windows-maintenance.psm1",

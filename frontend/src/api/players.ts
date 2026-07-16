@@ -2,7 +2,43 @@ import { apiClient, handleRequest } from './client';
 import { emptySummary, entityListQuery, mapSummary } from './entityList';
 import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
 import { palDefenderGMApi } from './paldefenderGM';
-import type { EntityListParams, EntityListResponse, Player, PlayerAccessEntry, UnsupportedActionResult } from '../types';
+import type {
+  EntityListParams,
+  EntityListResponse,
+  Player,
+  PlayerAccessEntry,
+  SaveInventoryContainer,
+  SavePlayerDetail,
+  SavePlayerInventory,
+  UnsupportedActionResult,
+} from '../types';
+
+export const mapPlayer = (raw: unknown): Player | null => {
+  const player = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const steamId = String(player.userId || player.steam_id || player.playerId || player.player_uid || '').trim();
+  const playerUid = String(player.player_uid || '').trim();
+  if (!steamId && !playerUid) return null;
+  return {
+    id: steamId || playerUid,
+    steam_id: steamId,
+    player_uid: playerUid,
+    nickname: String(player.name || player.nickname || player.playerName || '未知玩家'),
+    level: Number(player.level || 0),
+    guild_id: String(player.guild_id || ''),
+    guild_name: String(player.guild_name || player.guild || '未知公会'),
+    is_online: player.is_online == null ? true : Boolean(player.is_online),
+    last_online_time: String(player.last_online_time || ''),
+    x: Number(player.location_x || player.x || 0),
+    y: Number(player.location_y || player.y || 0),
+    z: Number(player.location_z || player.z || 0),
+    ping: player.ping ? Number(player.ping) : undefined,
+    ip: player.ip ? String(player.ip) : undefined,
+    inventory_summary:
+      player.inventory_summary && typeof player.inventory_summary === 'object'
+        ? (player.inventory_summary as Record<string, unknown>)
+        : undefined,
+  };
+};
 
 const mapPlayers = (raw: unknown): Player[] => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -10,32 +46,38 @@ const mapPlayers = (raw: unknown): Player[] => {
   const list = Array.isArray(body.players) ? body.players : Array.isArray(raw) ? raw : [];
 
   return list.flatMap((item) => {
-    const player = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
-    const steamId = String(player.userId || player.steam_id || player.playerId || player.player_uid || '').trim();
-    const playerUid = String(player.player_uid || '').trim();
-    if (!steamId && !playerUid) return [];
-    return [
-      {
-        id: steamId || playerUid,
-        steam_id: steamId,
-        player_uid: playerUid,
-        nickname: String(player.name || player.nickname || player.playerName || '未知玩家'),
-        level: Number(player.level || 0),
-        guild_id: String(player.guild_id || ''),
-        guild_name: String(player.guild_name || player.guild || '未知公会'),
-        is_online: player.is_online == null ? true : Boolean(player.is_online),
-        last_online_time: String(player.last_online_time || ''),
-        x: Number(player.location_x || player.x || 0),
-        y: Number(player.location_y || player.y || 0),
-        z: Number(player.location_z || player.z || 0),
-        ping: player.ping ? Number(player.ping) : undefined,
-        ip: player.ip ? String(player.ip) : undefined,
-        inventory_summary:
-          player.inventory_summary && typeof player.inventory_summary === 'object'
-            ? (player.inventory_summary as Record<string, unknown>)
-            : undefined,
-      },
-    ];
+    const player = mapPlayer(item);
+    return player ? [player] : [];
+  });
+};
+
+export const mapSaveInventoryContainers = (raw: unknown): SaveInventoryContainer[] => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const containers = Array.isArray(raw) ? raw : Array.isArray(data.containers) ? data.containers : [];
+  return containers.flatMap((rawContainer) => {
+    const container = (rawContainer && typeof rawContainer === 'object' ? rawContainer : {}) as Record<string, unknown>;
+    const containerId = String(container.container_id || '').trim();
+    if (!containerId) return [];
+    const slots = Array.isArray(container.slots)
+      ? container.slots.flatMap((rawSlot) => {
+          const slot = (rawSlot && typeof rawSlot === 'object' ? rawSlot : {}) as Record<string, unknown>;
+          const itemId = String(slot.item_id || '').trim();
+          if (!itemId) return [];
+          return [{
+            slot: Number(slot.slot || 0),
+            item_id: itemId,
+            item_name: String(slot.item_name || itemId),
+            count: Number(slot.count || 0),
+            durability: Number(slot.durability || 0),
+          }];
+        })
+      : [];
+    return [{
+      container_id: containerId,
+      owner_type: String(container.owner_type || 'player'),
+      owner_id: String(container.owner_id || ''),
+      slots,
+    }];
   });
 };
 
@@ -84,6 +126,40 @@ export const playersApi = {
       map: mapPlayers,
       quiet: true,
     }),
+
+  getPlayer: (identifier: string) =>
+    handleRequest<unknown, SavePlayerDetail>(
+      () => apiClient.get(`/players/${encodeURIComponent(identifier)}`),
+      { player: mapPlayer({ player_uid: identifier })!, status: emptySaveIndexStatus },
+      {
+        map: (raw) => {
+          const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+          return {
+            player: mapPlayer(data.player) || mapPlayer({ player_uid: identifier })!,
+            status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+          };
+        },
+        quiet: true,
+        fallbackOnError: false,
+      },
+    ),
+
+  getInventory: (identifier: string) =>
+    handleRequest<unknown, SavePlayerInventory>(
+      () => apiClient.get(`/players/${encodeURIComponent(identifier)}/inventory`),
+      { containers: [], status: emptySaveIndexStatus },
+      {
+        map: (raw) => {
+          const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+          return {
+            containers: mapSaveInventoryContainers(raw),
+            status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+          };
+        },
+        quiet: true,
+        fallbackOnError: false,
+      },
+    ),
 
   getBanList: () =>
     handleRequest<unknown, PlayerAccessEntry[]>(() => apiClient.get('/players/bans'), [], {

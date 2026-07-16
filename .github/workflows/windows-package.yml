@@ -19,6 +19,10 @@ jobs:
         with:
           ref: ${{ inputs.release_tag }}
           fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
       - name: Validate release tag
         shell: pwsh
         run: |

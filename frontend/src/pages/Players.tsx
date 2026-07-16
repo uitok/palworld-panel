@@ -9,6 +9,7 @@ import type { Player } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { SaveIndexStatusBar } from '../components/ui/SaveIndexStatusBar';
+import { SaveDataTabs } from '../components/ui/SaveDataTabs';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { appConfig } from '../config/defaults';
 
@@ -113,6 +114,7 @@ export const Players: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <SaveDataTabs />
       {error && (
         <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-3 text-xs font-semibold text-rose-700">
           <AlertCircle className="mr-2 inline" size={14} />

@@ -48,6 +48,7 @@ events="${PALPANEL_FAKE_EVENTS:-}"
 url="${*: -1}"
 case "$url" in
   *:8090/health) grep -qx 'sav-cli-start' "$events" ;;
+  *:8091/health) grep -qx 'palcalc-start' "$events" ;;
   *:18080/api/health) grep -qx 'backend-start' "$events" ;;
   *) exit 1 ;;
 esac
@@ -93,7 +94,19 @@ fi
 trap 'printf "sav-cli-stop\n" >>"${PALPANEL_FAKE_EVENTS:?}"; exit 0' TERM INT HUP
 while :; do sleep 1; done
 EOF
-chmod +x "$fake_bin/curl" "$portable_test/bin/palpanel" "$portable_test/bin/sav-cli"
+cat >"$portable_test/bin/palcalc-bridge" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'palcalc-start\n' >>"${PALPANEL_FAKE_EVENTS:?}"
+if [[ "${PALPANEL_FAKE_EXIT_CHILD:-}" == "palcalc" ]]; then
+  sleep 1
+  printf 'palcalc-exit\n' >>"${PALPANEL_FAKE_EVENTS:?}"
+  exit 18
+fi
+trap 'printf "palcalc-stop\n" >>"${PALPANEL_FAKE_EVENTS:?}"; exit 0' TERM INT HUP
+while :; do sleep 1; done
+EOF
+chmod +x "$fake_bin/curl" "$portable_test/bin/palpanel" "$portable_test/bin/sav-cli" "$portable_test/bin/palcalc-bridge"
 verify_portable_failure() {
   local exiting="$1"
   local events="$tmp/portable-$exiting-events.log"
@@ -113,21 +126,31 @@ verify_portable_failure() {
     exit 1
   fi
   grep -qx 'sav-cli-start' "$events"
+  if [[ "$exiting" != "sav-cli" ]]; then grep -qx 'palcalc-start' "$events"; fi
   if [[ "$exiting" == "sav-cli" ]]; then
     grep -qx 'sav-cli-exit' "$events"
     if grep -qx 'backend-start' "$events"; then
       printf 'backend started after the sav-cli fixture had already exited\n' >&2
       exit 1
     fi
+  elif [[ "$exiting" == "palcalc" ]]; then
+    grep -qx 'palcalc-exit' "$events"
+    if grep -qx 'backend-start' "$events"; then
+      printf 'backend started after the palcalc fixture had already exited\n' >&2
+      exit 1
+    fi
+    grep -qx 'sav-cli-stop' "$events"
   else
     grep -qx 'backend-start' "$events"
     grep -qx 'backend-exit' "$events"
     grep -qx 'sav-cli-stop' "$events"
+    grep -qx 'palcalc-stop' "$events"
   fi
-  [[ ! -e "$portable_test/run/backend.pid" && ! -e "$portable_test/run/sav-cli.pid" ]]
+  [[ ! -e "$portable_test/run/backend.pid" && ! -e "$portable_test/run/sav-cli.pid" && ! -e "$portable_test/run/palcalc-bridge.pid" ]]
   [[ ! -e "$portable_test/run/supervisor.pid" && ! -e "$portable_test/run/ready" ]]
 }
 verify_portable_failure sav-cli
+verify_portable_failure palcalc
 verify_portable_failure backend
 
 rm -rf "$portable_test/config" "$portable_test/data" "$portable_test/run" "$portable_test/logs"
@@ -167,15 +190,18 @@ installed_dir="$(readlink -f "$PALPANEL_INSTALL_ROOT/current")"
 [[ -f "$installed_dir/LICENSE" ]]
 [[ -f "$installed_dir/licenses/GPL-3.0.txt" ]]
 [[ -f "$installed_dir/licenses/sav-cli-LICENSE.txt" ]]
+[[ -f "$installed_dir/licenses/PalCalc-MIT.txt" ]]
 [[ -f "$installed_dir/THIRD_PARTY_LICENSES.txt" ]]
 [[ "$("$installed_dir/palpanelctl" config)" == "$PALPANEL_ETC_DIR/palpanel.env" ]]
-grep -qx 'Wants=palpanel-sav-cli.service' "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -qx 'Wants=palpanel-sav-cli.service palpanel-palcalc.service' "$PALPANEL_SYSTEMD_DIR/palpanel.service"
 grep -qx 'PartOf=palpanel.service' "$PALPANEL_SYSTEMD_DIR/palpanel-sav-cli.service"
 grep -qx 'Restart=always' "$PALPANEL_SYSTEMD_DIR/palpanel-sav-cli.service"
-grep -Fxq 'enable palpanel-sav-cli.service palpanel.service' "$systemctl_log"
-grep -Fxq 'restart palpanel-sav-cli.service palpanel.service' "$systemctl_log"
+grep -qx 'PartOf=palpanel.service' "$PALPANEL_SYSTEMD_DIR/palpanel-palcalc.service"
+grep -qx 'Restart=always' "$PALPANEL_SYSTEMD_DIR/palpanel-palcalc.service"
+grep -Fxq 'enable palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log"
+grep -Fxq 'restart palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log"
 "$installed_dir/palpanelctl" start
-grep -Fxq 'start palpanel-sav-cli.service palpanel.service' "$systemctl_log"
+grep -Fxq 'start palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log"
 printf '# preserve-config\n' >>"$PALPANEL_ETC_DIR/palpanel.env"
 printf 'preserve-data\n' >"$PALPANEL_SYSTEM_DATA_DIR/preserve.marker"
 config_hash="$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')"
@@ -183,8 +209,8 @@ config_hash="$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')"
 "$ctl" install >/dev/null
 [[ "$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')" == "$config_hash" ]]
 [[ -f "$PALPANEL_SYSTEM_DATA_DIR/preserve.marker" ]]
-[[ "$(grep -Fxc 'enable palpanel-sav-cli.service palpanel.service' "$systemctl_log")" -eq 2 ]]
-[[ "$(grep -Fxc 'restart palpanel-sav-cli.service palpanel.service' "$systemctl_log")" -eq 2 ]]
+[[ "$(grep -Fxc 'enable palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log")" -eq 2 ]]
+[[ "$(grep -Fxc 'restart palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log")" -eq 2 ]]
 "$ctl" uninstall >/dev/null
 [[ ! -e "$PALPANEL_INSTALL_ROOT" ]]
 [[ -f "$PALPANEL_ETC_DIR/palpanel.env" && -f "$PALPANEL_SYSTEM_DATA_DIR/preserve.marker" ]]

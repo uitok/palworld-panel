@@ -182,6 +182,7 @@ foreach ($maintenanceScript in @(
 Copy-Item -Force (Join-Path $RootDir "LICENSE") (Join-Path $PackageDir "LICENSE")
 Copy-Item -Force (Join-Path $RootDir "THIRD_PARTY_LICENSES.txt") (Join-Path $PackageDir "THIRD_PARTY_LICENSES.txt")
 Copy-Item -Force (Join-Path $RootDir "sav-cli\LICENSE") (Join-Path $PackageDir "licenses\sav-cli-LICENSE.txt")
+Copy-Item -Force (Join-Path $RootDir "third_party\palcalc\LICENSE.txt") (Join-Path $PackageDir "licenses\PalCalc-MIT.txt")
 Copy-Item -Force (Join-Path $RootDir "backend\internal\pallocalize\LICENSE.apache-2.0") (Join-Path $PackageDir "licenses\pallocalize-Apache-2.0.txt")
 Copy-Item -Force (Join-Path $RootDir "backend\internal\paldefender\assets\LICENSE.txt") (Join-Path $PackageDir "licenses\PalDefender-MIT.txt")
 
@@ -208,6 +209,10 @@ try {
   $env:CXX = $MingwGxx
   $env:PATH = $MingwBin + [System.IO.Path]::PathSeparator + $oldPath
   Invoke-External "go" @("build", "-trimpath", "-ldflags", $savLdflags, "-o", (Join-Path $PackageDir "sav-cli.exe"), "./cmd/sav_cli") (Join-Path $RootDir "sav-cli")
+  $palcalcPublish = Join-Path $RootDir "dist\palcalc-win-x64"
+  if (Test-Path $palcalcPublish) { Remove-Item -Recurse -Force $palcalcPublish }
+  Invoke-External "dotnet" @("publish", (Join-Path $RootDir "palcalc-bridge\PalCalc.Bridge.csproj"), "-c", "Release", "-r", "win-x64", "--self-contained", "true", "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-o", $palcalcPublish) $RootDir
+  Copy-Item -Force (Join-Path $palcalcPublish "palcalc-bridge.exe") (Join-Path $PackageDir "palcalc-bridge.exe")
 } finally {
   $env:GOOS = $oldGoos
   $env:GOARCH = $oldGoarch

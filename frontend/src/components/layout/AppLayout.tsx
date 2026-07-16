@@ -73,8 +73,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   };
 
   return (
-    <div className="min-h-dvh w-full bg-slate-100 font-sans text-slate-800 lg:p-4">
-      <div className="mx-auto flex min-h-dvh w-full overflow-hidden bg-white shadow-[0_24px_70px_rgba(15,23,42,0.06)] lg:h-[calc(100dvh-2rem)] lg:min-h-0 lg:rounded-[28px] lg:border lg:border-slate-100/80">
+    <div className="min-h-dvh w-full font-sans text-slate-800">
+      <div className="relative mx-auto flex min-h-dvh w-full overflow-hidden bg-slate-50 lg:h-dvh lg:min-h-0">
         <div className="hidden lg:block">
           <Sidebar />
         </div>
@@ -87,14 +87,14 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             onRestartClick={() => setRestartOpen(true)}
           />
 
-          <main className="min-h-0 flex-1 overflow-y-auto bg-white">{children}</main>
+          <main id="app-main" className="min-h-0 flex-1 overflow-y-auto">{children}</main>
 
-          <div className="shrink-0 border-t border-slate-200 bg-white/95 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden">
+          <div className="shrink-0 border-t border-slate-200/80 bg-white/92 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-[0_-14px_34px_-24px_rgba(8,17,31,0.55)] backdrop-blur-xl lg:hidden">
             <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setSaveOpen(true)}
-                className="flex flex-col items-center gap-1 rounded-2xl border border-slate-200 py-2 text-[11px] font-bold text-slate-600"
+                className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-50"
               >
                 <Save size={16} />
                 保存
@@ -102,7 +102,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => setAnnounceOpen(true)}
-                className="flex flex-col items-center gap-1 rounded-2xl bg-sky-500 py-2 text-[11px] font-bold text-white"
+                className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl bg-sky-500 py-2 text-[11px] font-bold text-white shadow-sm shadow-sky-500/20 transition-colors hover:bg-sky-600"
               >
                 <Megaphone size={16} />
                 广播
@@ -110,7 +110,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => setRestartOpen(true)}
-                className="flex flex-col items-center gap-1 rounded-2xl border border-rose-200 py-2 text-[11px] font-bold text-rose-600"
+                className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl border border-rose-200 bg-white py-2 text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-50"
               >
                 <ServerCrash size={16} />
                 重启
@@ -125,21 +125,21 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           <button
             type="button"
             aria-label="关闭导航"
-            className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-slate-950/62 backdrop-blur-[3px]"
             onClick={() => setMobileNavOpen(false)}
           />
-          <div className="absolute bottom-0 left-0 top-0 w-[84vw] max-w-[320px] bg-white shadow-2xl">
+          <div className="absolute bottom-0 left-0 top-0 w-[86vw] max-w-[320px] shadow-2xl">
             <Sidebar mobile onNavigate={() => setMobileNavOpen(false)} />
           </div>
         </div>
       )}
 
       {toast && (
-        <div className="fixed left-1/2 top-5 z-[70] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-2xl border border-slate-100 bg-white px-5 py-3 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
+        <div className="animate-slide-in fixed left-1/2 top-5 z-[70] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-xl border border-slate-200/80 bg-white/96 px-4 py-3 shadow-[0_18px_50px_-24px_rgba(8,17,31,0.55)] backdrop-blur-xl">
           {toast.type === 'success' && <CheckCircle className="shrink-0 text-emerald-500" size={18} />}
           {toast.type === 'error' && <AlertTriangle className="shrink-0 text-rose-500" size={18} />}
           {toast.type === 'info' && <Info className="shrink-0 text-sky-500" size={18} />}
-          <span className="text-xs font-semibold text-slate-700">{toast.text}</span>
+          <span className="text-sm font-semibold text-slate-700">{toast.text}</span>
         </div>
       )}
 
@@ -241,11 +241,16 @@ const Dialog: React.FC<React.PropsWithChildren<{ title: string; onClose: () => v
   onClose,
   children,
 }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]">
-    <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-3xl border border-slate-100 bg-white p-6 shadow-2xl">
+  <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/62 p-0 backdrop-blur-[3px] sm:items-center sm:p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      className="animate-scale-up max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-2xl sm:p-6"
+    >
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-[16px] font-bold text-slate-800">{title}</h3>
-        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="关闭">
+        <h3 className="text-base font-bold text-slate-900">{title}</h3>
+        <button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="关闭">
           <X size={18} />
         </button>
       </div>
@@ -263,13 +268,18 @@ const ConfirmDialog: React.FC<{
   onCancel: () => void;
   onConfirm: () => void;
 }> = ({ icon, title, description, confirmText, confirmClass, onCancel, onConfirm }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]">
-    <div className="w-full max-w-sm rounded-3xl border border-slate-100 bg-white p-6 text-center shadow-2xl">
+  <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/62 p-0 backdrop-blur-[3px] sm:items-center sm:p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      className="animate-scale-up w-full max-w-sm rounded-t-2xl border border-slate-200 bg-white p-6 text-center shadow-2xl sm:rounded-2xl"
+    >
       <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-sky-50 text-sky-500">
         {icon}
       </div>
-      <h3 className="text-[16px] font-bold text-slate-800">{title}</h3>
-      <p className="mt-2 text-xs font-medium leading-relaxed text-slate-400">{description}</p>
+      <h3 className="text-base font-bold text-slate-900">{title}</h3>
+      <p className="mt-2 text-sm font-medium leading-6 text-slate-500">{description}</p>
       <div className="mt-5 flex gap-3">
         <button
           type="button"

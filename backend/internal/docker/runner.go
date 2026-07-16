@@ -185,7 +185,7 @@ func (r Runner) InstallOrUpdate(ctx context.Context) error {
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
-		"-v", volume(r.cfg.ServerDir, "/data/server"),
+		"-v", volume(r.cfg.ServerDirectory(), "/data/server"),
 		"-v", volume(r.cfg.WinePrefixDir, "/data/wineprefix"),
 	}
 	args = append(args, containerProxyEnvArgs()...)
@@ -277,7 +277,7 @@ func (r Runner) StartWithArgs(ctx context.Context, serverArgs []string) error {
 		"--log-opt", "max-size=20m",
 		"--log-opt", "max-file=5",
 		"-e", "WINEDLLOVERRIDES=" + wineDLLOverrides,
-		"-v", volume(r.cfg.ServerDir, "/data/server"),
+		"-v", volume(r.cfg.ServerDirectory(), "/data/server"),
 		"-v", volume(r.cfg.WinePrefixDir, "/data/wineprefix"),
 		"-v", volume(r.cfg.LogsDir, "/data/logs"),
 		"-p", fmt.Sprintf("%d:%d/udp", gamePort, gamePort),

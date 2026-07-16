@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertCircle, Cpu, HardDrive, Network, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Activity, AlertCircle, Bug, Cpu, FileText, HardDrive, Network, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { getErrorMessage } from '../api/client';
 import { monitorApi } from '../api/monitor';
 import { useServerStore } from '../store/useServerStore';
-import type { MonitorSample } from '../types';
+import type { DebugLogStatus, MonitorSample } from '../types';
 import { StatCard } from '../components/ui/StatCard';
 import { StatusBadge } from '../components/ui/StatusBadge';
 
@@ -57,13 +57,20 @@ export const Monitor: React.FC = () => {
   const [history, setHistory] = useState<MonitorSample[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [debugStatus, setDebugStatus] = useState<DebugLogStatus | null>(null);
+  const [debugSaving, setDebugSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextSnapshot, nextHistory] = await Promise.all([monitorApi.snapshot(), monitorApi.history(120)]);
+      const [nextSnapshot, nextHistory, nextDebugStatus] = await Promise.all([
+        monitorApi.snapshot(),
+        monitorApi.history(120),
+        monitorApi.debugStatus(),
+      ]);
       setSnapshot(nextSnapshot.sample);
       setHistory(nextHistory);
+      setDebugStatus(nextDebugStatus);
       setError(null);
     } catch (loadError) {
       setSnapshot(null);
@@ -83,6 +90,20 @@ export const Monitor: React.FC = () => {
     const interval = window.setInterval(load, 15000);
     return () => window.clearInterval(interval);
   }, [autoRefresh, load]);
+
+  const toggleDebug = async () => {
+    if (!debugStatus || debugSaving) return;
+    setDebugSaving(true);
+    try {
+      const next = await monitorApi.setDebug(!debugStatus.enabled);
+      setDebugStatus(next);
+      setError(null);
+    } catch (toggleError) {
+      setError(getErrorMessage(toggleError));
+    } finally {
+      setDebugSaving(false);
+    }
+  };
 
   const chartData = useMemo<ChartPoint[]>(
     () =>
@@ -168,13 +189,15 @@ export const Monitor: React.FC = () => {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <ChartCard title="在线人数历史">
           {chartData.length > 0 ? (
-            <LineChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-              <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} allowDecimals={false} />
-              <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-              <Line type="monotone" dataKey="players" name="玩家数" stroke="#0ea5e9" strokeWidth={2.5} dot={false} />
-            </LineChart>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
+                <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
+                <Line type="monotone" dataKey="players" name="玩家数" stroke="#0ea5e9" strokeWidth={2.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           ) : (
             <EmptyChart />
           )}
@@ -182,21 +205,23 @@ export const Monitor: React.FC = () => {
 
         <ChartCard title="CPU / 内存历史">
           {chartData.length > 0 ? (
-            <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
-              <YAxis yAxisId="percent" stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-              {!hasMemoryPercent && hasMemoryUsage && (
-                <YAxis yAxisId="memory" orientation="right" stroke="#94a3b8" fontSize={10} tickLine={false} width={36} tickFormatter={(value) => `${value}G`} />
-              )}
-              <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
-              <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
-              {hasMemoryPercent ? (
-                <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
-              ) : hasMemoryUsage ? (
-                <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
-              ) : null}
-            </AreaChart>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} tickLine={false} />
+                <YAxis yAxisId="percent" stroke="#94a3b8" fontSize={10} tickLine={false} domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                {!hasMemoryPercent && hasMemoryUsage && (
+                  <YAxis yAxisId="memory" orientation="right" stroke="#94a3b8" fontSize={10} tickLine={false} width={36} tickFormatter={(value) => `${value}G`} />
+                )}
+                <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
+                <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
+                {hasMemoryPercent ? (
+                  <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                ) : hasMemoryUsage ? (
+                  <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                ) : null}
+              </AreaChart>
+            </ResponsiveContainer>
           ) : (
             <EmptyChart />
           )}
@@ -209,8 +234,8 @@ export const Monitor: React.FC = () => {
           <h3 className="text-[14px] font-bold text-slate-800">健康检查</h3>
         </div>
         <div className="grid grid-cols-1 gap-4 text-xs font-semibold text-slate-500 md:grid-cols-2 xl:grid-cols-4">
-          <Health label="REST" healthy={Boolean(snapshot?.rest_healthy)} unavailableText="不可达" />
-          <Health label="RCON" healthy={Boolean(snapshot?.rcon_healthy)} unavailableText="未启用或不可达" />
+          <Health label="REST" healthy={Boolean(snapshot?.rest_healthy)} unavailableText={healthFailureLabel('REST', snapshot?.unavailable_reason)} />
+          <Health label="RCON" healthy={Boolean(snapshot?.rcon_healthy)} unavailableText={healthFailureLabel('RCON', snapshot?.unavailable_reason)} />
           <Health label="Game Port" healthy={Boolean(snapshot?.game_port_healthy)} unavailableText="不可达" />
           <Health label="Query Port" healthy={Boolean(snapshot?.query_port_healthy)} unavailableText="不可达" />
         </div>
@@ -219,22 +244,80 @@ export const Monitor: React.FC = () => {
             {snapshot.unavailable_reason}
           </div>
         )}
+        {healthExplanation(snapshot) && (
+          <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50 p-4 text-xs font-semibold leading-6 text-sky-800">
+            {healthExplanation(snapshot)}
+          </div>
+        )}
         <p className="mt-4 text-[11px] font-medium text-slate-400">
           最近采样：{snapshot?.created_at ? new Date(snapshot.created_at).toLocaleString('zh-CN') : '未采集'}
         </p>
+      </section>
+
+      <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Bug size={16} className="text-violet-500" />
+              <h3 className="text-[14px] font-bold text-slate-800">Debug 日志</h3>
+            </div>
+            <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
+              开启后记录接口耗时、健康探测和连接结果，不记录密码、Token 或请求正文。日志达到上限后自动轮转。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void toggleDebug()}
+            disabled={!debugStatus || debugSaving}
+            className={`inline-flex shrink-0 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50 ${debugStatus?.enabled ? 'bg-rose-500 hover:bg-rose-600' : 'bg-violet-600 hover:bg-violet-700'}`}
+          >
+            <Bug size={14} />
+            {debugSaving ? '正在保存' : debugStatus?.enabled ? '关闭 Debug' : '开启 Debug'}
+          </button>
+        </div>
+        <div className="mt-4 flex min-w-0 items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+          <FileText size={16} className="mt-0.5 shrink-0 text-slate-400" />
+          <div className="min-w-0">
+            <p className="text-[11px] font-bold text-slate-500">日志位置</p>
+            <p className="mt-1 break-all font-mono text-[11px] font-semibold text-slate-700">{debugStatus?.path || '后端尚未返回日志路径'}</p>
+            <p className="mt-1 text-[10px] font-medium text-slate-400">
+              当前 {formatBytes(debugStatus?.size || 0)} · 单文件上限 {formatBytes(debugStatus?.max_bytes || 0)} · 保留 {debugStatus?.max_files || 0} 个轮转文件
+            </p>
+          </div>
+        </div>
       </section>
     </div>
   );
 };
 
-const ChartCard: React.FC<{ title: string; children: React.ReactElement }> = ({ title, children }) => (
+const healthFailureLabel = (kind: 'REST' | 'RCON', reason?: string) => {
+  const details = reason || '';
+  if (kind === 'REST' && /authentication failed|status 401/i.test(details)) return '认证失败';
+  if (/port .*match|port_mismatch|uses port .* maps/i.test(details)) return '端口不一致';
+  if (new RegExp(`${kind}:.*disabled`, 'i').test(details)) return '未启用';
+  if (new RegExp(`${kind}:.*connection refused`, 'i').test(details)) return '连接被拒绝';
+  return kind === 'RCON' ? '未启用或不可达' : '不可达';
+};
+
+const healthExplanation = (snapshot: MonitorSample | null) => {
+  if (!snapshot || (snapshot.rest_healthy && snapshot.rcon_healthy)) return '';
+  const reason = snapshot.unavailable_reason || '';
+  if (/REST:.*authentication failed|REST:.*status 401/i.test(reason)) {
+    return 'PalDefender GM 与游戏官方 REST 使用的是两套接口。GM 可用只说明 PalDefender 正常；这里的 401 表示官方 REST 已连通，但运行中的 Palworld 不接受当前管理密码。保存当前服务器配置后重启游戏服务端即可让密码重新加载。';
+  }
+  if (/RCON:.*uses port .*maps|RCON:.*does not match Linux container mapping/i.test(reason)) {
+    return 'RCON 的游戏配置端口与 Linux 容器映射端口不同。把 PalWorldSettings.ini 的 RCONPort 和 PALPANEL_RCON_PORT 调成同一个值，然后重建或重启游戏容器。';
+  }
+  if (/RCON:.*127\.0\.0\.1.*connection refused/i.test(reason)) {
+    return '当前地址没有进程监听 RCON。确认 RCONEnabled=True；如果面板本身运行在旧 Docker 容器中，还要把 PALPANEL_RCON_HOST 设置为游戏容器名或宿主机网关，不能继续指向面板容器自己的 127.0.0.1。';
+  }
+  return 'PalDefender GM、游戏官方 REST 和 RCON 是三条独立连接，健康状态不会互相替代。请按上方具体错误检查对应端口、密码和容器网络。';
+};
+
+const ChartCard: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
     <h3 className="mb-4 text-[14px] font-bold text-slate-800">{title}</h3>
-    <div className="h-72 text-xs">
-      <ResponsiveContainer width="100%" height="100%">
-        {children}
-      </ResponsiveContainer>
-    </div>
+    <div className="h-72 text-xs">{children}</div>
   </section>
 );
 
