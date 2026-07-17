@@ -102,7 +102,7 @@ test('logs in with a server session cookie and sends no legacy bearer auth', asy
   await page.getByLabel('用户名').fill('admin');
   await page.getByLabel('密码').fill('strong-password-123');
   await page.getByRole('button', { name: '登录' }).click();
-  await expect(page.getByText('系统总览', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: '服务器总览' })).toBeVisible();
   expect(backend.loginBody()).toEqual({ username: 'admin', password: 'strong-password-123' });
   expect(backend.authorization()).toBe('');
   await expect.poll(async () => {
@@ -114,7 +114,7 @@ test('logs in with a server session cookie and sends no legacy bearer auth', asy
 test('viewer session cannot see the world reset command', async ({ page }) => {
   await installFakeBackend(page, 'viewer');
   await page.goto('/dashboard');
-  await expect(page.getByText('系统总览', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: '服务器总览' })).toBeVisible();
   await expect(page.getByRole('button', { name: '重置世界' })).toHaveCount(0);
 });
 
@@ -129,6 +129,6 @@ test('renders task and schedule data from the API contract', async ({ page }) =>
 test('loads schema-backed server settings', async ({ page }) => {
   await installFakeBackend(page);
   await page.goto('/settings');
-  await expect(page.getByText('服务器设置', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
   await expect(page.getByLabel('服务器名称')).toHaveValue('E2E Server');
 });
