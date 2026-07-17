@@ -19,7 +19,7 @@ import type {
   StartupResponse,
   ValidationIssue,
 } from '../types';
-import { mapJob } from './tasks';
+import { createFallbackJob, mapJob } from './tasks';
 
 const defaultStartup: StartupConfig = {
   port: 8211,
@@ -228,15 +228,6 @@ export const mapStartup = (raw: unknown): StartupResponse => {
   };
 };
 
-const fallbackJob = (type: string, message: string): Job => ({
-  id: `local_${Date.now()}`,
-  type,
-  status: 'waiting',
-  progress: 0,
-  message,
-  created_at: new Date().toISOString(),
-});
-
 export const setupApi = {
   getPrerequisites: () =>
     handleRequest<unknown, Prerequisite[]>(
@@ -305,14 +296,14 @@ export const setupApi = {
   installDocker: (request: DockerInstallRequest) =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/docker/install', request),
-      fallbackJob('docker_install', '已提交 Docker 安装任务'),
+      createFallbackJob('docker_install', '已提交 Docker 安装任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   configureDockerMirrors: (request: DockerMirrorRequest) =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/docker/mirrors/configure', request),
-      fallbackJob('docker_mirror_configure', '已提交 Docker 镜像加速配置任务'),
+      createFallbackJob('docker_mirror_configure', '已提交 Docker 镜像加速配置任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
@@ -347,14 +338,14 @@ export const setupApi = {
   bootstrap: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/bootstrap'),
-      fallbackJob('bootstrap', '已提交开服初始化任务'),
+      createFallbackJob('bootstrap', '已提交开服初始化任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   install: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/install'),
-      fallbackJob('install', '已提交安装任务'),
+      createFallbackJob('install', '已提交安装任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 

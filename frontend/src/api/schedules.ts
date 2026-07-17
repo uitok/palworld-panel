@@ -1,6 +1,6 @@
 import { apiClient, handleRequest } from './client';
 import type { Alert, Job, Schedule } from '../types';
-import { mapJob } from './tasks';
+import { createFallbackJob, mapJob } from './tasks';
 
 const mapSchedule = (raw: unknown): Schedule => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -69,7 +69,7 @@ export const schedulesApi = {
   run: (id: string) =>
     handleRequest<unknown, Job>(
       () => apiClient.post(`/schedules/${encodeURIComponent(id)}/run`),
-      { id: '', type: 'job', status: 'waiting', progress: 0, created_at: new Date().toISOString() },
+      createFallbackJob('job', undefined, ''),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 

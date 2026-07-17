@@ -8,7 +8,7 @@ import type {
   ServerVersionInfo,
   WorldInfo,
 } from '../types';
-import { mapJob } from './tasks';
+import { createFallbackJob, mapJob } from './tasks';
 
 const stoppedStatus: ServerStatus = {
   status: 'stopped',
@@ -252,13 +252,7 @@ export const serverApi = {
   resetWorld: (worldId: string, confirmation: string) =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/world/reset', { world_id: worldId, confirmation }),
-      {
-        id: '',
-        type: 'world_reset',
-        status: 'waiting',
-        progress: 0,
-        created_at: new Date().toISOString(),
-      },
+      createFallbackJob('world_reset', undefined, ''),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
@@ -293,39 +287,21 @@ export const serverApi = {
   checkVersion: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/version/check'),
-      {
-        id: '',
-        type: 'version_check',
-        status: 'waiting',
-        progress: 0,
-        created_at: new Date().toISOString(),
-      },
+      createFallbackJob('version_check', undefined, ''),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   updateIfNeeded: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/update-if-needed'),
-      {
-        id: '',
-        type: 'smart_update',
-        status: 'waiting',
-        progress: 0,
-        created_at: new Date().toISOString(),
-      },
+      createFallbackJob('smart_update', undefined, ''),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   safeRestart: (waittime: number, message: string) =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/safe-restart', { waittime, message }),
-      {
-        id: '',
-        type: 'safe_restart',
-        status: 'waiting',
-        progress: 0,
-        created_at: new Date().toISOString(),
-      },
+      createFallbackJob('safe_restart', undefined, ''),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 

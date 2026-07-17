@@ -61,8 +61,8 @@ export const isJobDone = (job: Job) => job.status === 'success' || job.status ==
 const jobPollIntervalMs = 1000;
 const maxJobPollAttempts = 60 * 30;
 
-const fallbackJob = (type: string, message: string): Job => ({
-  id: `local_${Date.now()}`,
+export const createFallbackJob = (type: string, message?: string, id = `local_${Date.now()}`): Job => ({
+  id,
   type,
   status: 'waiting',
   progress: 0,
@@ -80,13 +80,7 @@ export const tasksApi = {
   getJobById: (id: string) =>
     handleRequest<unknown, Job>(
       () => apiClient.get(`/jobs/${id}`),
-      {
-        id,
-        type: 'job',
-        status: 'waiting',
-        progress: 0,
-        created_at: new Date().toISOString(),
-      },
+      createFallbackJob('job', undefined, id),
       { map: mapJob, quiet: true },
     ),
 
@@ -122,14 +116,14 @@ export const tasksApi = {
   createBackupJob: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/backup'),
-      fallbackJob('backup', '已提交备份任务'),
+      createFallbackJob('backup', '已提交备份任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   createUpdateJob: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/update'),
-      fallbackJob('update', '已提交更新任务'),
+      createFallbackJob('update', '已提交更新任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 };

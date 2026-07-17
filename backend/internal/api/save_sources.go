@@ -244,7 +244,7 @@ func (s Server) submitBreedingJob(c *gin.Context) {
 		fail(c, http.StatusConflict, "breeding_submit_failed", err.Error())
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"ok": true, "data": job})
+	accepted(c, job)
 }
 
 func (s Server) breedingHistory(c *gin.Context) {

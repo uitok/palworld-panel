@@ -14,7 +14,7 @@ import type {
   WorkshopSearchResponse,
   WorkshopStatus,
 } from '../types';
-import { mapJob } from './tasks';
+import { createFallbackJob, mapJob } from './tasks';
 import { AI_OPERATION_TIMEOUT_MS } from './requestTimeouts';
 
 const STEAM_AUTH_OPERATION_TIMEOUT_MS = 60_000;
@@ -260,15 +260,6 @@ const emptySteamWorkshopAuthStatus: SteamWorkshopAuthStatus = {
   verification_required: false,
 };
 
-const fallbackJob = (type: string, message: string): Job => ({
-  id: `local_${Date.now()}`,
-  type,
-  status: 'waiting',
-  progress: 0,
-  message,
-  created_at: new Date().toISOString(),
-});
-
 export const modsApi = {
   list: () =>
     handleRequest<unknown, ModItem[]>(() => apiClient.get('/mods'), [], {
@@ -343,7 +334,7 @@ export const modsApi = {
   importInspected: (inspectionId: string, candidateId?: string) =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/mods/import', { inspection_id: inspectionId, candidate_id: candidateId || undefined }),
-      fallbackJob('mod_import', '已提交 Mod 导入任务'),
+      createFallbackJob('mod_import', '已提交 Mod 导入任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
@@ -416,7 +407,7 @@ export const modsApi = {
   downloadWorkshop: (itemId: string, enable = false) =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/mods/workshop', { item_id: itemId, enable }),
-      fallbackJob('workshop_download', '已提交 Workshop 下载任务'),
+      createFallbackJob('workshop_download', '已提交 Workshop 下载任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 

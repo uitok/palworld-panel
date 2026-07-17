@@ -1,6 +1,6 @@
 import { apiClient, handleRequest } from './client';
 import type { Job, PalDefenderRelease, PalDefenderStatus, TokenResult, UE4SSDependencyStatus, UE4SSDependencyState } from '../types';
-import { mapJob } from './tasks';
+import { createFallbackJob, mapJob } from './tasks';
 
 export const palDefenderPanelPermissions = [
   'REST.Version.Read',
@@ -118,15 +118,6 @@ const mapToken = (raw: unknown): TokenResult => {
   };
 };
 
-const fallbackJob = (type: string, message: string): Job => ({
-  id: `local_${Date.now()}`,
-  type,
-  status: 'waiting',
-  progress: 0,
-  message,
-  created_at: new Date().toISOString(),
-});
-
 export const securityApi = {
   releases: () =>
     handleRequest<unknown, PalDefenderRelease[]>(
@@ -145,14 +136,14 @@ export const securityApi = {
   install: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/security/paldefender/install'),
-      fallbackJob('paldefender_install', '已提交 PalDefender 安装任务'),
+      createFallbackJob('paldefender_install', '已提交 PalDefender 安装任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   update: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/security/paldefender/update'),
-      fallbackJob('paldefender_update', '已提交 PalDefender 更新任务'),
+      createFallbackJob('paldefender_update', '已提交 PalDefender 更新任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 

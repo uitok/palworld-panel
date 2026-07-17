@@ -129,7 +129,7 @@ func (s Server) breedSubmitJob(c *gin.Context) {
 		fail(c, http.StatusConflict, "breeding_submit_failed", err.Error())
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"ok": true, "data": gin.H{"job": job, "balance": balance}})
+	accepted(c, gin.H{"job": job, "balance": balance})
 }
 
 func (s Server) breedHistory(c *gin.Context) {
@@ -343,7 +343,7 @@ func (s Server) astrBotQuickSolve(c *gin.Context) {
 		fail(c, http.StatusConflict, "quick_solve_submit_failed", err.Error())
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"ok": true, "data": gin.H{"job": job, "balance": balance}})
+	accepted(c, gin.H{"job": job, "balance": balance})
 }
 
 func (s Server) runAstrBotCatalogSync() {

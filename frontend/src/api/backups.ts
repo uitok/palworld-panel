@@ -1,6 +1,6 @@
 import { apiClient, handleRequest } from './client';
 import type { BackupInfo, BackupVerifyResult, Job } from '../types';
-import { mapJob } from './tasks';
+import { createFallbackJob, mapJob } from './tasks';
 
 const mapBackups = (raw: unknown): BackupInfo[] => {
   if (!Array.isArray(raw)) return [];
@@ -38,28 +38,14 @@ export const backupsApi = {
   create: () =>
     handleRequest<unknown, Job>(
       () => apiClient.post('/server/backup'),
-      {
-        id: `local_${Date.now()}`,
-        type: 'backup',
-        status: 'waiting',
-        progress: 0,
-        message: '已提交备份任务',
-        created_at: new Date().toISOString(),
-      },
+      createFallbackJob('backup', '已提交备份任务'),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   restore: (name: string) =>
     handleRequest<unknown, Job>(
       () => apiClient.post(`/backups/${encodeURIComponent(name)}/restore`),
-      {
-        id: '',
-        type: 'restore',
-        status: 'waiting',
-        progress: 0,
-        message: '已提交恢复任务',
-        created_at: new Date().toISOString(),
-      },
+      createFallbackJob('restore', '已提交恢复任务', ''),
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 

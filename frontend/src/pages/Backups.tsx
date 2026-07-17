@@ -6,18 +6,7 @@ import { tasksApi } from '../api/tasks';
 import type { BackupInfo, BackupVerifyResult, Job } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
-
-const formatBytes = (bytes: number) => {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-};
+import { formatBytes } from '../utils/monitor';
 
 const saveBlob = (name: string, blob: Blob) => {
   const url = URL.createObjectURL(blob);

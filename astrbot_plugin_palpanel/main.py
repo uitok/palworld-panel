@@ -243,16 +243,17 @@ class Main(Star):
         return web.json_response({"ok": ok, "reservation_id": reservation, "balance": balance}, status=200 if ok else 409)
 
     async def _credit_commit(self, request: web.Request):
-        data = await self._json(request)
-        if str(data["reservation_id"]).startswith("admin:"):
-            return web.json_response({"ok": True})
-        return web.json_response({"ok": await self.store.settle(str(data["reservation_id"]), True)})
+        return await self._settle_credit(request, commit=True)
 
     async def _credit_release(self, request: web.Request):
+        return await self._settle_credit(request, commit=False)
+
+    async def _settle_credit(self, request: web.Request, commit: bool):
         data = await self._json(request)
-        if str(data["reservation_id"]).startswith("admin:"):
+        reservation_id = str(data["reservation_id"])
+        if reservation_id.startswith("admin:"):
             return web.json_response({"ok": True})
-        return web.json_response({"ok": await self.store.settle(str(data["reservation_id"]), False)})
+        return web.json_response({"ok": await self.store.settle(reservation_id, commit)})
 
     async def _panel_post(self, path: str, payload: dict) -> dict:
         if not self.http:

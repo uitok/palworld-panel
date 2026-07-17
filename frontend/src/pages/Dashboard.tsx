@@ -21,14 +21,7 @@ import { StatCard } from '../components/ui/StatCard';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import type { Job } from '../types';
-
-type ChartPoint = {
-  time: string;
-  players: number;
-  cpu: number | null;
-  memoryPercent: number | null;
-  memoryGiB: number | null;
-};
+import { bytesToGiB, chartTooltipFormatter, toMonitorChartPoints } from '../utils/monitor';
 
 const stoppedMetrics = {
   server_fps: 0,
@@ -40,32 +33,9 @@ const stoppedMetrics = {
   frame_time: 0,
 };
 
-const formatTime = (value: string) => {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-};
-
-const bytesToGiB = (bytes: number) => bytes / 1024 / 1024 / 1024;
-
 const formatRAM = (bytes?: number) => {
   if (!bytes) return '0 GB';
   return `${bytesToGiB(bytes).toFixed(1)} GB`;
-};
-
-const percent = (used: number, total: number) => {
-  if (!total) return null;
-  return Math.min(100, Math.max(0, (used / total) * 100));
-};
-
-const chartTooltipFormatter = (value: unknown, name: unknown) => {
-  const label = String(name);
-  const numeric = Number(Array.isArray(value) ? value[0] : value);
-  if (!Number.isFinite(numeric)) return [String(value), label];
-  if (label.includes('GB')) return [`${numeric.toFixed(2)} GB`, label];
-  if (label.includes('%')) return [`${numeric.toFixed(1)}%`, label];
-  return [numeric, label];
 };
 
 export const Dashboard: React.FC = () => {
@@ -129,18 +99,7 @@ export const Dashboard: React.FC = () => {
     if (metricsQuery.data) setMetrics(metricsQuery.data);
   }, [metricsQuery.data, setMetrics]);
 
-  const chartData = useMemo<ChartPoint[]>(() => {
-    return (historyQuery.data ?? []).map((sample) => {
-      const memoryPct = percent(sample.memory_usage_bytes, sample.memory_limit_bytes);
-      return {
-        time: formatTime(sample.created_at),
-        players: sample.current_players,
-        cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
-        memoryPercent: sample.memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
-        memoryGiB: sample.memory_available ? Number(bytesToGiB(sample.memory_usage_bytes).toFixed(2)) : null,
-      };
-    });
-  }, [historyQuery.data]);
+  const chartData = useMemo(() => toMonitorChartPoints(historyQuery.data ?? []), [historyQuery.data]);
 
   const metrics = status?.status === 'running' ? (metricsQuery.data ?? cachedMetrics) : stoppedMetrics;
   const logResponse = logsQuery.data;
