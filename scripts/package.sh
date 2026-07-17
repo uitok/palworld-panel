@@ -157,8 +157,19 @@ build_project_source_archive() {
   (
     cd "$root_dir"
     while IFS= read -r -d '' path; do
+      [[ "$path" == "third_party/palcalc" ]] && continue
       cp -a --parents "$path" "$source_root/"
     done < <(git ls-files --cached --others --exclude-standard -z)
+  )
+  mkdir -p "$source_root/third_party/palcalc"
+  (
+    cd "$root_dir/third_party/palcalc"
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        *.dll|bin/*|*/bin/*|obj/*|*/obj/*) continue ;;
+      esac
+      cp -a --parents "$path" "$source_root/third_party/palcalc/"
+    done < <(git ls-files --cached -z)
   )
   (cd "$source_root/sav-cli" && go mod vendor)
   tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive" -C "$staging_dir" "$source_name"
