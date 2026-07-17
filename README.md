@@ -155,6 +155,15 @@ Linux 解压包也可以不安装 systemd，直接执行：
 
 Launcher 会依次启动并健康检查 `sav-cli`、`palcalc-bridge` 与后端。默认配置位于 `config\palpanel.env`，数据库、日志、备份和托管数据位于 `data\`。
 
+### dev 开发包
+
+每次推送到 `dev` 都会运行完整 CI，并在对应的 GitHub Actions 运行页面上传：
+
+- `palpanel-linux-amd64-<commit SHA>`：Linux amd64 安装包、源码包和第三方许可证。
+- `palpanel-windows-amd64-<commit SHA>`：Windows amd64 ZIP 安装包。
+
+开发包内部版本为 `v0.0.0-ci.<Actions 运行编号>`，Artifacts 保留 7 天，不会创建正式 GitHub Release。CI 也可以从 Actions 页面手动触发。
+
 ## 首次使用
 
 1. 打开 `http://127.0.0.1:8080` 并注册管理员。

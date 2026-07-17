@@ -2,14 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
-  CI_PACKAGE_VERSION: v0.0.0-ci
+  CI_PACKAGE_VERSION: v0.0.0-ci.${{ github.run_number }}
 
 jobs:
   linux:
@@ -76,6 +77,17 @@ jobs:
           sudo scripts/test-install.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
           sudo scripts/test-bootstrap-install.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
           sudo scripts/test-upgrade.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz" v1.0.2
+      - name: Upload Linux CI packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: palpanel-linux-amd64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/packages/palpanel_${{ env.CI_PACKAGE_VERSION }}_linux_amd64.tar.gz
+            dist/packages/palpanel-sav-cli_${{ env.CI_PACKAGE_VERSION }}_source.tar.gz
+            dist/packages/palpanel_${{ env.CI_PACKAGE_VERSION }}_source.tar.gz
+            dist/packages/THIRD_PARTY_LICENSES.txt
 
   windows:
     runs-on: windows-2025
