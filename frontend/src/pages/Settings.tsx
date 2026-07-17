@@ -45,7 +45,7 @@ export const Settings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [aiConfig, setAIConfig] = useState<AITranslationConfig | null>(null);
-  const [aiConfigLoading, setAIConfigLoading] = useState(false);
+  const [aiConfigLoading, setAIConfigLoading] = useState(true);
   const [aiBaseURL, setAIBaseURL] = useState('');
   const [aiModel, setAIModel] = useState('');
   const [aiAPIKey, setAIAPIKey] = useState('');

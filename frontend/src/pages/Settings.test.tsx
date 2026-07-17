@@ -185,9 +185,11 @@ describe('Settings page', () => {
     auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'old-model', api_key_present: true, timeout_seconds: 90, proxy_configured: false, proxy_url: '', custom_header_names: [] });
     renderSettings();
 
-    await screen.findByRole('button', { name: '保存 AI 配置' });
-    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'translate-model' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存 AI 配置' }));
+    const modelInput = await screen.findByLabelText('Model');
+    const saveButton = screen.getByRole('button', { name: '保存 AI 配置' });
+
+    fireEvent.change(modelInput, { target: { value: 'translate-model' } });
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(auxiliaryMocks.updateAIConfig).toHaveBeenCalledWith({
@@ -211,11 +213,15 @@ describe('Settings page', () => {
     });
     renderSettings();
 
-    await screen.findByRole('button', { name: '保存 AI 配置' });
-    fireEvent.change(screen.getByLabelText('请求超时（秒）'), { target: { value: '120' } });
-    fireEvent.change(screen.getByLabelText(/Proxy URL/), { target: { value: 'socks5://proxy-user:proxy-pass@127.0.0.1:10808' } });
-    fireEvent.change(screen.getByLabelText(/自定义请求头/), { target: { value: '{"X-Tenant-ID":"tenant-b"}' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存 AI 配置' }));
+    const timeoutInput = await screen.findByLabelText('请求超时（秒）');
+    const proxyInput = await screen.findByLabelText(/Proxy URL/);
+    const headersInput = await screen.findByLabelText(/自定义请求头/);
+    const saveButton = screen.getByRole('button', { name: '保存 AI 配置' });
+
+    fireEvent.change(timeoutInput, { target: { value: '120' } });
+    fireEvent.change(proxyInput, { target: { value: 'socks5://proxy-user:proxy-pass@127.0.0.1:10808' } });
+    fireEvent.change(headersInput, { target: { value: '{"X-Tenant-ID":"tenant-b"}' } });
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(auxiliaryMocks.updateAIConfig).toHaveBeenCalledWith({
