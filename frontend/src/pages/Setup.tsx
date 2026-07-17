@@ -615,7 +615,7 @@ export const Setup: React.FC = () => {
           <button
             type="button"
             onClick={saveStartup}
-            className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800"
+            className="flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-xs font-bold text-white hover:bg-sky-700"
           >
             <Save size={14} />
             保存启动参数
@@ -699,7 +699,7 @@ const SetupHero: React.FC<{
           type="button"
           onClick={onPrimaryAction}
           disabled={action.disabled}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-6 py-4 text-sm font-bold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
+          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-sky-600 px-6 py-4 text-sm font-bold text-white shadow-sm shadow-sky-600/15 hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-45"
         >
           {primaryActionIcon(action.kind)}
           {action.label}
@@ -735,24 +735,24 @@ const WindowsServerSourcePanel: React.FC<{
 }> = ({ source, path, importing, onSourceChange, onPathChange, onImport }) => {
   const step = source ? 2 : 1;
   return (
-    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-950 text-white shadow-lg shadow-slate-200/50">
-      <div className="flex flex-col gap-5 border-b border-white/10 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-7">
+    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white text-slate-900 shadow-sm shadow-slate-200/50">
+      <div className="flex flex-col gap-5 border-b border-slate-200 bg-slate-50/70 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-7">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-400">Windows 开服向导</p>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-700">Windows 开服向导</p>
           <h3 className="mt-2 text-xl font-bold">选择服务端来源</h3>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
             已经装过服务端就直接接管原目录；还没有的话，让 PalPanel 通过 SteamCMD 安装。
           </p>
         </div>
-        <div className="flex items-center gap-2 text-[11px] font-bold text-slate-400" aria-label={`当前第 ${step} 步，共 3 步`}>
+        <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500" aria-label={`当前第 ${step} 步，共 3 步`}>
           {['选择方式', '准备服务端', '完成配置'].map((label, index) => {
             const number = index + 1;
             const active = number <= step;
             return (
               <React.Fragment key={label}>
-                {index > 0 && <span className={`h-px w-5 ${active ? 'bg-sky-500' : 'bg-slate-700'}`} />}
+                {index > 0 && <span className={`h-px w-5 ${active ? 'bg-sky-500' : 'bg-slate-200'}`} />}
                 <span className="flex flex-col items-center gap-1">
-                  <span className={`flex h-7 w-7 items-center justify-center rounded-full ${active ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
+                  <span className={`flex h-7 w-7 items-center justify-center rounded-full ${active ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
                     {number}
                   </span>
                   <span className="hidden sm:block">{label}</span>
@@ -770,15 +770,15 @@ const WindowsServerSourcePanel: React.FC<{
           onClick={() => onSourceChange('existing')}
           className={`group rounded-2xl border p-6 text-left transition ${
             source === 'existing'
-              ? 'border-sky-400 bg-sky-500/10 ring-2 ring-sky-500/20'
-              : 'border-white/10 bg-white/[0.04] hover:border-sky-500/60 hover:bg-white/[0.07]'
+              ? 'border-sky-300 bg-sky-50 ring-2 ring-sky-500/15'
+              : 'border-slate-200 bg-white hover:border-sky-300 hover:bg-sky-50/60'
           }`}
         >
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-sky-600 shadow-sm">
             <FolderOpen size={24} />
           </span>
           <span className="mt-5 block text-base font-bold">我已有服务器</span>
-          <span className="mt-2 block text-sm leading-6 text-slate-400">
+          <span className="mt-2 block text-sm leading-6 text-slate-500">
             指定 PalServer.exe 所在目录，继续使用原来的配置、存档和 Mod。
           </span>
         </button>
@@ -789,23 +789,23 @@ const WindowsServerSourcePanel: React.FC<{
           onClick={() => onSourceChange('install')}
           className={`group rounded-2xl border p-6 text-left transition ${
             source === 'install'
-              ? 'border-sky-400 bg-sky-500/10 ring-2 ring-sky-500/20'
-              : 'border-white/10 bg-white/[0.04] hover:border-sky-500/60 hover:bg-white/[0.07]'
+              ? 'border-sky-300 bg-sky-50 ring-2 ring-sky-500/15'
+              : 'border-slate-200 bg-white hover:border-sky-300 hover:bg-sky-50/60'
           }`}
         >
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-sky-600 shadow-sm">
             <HardDriveDownload size={24} />
           </span>
           <span className="mt-5 block text-base font-bold">帮我安装服务器</span>
-          <span className="mt-2 block text-sm leading-6 text-slate-400">
+          <span className="mt-2 block text-sm leading-6 text-slate-500">
             下载 SteamCMD，并把服务端安装到 PalPanel 自己的数据目录。
           </span>
         </button>
       </div>
 
       {source === 'existing' && (
-        <div className="border-t border-white/10 bg-white/[0.03] px-5 py-5 sm:px-7">
-          <label htmlFor="existing-palserver-path" className="text-sm font-bold text-white">
+        <div className="border-t border-slate-200 bg-slate-50/70 px-5 py-5 sm:px-7">
+          <label htmlFor="existing-palserver-path" className="text-sm font-bold text-slate-800">
             现有服务端目录
           </label>
           <div className="mt-3 flex flex-col gap-3 lg:flex-row">
@@ -815,7 +815,7 @@ const WindowsServerSourcePanel: React.FC<{
               value={path}
               onChange={(event) => onPathChange(event.target.value)}
               placeholder={String.raw`D:\SteamLibrary\steamapps\common\PalServer`}
-              className="min-w-0 flex-1 rounded-xl border border-white/15 bg-slate-900 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-600 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+              className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
             />
             <button
               type="button"
@@ -827,8 +827,8 @@ const WindowsServerSourcePanel: React.FC<{
               {importing ? '正在检查' : '检查并接管'}
             </button>
           </div>
-          <p className="mt-3 text-xs leading-5 text-slate-400">
-            常见路径是 <code className="text-sky-300">D:\SteamLibrary\steamapps\common\PalServer</code>。
+          <p className="mt-3 text-xs leading-5 text-slate-500">
+            常见路径是 <code className="font-semibold text-slate-800">D:\SteamLibrary\steamapps\common\PalServer</code>。
             也可以填写 Steam 库目录，面板会自动查找。接管不会复制游戏文件，之后的更新、备份和 Mod 操作会直接作用于这个目录。
           </p>
         </div>
@@ -1121,7 +1121,7 @@ const AdvancedSetupPanel: React.FC<{
                   type="button"
                   onClick={onInstallDocker}
                   disabled={!canInstallDocker}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-40"
+                  className="flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-40"
                 >
                   <Download size={13} />
                   安装 Docker 环境

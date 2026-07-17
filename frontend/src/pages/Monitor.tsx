@@ -161,9 +161,9 @@ export const Monitor: React.FC = () => {
                 <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
                 <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
                 {hasMemoryPercent ? (
-                  <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                  <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
                 ) : hasMemoryUsage ? (
-                  <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#14b8a6" fill="#ccfbf1" strokeWidth={1.5} connectNulls />
+                  <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
                 ) : null}
               </AreaChart>
             </ResponsiveContainer>

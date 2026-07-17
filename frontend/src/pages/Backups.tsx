@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Archive, Download, FolderDown, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react';
+import { Archive, CloudUpload, Download, FolderDown, Link2, RefreshCw, RotateCcw, Save, ShieldCheck, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { getErrorMessage } from '../api/client';
 import { backupsApi } from '../api/backups';
 import { tasksApi } from '../api/tasks';
-import type { BackupInfo, BackupVerifyResult, Job } from '../types';
+import type { BackupInfo, BackupVerifyResult, Job, WebDAVConfig } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { formatBytes } from '../utils/monitor';
@@ -27,12 +28,28 @@ export const Backups: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [verifyResults, setVerifyResults] = useState<Record<string, BackupVerifyResult>>({});
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [webDAVConfig, setWebDAVConfig] = useState<WebDAVConfig>({
+    enabled: false,
+    base_url: '',
+    username: '',
+    remote_path: 'PalPanel',
+    upload_after_backup: false,
+    password_configured: false,
+  });
+  const [webDAVPassword, setWebDAVPassword] = useState('');
+  const [clearWebDAVPassword, setClearWebDAVPassword] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
       const list = await backupsApi.list();
       setBackups(Array.isArray(list) ? list : []);
+      try {
+        const config = await backupsApi.getWebDAVConfig();
+        setWebDAVConfig(config);
+      } catch (configError) {
+        setMessage(`WebDAV 配置读取失败：${getErrorMessage(configError)}`);
+      }
       setError(null);
     } catch (loadError) {
       setBackups([]);
@@ -126,6 +143,57 @@ export const Backups: React.FC = () => {
     }
   };
 
+  const webDAVUpdate = () => ({
+    enabled: webDAVConfig.enabled,
+    base_url: webDAVConfig.base_url,
+    username: webDAVConfig.username,
+    remote_path: webDAVConfig.remote_path,
+    upload_after_backup: webDAVConfig.upload_after_backup,
+    password: webDAVPassword || undefined,
+    clear_password: clearWebDAVPassword || undefined,
+  });
+
+  const saveWebDAVConfig = async () => {
+    setPendingAction('webdav-save');
+    try {
+      const saved = await backupsApi.updateWebDAVConfig(webDAVUpdate());
+      setWebDAVConfig(saved);
+      setWebDAVPassword('');
+      setClearWebDAVPassword(false);
+      setMessage('WebDAV 备份策略已保存');
+    } catch (actionError) {
+      setMessage(getErrorMessage(actionError));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const testWebDAVConfig = async () => {
+    setPendingAction('webdav-test');
+    try {
+      await backupsApi.testWebDAVConfig(webDAVUpdate());
+      setMessage('WebDAV 连接测试成功');
+    } catch (actionError) {
+      setMessage(getErrorMessage(actionError));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const uploadBackup = async (backup: BackupInfo) => {
+    setPendingAction(`webdav:${backup.name}`);
+    try {
+      const job = await backupsApi.uploadWebDAV(backup.name);
+      setActiveJob(job);
+      const done = await tasksApi.waitForJob(job.id, setActiveJob);
+      setMessage(done.status === 'success' ? `已上传到 WebDAV：${backup.name}` : done.error || 'WebDAV 上传失败');
+    } catch (actionError) {
+      setMessage(getErrorMessage(actionError));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
   const headers = [
     { key: 'name', label: '备份名称' },
     { key: 'size', label: '大小' },
@@ -141,11 +209,95 @@ export const Backups: React.FC = () => {
       {error && <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-3 text-xs font-semibold text-rose-700">{error}</div>}
       {message && <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">{message}</div>}
 
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard label="备份数量" value={`${backups.length} 个`} />
         <SummaryCard label="总容量" value={formatBytes(totalSize)} />
         <SummaryCard label="存储位置" value="data/backups" />
+        <SummaryCard label="WebDAV" value={webDAVConfig.enabled ? '已启用' : '未启用'} />
       </div>
+
+      <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 text-[15px] font-bold text-slate-800">
+              <CloudUpload size={18} className="text-sky-600" />
+              WebDAV 自动归档
+            </h3>
+            <p className="mt-1 max-w-2xl text-xs font-medium leading-5 text-slate-500">
+              备份完成后可自动上传到 NAS 或云盘。公网地址必须使用 HTTPS，密码只保存在面板数据目录且不会由 API 回传。
+            </p>
+          </div>
+          <Link to="/tasks?tab=schedules" className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-bold text-sky-700 hover:bg-sky-100">
+            <Link2 size={14} />
+            设置定时备份与重启
+          </Link>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500 xl:col-span-2">
+            WebDAV 地址
+            <input
+              type="url"
+              value={webDAVConfig.base_url}
+              onChange={(event) => setWebDAVConfig((current) => ({ ...current, base_url: event.target.value }))}
+              placeholder="https://dav.example.com/remote.php/dav/files/user"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-sky-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
+            用户名
+            <input
+              value={webDAVConfig.username}
+              onChange={(event) => setWebDAVConfig((current) => ({ ...current, username: event.target.value }))}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-sky-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
+            远程目录
+            <input
+              value={webDAVConfig.remote_path}
+              onChange={(event) => setWebDAVConfig((current) => ({ ...current, remote_path: event.target.value }))}
+              placeholder="PalPanel/server-01"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-sky-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500 xl:col-span-2">
+            密码或应用专用密码
+            <input
+              type="password"
+              value={webDAVPassword}
+              onChange={(event) => setWebDAVPassword(event.target.value)}
+              placeholder={webDAVConfig.password_configured ? '已保存；留空表示保持不变' : '输入 WebDAV 密码'}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-sky-500"
+            />
+          </label>
+          <div className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50/70 p-3 md:col-span-2 xl:col-span-2">
+            <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+              <input type="checkbox" checked={webDAVConfig.enabled} onChange={(event) => setWebDAVConfig((current) => ({ ...current, enabled: event.target.checked }))} />
+              启用 WebDAV 上传
+            </label>
+            <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+              <input type="checkbox" checked={webDAVConfig.upload_after_backup} onChange={(event) => setWebDAVConfig((current) => ({ ...current, upload_after_backup: event.target.checked }))} />
+              每次备份成功后自动上传
+            </label>
+            <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+              <input type="checkbox" checked={clearWebDAVPassword} onChange={(event) => setClearWebDAVPassword(event.target.checked)} />
+              删除已保存的密码
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" onClick={testWebDAVConfig} disabled={Boolean(pendingAction)} className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-xs font-bold text-sky-700 hover:bg-sky-100 disabled:opacity-50">
+            <Link2 size={14} />
+            {pendingAction === 'webdav-test' ? '测试中' : '连接测试'}
+          </button>
+          <button type="button" onClick={saveWebDAVConfig} disabled={Boolean(pendingAction)} className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50">
+            <Save size={14} />
+            {pendingAction === 'webdav-save' ? '保存中' : '保存策略'}
+          </button>
+        </div>
+      </section>
 
       <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -209,8 +361,10 @@ export const Backups: React.FC = () => {
                 verifyResult={verifyResults[backup.name]}
                 onVerify={() => verifyBackup(backup)}
                 onDownload={() => downloadBackup(backup)}
+                onUpload={() => uploadBackup(backup)}
                 onRestore={() => restoreBackup(backup)}
                 onDelete={() => deleteBackup(backup)}
+                webDAVEnabled={webDAVConfig.enabled}
               />
             )}
             renderRow={(backup) => (
@@ -229,8 +383,10 @@ export const Backups: React.FC = () => {
                     pendingAction={pendingAction}
                     onVerify={() => verifyBackup(backup)}
                     onDownload={() => downloadBackup(backup)}
+                    onUpload={() => uploadBackup(backup)}
                     onRestore={() => restoreBackup(backup)}
                     onDelete={() => deleteBackup(backup)}
+                    webDAVEnabled={webDAVConfig.enabled}
                   />
                 </td>
               </tr>
@@ -255,9 +411,11 @@ const BackupActions: React.FC<{
   pendingAction: string | null;
   onVerify: () => void;
   onDownload: () => void;
+  onUpload: () => void;
   onRestore: () => void;
   onDelete: () => void;
-}> = ({ name, pendingAction, onVerify, onDownload, onRestore, onDelete }) => {
+  webDAVEnabled: boolean;
+}> = ({ name, pendingAction, onVerify, onDownload, onUpload, onRestore, onDelete, webDAVEnabled }) => {
   const busy = Boolean(pendingAction);
   const current = (prefix: string) => pendingAction === `${prefix}:${name}`;
   return (
@@ -267,6 +425,9 @@ const BackupActions: React.FC<{
       </button>
       <button type="button" title="下载" onClick={onDownload} disabled={busy} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-40">
         <Download size={14} />
+      </button>
+      <button type="button" title="上传到 WebDAV" onClick={onUpload} disabled={busy || !webDAVEnabled} className="rounded-lg border border-sky-200 p-2 text-sky-600 hover:bg-sky-50 disabled:opacity-40">
+        {current('webdav') ? <RefreshCw size={14} className="animate-spin" /> : <CloudUpload size={14} />}
       </button>
       <button type="button" title="恢复" onClick={onRestore} disabled={busy} className="rounded-lg border border-amber-200 p-2 text-amber-600 hover:bg-amber-50 disabled:opacity-40">
         <RotateCcw size={14} />
@@ -284,9 +445,11 @@ const BackupCard: React.FC<{
   pendingAction: string | null;
   onVerify: () => void;
   onDownload: () => void;
+  onUpload: () => void;
   onRestore: () => void;
   onDelete: () => void;
-}> = ({ backup, verifyResult, pendingAction, onVerify, onDownload, onRestore, onDelete }) => (
+  webDAVEnabled: boolean;
+}> = ({ backup, verifyResult, pendingAction, onVerify, onDownload, onUpload, onRestore, onDelete, webDAVEnabled }) => (
   <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
       <p className="min-w-0 break-all text-sm font-bold text-slate-800">{backup.name}</p>
@@ -307,8 +470,10 @@ const BackupCard: React.FC<{
         pendingAction={pendingAction}
         onVerify={onVerify}
         onDownload={onDownload}
+        onUpload={onUpload}
         onRestore={onRestore}
         onDelete={onDelete}
+        webDAVEnabled={webDAVEnabled}
       />
     </div>
   </div>

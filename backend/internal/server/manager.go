@@ -714,11 +714,15 @@ func (m Manager) MarkPendingRestart(ctx context.Context) error {
 }
 
 func (m Manager) Backup(ctx context.Context) (db.Job, error) {
-	return m.startLifecycleJob(ctx, "backup", "queued backup", func(_ context.Context, jobID string) {
+	return m.startLifecycleJob(ctx, "backup", "queued backup", func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 20, "creating backup archive", "")
 		backup, err := m.createBackupArchive("manual")
 		if err != nil {
 			m.update(jobID, "failed", 20, "backup failed", err.Error())
+			return
+		}
+		if err := m.maybeUploadBackup(jobCtx, jobID, backup); err != nil {
+			m.update(jobID, "failed", 70, "backup created but WebDAV upload failed; local backup retained", err.Error())
 			return
 		}
 		m.update(jobID, "completed", 100, "backup created: "+backup.Name, "")
@@ -1273,10 +1277,6 @@ func addPathToZip(zw *zip.Writer, base, path string) ([]BackupManifestFile, erro
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
 		w, err := zw.Create(rel)
 		if err != nil {
 			return err
@@ -1286,7 +1286,7 @@ func addPathToZip(zw *zip.Writer, base, path string) ([]BackupManifestFile, erro
 			return err
 		}
 		hasher := sha256.New()
-		_, copyErr := io.Copy(io.MultiWriter(w, hasher), in)
+		written, copyErr := io.Copy(io.MultiWriter(w, hasher), in)
 		closeErr := in.Close()
 		if copyErr != nil {
 			return copyErr
@@ -1294,7 +1294,10 @@ func addPathToZip(zw *zip.Writer, base, path string) ([]BackupManifestFile, erro
 		if closeErr != nil {
 			return closeErr
 		}
-		files = append(files, BackupManifestFile{Path: rel, Size: info.Size(), SHA256: hex.EncodeToString(hasher.Sum(nil))})
+		// Files such as PalDefender logs may grow while an online backup is
+		// being created. Record the bytes actually written to the archive,
+		// rather than a size sampled before the copy started.
+		files = append(files, BackupManifestFile{Path: rel, Size: written, SHA256: hex.EncodeToString(hasher.Sum(nil))})
 		return nil
 	})
 	return files, err

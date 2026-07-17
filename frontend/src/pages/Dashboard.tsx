@@ -226,6 +226,24 @@ export const Dashboard: React.FC = () => {
         </div>
       )}
 
+      <section className="pp-hero">
+        <div className="pp-hero__state">
+          <span className={`pp-pulse ${status?.status === 'running' ? '' : 'is-down'}`} />
+          <span>
+            <strong className="pp-hero__name">Palworld Dedicated Server</strong>
+            <span className="pp-hero__addr">0.0.0.0:{status?.ports?.game || 8211} · REST {status?.ports?.rest || 8212}</span>
+          </span>
+        </div>
+        <span className="pp-hero__divider" />
+        <span className="pp-hero__item">运行时间<strong>{formatUptime(metrics?.uptime)}</strong></span>
+        <span className="pp-hero__item">在线玩家<strong>{metrics?.current_players || 0} / {metrics?.max_players || 32}</strong></span>
+        <span className="pp-hero__item">Server FPS<strong>{metrics?.server_fps || 0}</strong></span>
+        <div className="pp-hero__actions">
+          <button type="button" onClick={() => void control('start')} disabled={status?.status === 'running'} className="pp-btn pp-btn--ghost pp-btn--sm"><Play size={13} />启动</button>
+          <button type="button" onClick={() => void control('stop')} disabled={status?.status !== 'running'} className="pp-btn pp-btn--danger-ghost pp-btn--sm"><Square size={13} />停止</button>
+        </div>
+      </section>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="在线玩家" value={`${metrics?.current_players || 0} / ${metrics?.max_players || 32}`} icon={<Users size={16} />} trend="来自官方 REST / 监控采样" trendType="info" color="sky" />
         <StatCard title="服务器状态" value={status?.status === 'running' ? '运行中' : '已停止'} icon={<Activity size={16} />} trend={status?.setup_step || 'prerequisites'} trendType={status?.status === 'running' ? 'up' : 'down'} color={status?.status === 'running' ? 'emerald' : 'rose'} />
@@ -262,7 +280,7 @@ export const Dashboard: React.FC = () => {
                     <XAxis dataKey="time" stroke="#8997aa" fontSize={10} tickLine={false} axisLine={false} />
                     <YAxis stroke="#8997aa" fontSize={10} tickLine={false} axisLine={false} allowDecimals={false} />
                     <Tooltip contentStyle={{ fontSize: '12px', borderRadius: '10px', border: '1px solid #dce3ec', boxShadow: '0 12px 30px -18px rgba(8,17,31,.35)' }} />
-                    <Line type="monotone" dataKey="players" name="玩家数" stroke="#18aa9a" strokeWidth={2.5} dot={false} />
+                    <Line type="monotone" dataKey="players" name="玩家数" stroke="#356a9a" strokeWidth={2.5} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
@@ -283,9 +301,9 @@ export const Dashboard: React.FC = () => {
                     <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '12px', borderRadius: '10px', border: '1px solid #dce3ec', boxShadow: '0 12px 30px -18px rgba(8,17,31,.35)' }} />
                     <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#4f7cff" fill="#dfe9ff" strokeWidth={1.5} connectNulls />
                     {hasMemoryPercent ? (
-                      <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#18aa9a" fill="#d2f7f0" strokeWidth={1.5} connectNulls />
+                      <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
                     ) : hasMemoryUsage ? (
-                      <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#18aa9a" fill="#d2f7f0" strokeWidth={1.5} connectNulls />
+                      <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
                     ) : null}
                   </AreaChart>
                 </ResponsiveContainer>

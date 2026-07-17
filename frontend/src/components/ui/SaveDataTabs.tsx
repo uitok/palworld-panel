@@ -21,7 +21,7 @@ export const SaveDataTabs: React.FC = () => (
         className={({ isActive }) =>
           `inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold transition-colors ${
             isActive
-              ? 'bg-slate-900 text-white shadow-sm'
+              ? 'bg-sky-100 text-sky-800 shadow-sm ring-1 ring-sky-200'
               : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
           }`
         }

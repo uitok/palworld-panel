@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Check, DownloadCloud, FolderDown, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { getErrorMessage } from '../api/client';
 import { schedulesApi } from '../api/schedules';
 import { tasksApi } from '../api/tasks';
@@ -11,7 +12,7 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 const scheduleTypes: Array<{ value: ScheduleType; label: string }> = [
   { value: 'save', label: '保存世界' },
   { value: 'backup', label: '创建备份' },
-  { value: 'safe_restart', label: '安全重启' },
+  { value: 'safe_restart', label: '定时安全重启' },
   { value: 'update', label: '更新服务端' },
   { value: 'version_check', label: '检查更新' },
 ];
@@ -61,6 +62,7 @@ const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC
 
 export const TaskQueue: React.FC = () => {
   const { refreshKey } = useServerStore();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -68,7 +70,9 @@ export const TaskQueue: React.FC = () => {
   const [scheduleLoading, setScheduleLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'jobs' | 'schedules' | 'alerts'>('jobs');
+  const requestedTab = searchParams.get('tab');
+  const initialTab = requestedTab === 'schedules' || requestedTab === 'alerts' ? requestedTab : 'jobs';
+  const [activeTab, setActiveTabState] = useState<'jobs' | 'schedules' | 'alerts'>(initialTab);
   const [draft, setDraft] = useState({
     type: 'backup' as ScheduleType,
     mode: 'interval' as 'interval' | 'daily',
@@ -76,7 +80,7 @@ export const TaskQueue: React.FC = () => {
     time_of_day: '04:00',
     timezone: browserTimezone,
     waittime: 60,
-    message: 'Scheduled maintenance',
+    message: '服务器即将保存并进行例行重启，请暂时停止操作。',
   });
 
   const fetchJobs = async () => {
@@ -110,6 +114,17 @@ export const TaskQueue: React.FC = () => {
     fetchJobs();
     fetchSchedulesAndAlerts();
   }, [refreshKey]);
+
+  useEffect(() => {
+    if (requestedTab === 'jobs' || requestedTab === 'schedules' || requestedTab === 'alerts') {
+      setActiveTabState(requestedTab);
+    }
+  }, [requestedTab]);
+
+  const setActiveTab = (tab: 'jobs' | 'schedules' | 'alerts') => {
+    setActiveTabState(tab);
+    setSearchParams(tab === 'jobs' ? {} : { tab });
+  };
 
   useEffect(() => {
     const hasRunning = jobs.some((job) => job.status === 'running');
@@ -425,6 +440,9 @@ const ScheduleForm: React.FC<{
   onSubmit: () => void;
 }> = ({ draft, setDraft, onSubmit }) => (
   <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+    <p className="mb-4 text-[11px] font-semibold leading-5 text-slate-500">
+      选择“定时安全重启”可在指定时间先保存世界、向在线玩家发送公告，再按倒计时重启；自动备份可在“备份与恢复”中继续配置 WebDAV 上传。
+    </p>
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
       <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
         类型
@@ -485,7 +503,7 @@ const ScheduleForm: React.FC<{
         </>
       )}
       <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
-        等待秒数
+        重启倒计时（秒）
         <input
           type="number"
           min={5}
@@ -506,7 +524,7 @@ const ScheduleForm: React.FC<{
         />
       </label>
     </div>
-    <button type="button" onClick={onSubmit} className="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800">
+    <button type="button" onClick={onSubmit} className="mt-4 rounded-xl bg-sky-600 px-4 py-2 text-xs font-bold text-white hover:bg-sky-700">
       新增计划任务
     </button>
   </div>

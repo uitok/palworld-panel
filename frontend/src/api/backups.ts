@@ -1,5 +1,5 @@
 import { apiClient, handleRequest } from './client';
-import type { BackupInfo, BackupVerifyResult, Job } from '../types';
+import type { BackupInfo, BackupVerifyResult, Job, WebDAVConfig, WebDAVConfigUpdate } from '../types';
 import { createFallbackJob, mapJob } from './tasks';
 
 const mapBackups = (raw: unknown): BackupInfo[] => {
@@ -26,6 +26,27 @@ const mapVerify = (raw: unknown): BackupVerifyResult => {
     checked_files: Number(data.checked_files || 0),
     errors: Array.isArray(data.errors) ? data.errors.map(String) : [],
   };
+};
+
+const mapWebDAVConfig = (raw: unknown): WebDAVConfig => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    enabled: Boolean(data.enabled),
+    base_url: String(data.base_url || ''),
+    username: String(data.username || ''),
+    remote_path: String(data.remote_path || 'PalPanel'),
+    upload_after_backup: Boolean(data.upload_after_backup),
+    password_configured: Boolean(data.password_configured),
+  };
+};
+
+const emptyWebDAVConfig: WebDAVConfig = {
+  enabled: false,
+  base_url: '',
+  username: '',
+  remote_path: 'PalPanel',
+  upload_after_backup: false,
+  password_configured: false,
 };
 
 export const backupsApi = {
@@ -61,6 +82,34 @@ export const backupsApi = {
       () => apiClient.delete(`/backups/${encodeURIComponent(name)}`),
       { deleted: true },
       { quiet: true, fallbackOnError: false },
+    ),
+
+  getWebDAVConfig: () =>
+    handleRequest<unknown, WebDAVConfig>(
+      () => apiClient.get('/backups/webdav/config'),
+      emptyWebDAVConfig,
+      { map: mapWebDAVConfig, quiet: true, fallbackOnError: false },
+    ),
+
+  updateWebDAVConfig: (update: WebDAVConfigUpdate) =>
+    handleRequest<unknown, WebDAVConfig>(
+      () => apiClient.put('/backups/webdav/config', update),
+      emptyWebDAVConfig,
+      { map: mapWebDAVConfig, quiet: true, fallbackOnError: false },
+    ),
+
+  testWebDAVConfig: (update: WebDAVConfigUpdate) =>
+    handleRequest<unknown, { connected: boolean }>(
+      () => apiClient.post('/backups/webdav/test', update),
+      { connected: false },
+      { quiet: true, fallbackOnError: false },
+    ),
+
+  uploadWebDAV: (name: string) =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post(`/backups/${encodeURIComponent(name)}/upload-webdav`),
+      createFallbackJob('webdav_upload', '已提交 WebDAV 上传任务'),
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
   download: (name: string) =>

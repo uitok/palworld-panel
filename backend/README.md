@@ -148,7 +148,7 @@ PALPANEL_SAVE_INDEX_CACHE_DIR=../data/save-index
 
 The sidecar is the self-developed Go `sav-cli` in `sav-cli/` and never writes back to `.sav`. Packaged launchers start it automatically with the panel. It reads per-player `Players/*.sav` files and associates `InventoryInfo` container IDs with `OwnerType=player`; a missing or damaged individual player save adds a warning while the rest of the world index continues. Unsupported world containers or schema changes are reported as `parser_incompatible`; the backend keeps the last successful cache when available and does not block other panel features.
 
-`GET /api/map/entities` combines that save snapshot with online-player data. PalDefender `WorldLocation` is preferred, with `MapLocation` as its fallback; the official Palworld REST player list remains the availability fallback when PalDefender REST is unavailable. Live data is cached for two seconds. The `/map` frontend polls on the same interval and renders a schematic SVG coordinate view without external tiles or game terrain assets. Players and bases are enabled by default, while pals and map objects are opt-in filters.
+`GET /api/map/entities` combines that save snapshot with online-player data. PalDefender `WorldLocation` is preferred, with `MapLocation` as its fallback; the official Palworld REST player list remains the availability fallback when PalDefender REST is unavailable. Live data is cached for two seconds. The `/map` frontend polls on the same interval and projects entities onto the bundled Palpagos map using the attributed community coordinate transform. Players and bases are enabled by default, while pals and map objects are opt-in filters.
 
 ## Version Checks
 
@@ -170,7 +170,8 @@ Metrics retain the existing frontend fields and additionally map `basecampnum` t
 - Authentication: `GET /api/auth/status`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET/POST/DELETE /api/auth/api-keys`
 - Status/logs/jobs: `GET /api/server/status`, `GET /api/server/version`, `POST /api/server/version/check`, `GET /api/server/metrics`, `GET /api/server/game-data`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
 - World reset: `GET /api/server/world`, `POST /api/server/world/reset`
-- Backups: `POST /api/server/backup`, `GET /api/backups`, `POST /api/backups/{name}/restore`
+- Backups: `POST /api/server/backup`, `GET /api/backups`, `POST /api/backups/{name}/restore`, `GET/PUT /api/backups/webdav/config`, `POST /api/backups/webdav/test`, `POST /api/backups/{name}/upload-webdav`
+- Schedules: `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/{id}`, `POST /api/schedules/{id}/run`; supported tasks include world save, backup, safe restart, update, and version checks
 - Audit: `GET /api/audit-logs`
 - Player access: `GET/POST/DELETE /api/players/bans`, `GET/PUT /api/players/whitelist`, `POST /api/players/{id}/kick`
 - Palworld config: `GET /api/config/palworld`, `PUT /api/config/palworld`, `GET /api/config/palworld/schema`, `POST /api/config/palworld/validate`

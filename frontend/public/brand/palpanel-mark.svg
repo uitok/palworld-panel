@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">PalPanel</title>
+  <desc id="desc">A Pal sphere inside a compact server control panel.</desc>
   <rect x="4" y="4" width="56" height="56" rx="18" fill="#F7F4EE" stroke="#303844" stroke-width="4"/>
   <path d="M18 29.5C18 20.94 24.27 14 32 14s14 6.94 14 15.5H18Z" fill="#B86C50"/>
   <path d="M18 32.5h28C46 41.06 39.73 48 32 48s-14-6.94-14-15.5Z" fill="#5D7D95"/>

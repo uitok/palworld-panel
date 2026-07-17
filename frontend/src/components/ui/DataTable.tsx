@@ -215,7 +215,7 @@ export function DataTable<T>({
                   onClick={() => pagination.onPageChange(page)}
                   className={`h-9 w-9 rounded-lg text-xs font-bold transition-colors ${
                     isActive
-                      ? 'bg-slate-900 text-white shadow-sm'
+                      ? 'bg-sky-600 text-white shadow-sm shadow-sky-600/15'
                       : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./styles/redesign/index.css";
 
 @theme {
   --font-sans: Inter, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -7,29 +8,41 @@
   --text-xs: 0.8125rem;
   --text-xs--line-height: 1.15rem;
 
-  --color-slate-50: #f7f8f4;
-  --color-slate-100: #e7e9e3;
-  --color-slate-200: #d7dcd3;
-  --color-slate-300: #c3c9c0;
-  --color-slate-400: #929a91;
-  --color-slate-500: #697169;
-  --color-slate-600: #535b53;
-  --color-slate-700: #3b423b;
-  --color-slate-800: #252b25;
-  --color-slate-900: #191d19;
-  --color-slate-950: #171b17;
+  --color-slate-50: #f7f4ee;
+  --color-slate-100: #f0ece5;
+  --color-slate-200: #e2ddd4;
+  --color-slate-300: #c9c1b5;
+  --color-slate-400: #86898d;
+  --color-slate-500: #66717e;
+  --color-slate-600: #56616d;
+  --color-slate-700: #46515e;
+  --color-slate-800: #384452;
+  --color-slate-900: #303844;
+  --color-slate-950: #29323e;
 
-  --color-sky-50: #f1f5ee;
-  --color-sky-100: #e7eee3;
-  --color-sky-200: #d1dfca;
-  --color-sky-300: #b5cbaa;
-  --color-sky-400: #99b68e;
-  --color-sky-500: #7f9f73;
-  --color-sky-600: #68875e;
-  --color-sky-700: #526c4a;
-  --color-sky-800: #40543b;
-  --color-sky-900: #344531;
-  --color-sky-950: #1d291b;
+  --color-sky-50: #edf4fa;
+  --color-sky-100: #dceaf5;
+  --color-sky-200: #bdd7ea;
+  --color-sky-300: #91bbd8;
+  --color-sky-400: #6499bd;
+  --color-sky-500: #356a9a;
+  --color-sky-600: #2b5a86;
+  --color-sky-700: #274d70;
+  --color-sky-800: #26415d;
+  --color-sky-900: #25384e;
+  --color-sky-950: #172331;
+
+  --color-emerald-50: #e9f1f8;
+  --color-emerald-100: #d9e7f3;
+  --color-emerald-200: #bad3e8;
+  --color-emerald-300: #8eb7d8;
+  --color-emerald-400: #6198c4;
+  --color-emerald-500: #3f7fb5;
+  --color-emerald-600: #2f73b7;
+  --color-emerald-700: #285d91;
+  --color-emerald-800: #294e72;
+  --color-emerald-900: #29425e;
+  --color-emerald-950: #1b2b3d;
 
   --color-blue-50: #f0f5ff;
   --color-blue-100: #dfe9ff;
@@ -345,3 +358,61 @@ a[href] {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The redesign package originally used a green/black theme. PalPanel uses a
+   warm sandstone shell with mist-blue and terracotta accents instead. */
+:root,
+html,
+body,
+#app-main,
+.breed-portal-shell {
+  background: var(--pp-bg);
+  color: var(--pp-ink);
+}
+
+::selection { background: rgba(53, 106, 154, .2); color: var(--pp-ink); }
+:where(button, a, input, select, textarea):focus-visible { outline-color: rgba(53, 106, 154, .78); }
+#app-main :where(input[type="checkbox"], input[type="radio"]) { accent-color: var(--pp-brand); }
+::-webkit-scrollbar-thumb { background: var(--pp-line-strong); background-clip: padding-box; }
+
+.breed-portal-header {
+  background: rgba(52, 73, 94, .96);
+  color: #f8f6ff;
+  box-shadow: 0 8px 30px rgba(64, 75, 86, .16);
+}
+.breed-portal-brand > span { color: #2b5a86; background: #e4edf5; }
+.breed-portal-identity { color: #e3edf5; }
+.breed-portal-identity b { background: rgba(201, 220, 235, .18); color: #f4f8fb; }
+.breed-portal-identity a { color: #eef5fa; background: rgba(255,255,255,.09); }
+.breed-portal-gate { background: var(--pp-bg); }
+.breed-portal-mark { color: var(--pp-brand-strong); background: var(--pp-brand-soft); }
+
+.top-icon-button { border-color: var(--pp-line); background: var(--pp-surface); color: var(--pp-ink-2); }
+.top-icon-button:hover { background: var(--pp-surface-2); border-color: var(--pp-line-strong); }
+.top-icon-button.accent,
+.pp-button.accent { border-color: #b9cddd; background: var(--pp-brand-soft); color: var(--pp-brand-strong); }
+.pp-card,
+.status-strip { border-color: var(--pp-line); background: var(--pp-surface); }
+.pp-card-head { border-color: var(--pp-line); color: var(--pp-ink-2); }
+.pp-card-head h2,
+.server-hero h2,
+.status-strip .metric strong { color: var(--pp-ink); }
+.pp-card-head p,
+.server-hero p,
+.status-strip .metric > span:last-child { color: var(--pp-ink-3); }
+
+.source-row.active { border-left-color: var(--pp-brand); background: var(--pp-brand-soft); }
+.source-icon { border-color: var(--pp-line); color: var(--pp-brand); }
+.file-drop { border-color: #b9cddd; background: #eef4f8; color: var(--pp-brand-strong); }
+.field-label input:focus,
+.field-label select:focus,
+.panel-search:focus { border-color: var(--pp-brand); box-shadow: 0 0 0 3px var(--pp-brand-ring); }
+.target-queue,
+.job-progress { background: var(--pp-surface-3); }
+.target-queue article > span,
+.selected-passives button,
+.passive-row button.on,
+.result-list button.active { background: var(--pp-brand-soft); color: var(--pp-brand-strong); }
+.job-progress i { background: var(--pp-brand); }
+.tree-node { border-left-color: var(--pp-brand); }
+.state-pill.ok { background: var(--pp-ok-soft); color: var(--pp-ok); }

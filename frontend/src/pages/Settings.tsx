@@ -343,7 +343,7 @@ export const Settings: React.FC = () => {
                   onClick={() => setActiveGroup(group.id)}
                   className={`shrink-0 rounded-xl px-4 py-3 text-left text-xs font-bold transition-all ${
                     activeGroup === group.id
-                      ? 'bg-slate-900 text-white'
+                      ? 'bg-sky-100 text-sky-800 ring-1 ring-sky-200'
                       : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
                   }`}
                 >

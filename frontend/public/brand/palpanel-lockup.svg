@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 112" role="img" aria-labelledby="title desc">
+  <title id="title">PalPanel</title>
+  <desc id="desc">PalPanel server control logo.</desc>
+  <g transform="translate(8 8)">
+    <rect x="4" y="4" width="88" height="88" rx="28" fill="#F7F4EE" stroke="#303844" stroke-width="6"/>
+    <path d="M26 44C26 30.19 35.85 19 48 19s22 11.19 22 25H26Z" fill="#B86C50"/>
+    <path d="M26 49h44c0 13.81-9.85 25-22 25S26 62.81 26 49Z" fill="#5D7D95"/>
+    <rect x="23" y="40" width="50" height="14" rx="7" fill="#F7F4EE" stroke="#303844" stroke-width="5"/>
+    <circle cx="48" cy="47" r="9" fill="#F7F4EE" stroke="#303844" stroke-width="5"/>
+    <circle cx="48" cy="47" r="3" fill="#B86C50"/>
+    <circle cx="27" cy="82" r="3" fill="#B86C50"/>
+    <path d="M39 82h31" stroke="#303844" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <text x="124" y="57" fill="#303844" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="42" font-weight="750" letter-spacing="-.8">PalPanel</text>
+  <text x="126" y="82" fill="#66717E" font-family="ui-monospace,Consolas,monospace" font-size="13" font-weight="600" letter-spacing="3.2">SERVER CONTROL</text>
+  <path d="M126 92h210" stroke="#DDD6CB" stroke-width="2"/>
+  <circle cx="350" cy="92" r="4" fill="#B86C50"/>
+</svg>

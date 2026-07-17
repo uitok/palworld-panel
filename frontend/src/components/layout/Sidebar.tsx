@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { Compass, LogOut, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
+import { ChevronDown, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useServerStore } from '../../store/useServerStore';
-import { navGroups } from '../../routes';
+import { appRoutes, type AppRoute } from '../../routes';
 import { appConfig } from '../../config/defaults';
 
 interface SidebarProps {
@@ -10,157 +10,186 @@ interface SidebarProps {
   onNavigate?: () => void;
 }
 
+const formatUptime = (seconds?: number) => {
+  if (!seconds) return '—';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  return days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+};
+
+interface SidebarEntry {
+  id: string;
+  label: string;
+  routeIDs: string[];
+}
+
+const sidebarGroups: Array<{ id: string; title: string; entries: SidebarEntry[] }> = [
+  { id: 'setup', title: '开始', entries: [{ id: 'setup', label: '开服向导', routeIDs: ['setup'] }] },
+  { id: 'workspace', title: '工作台', entries: [{ id: 'server-center', label: '服务器中心', routeIDs: ['dashboard', 'monitor'] }] },
+  {
+    id: 'world',
+    title: '世界管理',
+    entries: [
+      { id: 'players-world', label: '玩家与世界', routeIDs: ['player-center', 'world-archive'] },
+      { id: 'saves-breeding', label: '存档管理工具', routeIDs: ['save-sources', 'pal-inventory', 'breeding', 'live-map'] },
+      { id: 'mods', label: 'Mod 管理', routeIDs: ['mods'] },
+    ],
+  },
+  {
+    id: 'system',
+    title: '运维与安全',
+    entries: [
+      { id: 'backup-tasks', label: '备份计划', routeIDs: ['backups', 'tasks'] },
+      { id: 'security-audit', label: '安全与审计', routeIDs: ['security', 'banlist', 'audit'] },
+      { id: 'settings', label: '系统设置', routeIDs: ['settings'] },
+    ],
+  },
+];
+
+const routesByID = new Map(appRoutes.map((route) => [route.id, route]));
+
+const routeIsActive = (route: AppRoute, currentPath: string) =>
+  currentPath === route.path || Boolean(route.activePaths?.includes(currentPath));
+
 export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) => {
-  const { isSidebarCollapsed, setIsSidebarCollapsed, session, logout } = useServerStore();
+  const { isSidebarCollapsed, setIsSidebarCollapsed, session, logout, status, metrics } = useServerStore();
   const location = useLocation();
-  const [query, setQuery] = React.useState('');
   const collapsed = !mobile && isSidebarCollapsed;
   const currentPath = location.pathname.replace(/\/+$/, '') || '/';
-  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN');
-  const visibleGroups = React.useMemo(
-    () =>
-      navGroups
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => {
-            if (!normalizedQuery) return true;
-            return `${item.navLabel} ${item.title} ${item.id}`.toLocaleLowerCase('zh-CN').includes(normalizedQuery);
-          }),
-        }))
-        .filter((group) => group.items.length > 0),
-    [normalizedQuery],
-  );
+  const running = status?.status === 'running';
+  const online = metrics?.current_players || 0;
+  const capacity = metrics?.max_players || 32;
+  const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const activeEntry = sidebarGroups
+      .flatMap((group) => group.entries)
+      .find((entry) => entry.routeIDs.some((routeID) => {
+        const route = routesByID.get(routeID);
+        return route ? routeIsActive(route, currentPath) : false;
+      }));
+    if (activeEntry && activeEntry.routeIDs.length > 1) {
+      setExpandedEntries((current) => {
+        if (current.has(activeEntry.id)) return current;
+        const next = new Set(current);
+        next.add(activeEntry.id);
+        return next;
+      });
+    }
+  }, [currentPath]);
+
+  const toggleEntry = (entryID: string) => {
+    setExpandedEntries((current) => {
+      const next = new Set(current);
+      if (next.has(entryID)) next.delete(entryID);
+      else next.add(entryID);
+      return next;
+    });
+  };
 
   return (
-    <aside
-      className={`relative flex h-full shrink-0 flex-col overflow-hidden bg-slate-950 text-white transition-[width] duration-300 ${
-        mobile ? 'w-full max-w-[300px]' : collapsed ? 'w-[72px]' : 'w-56'
-      }`}
-    >
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-48 bg-[radial-gradient(circle_at_top_left,rgba(57,200,184,0.16),transparent_68%)]" />
-
-      <div className={`relative flex items-center border-b border-white/[0.08] ${collapsed ? 'flex-col gap-3 px-3 py-4' : 'justify-between px-4 py-4'}`}>
-        <NavLink
-          to="/dashboard"
-          onClick={onNavigate}
-          className={`flex min-w-0 items-center ${collapsed ? 'justify-center' : 'gap-3'}`}
-          aria-label={`${appConfig.brand} 总览`}
-        >
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 text-white shadow-lg shadow-sky-950/25 ring-1 ring-white/15">
-            <Compass size={20} strokeWidth={2.2} />
-          </span>
-          {!collapsed && (
-            <span className="min-w-0">
-              <strong className="block truncate text-[15px] font-bold tracking-tight text-white">{appConfig.brand}</strong>
-              <span className="block truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                Server control
-              </span>
-            </span>
-          )}
+    <aside className={`pp-rail ${mobile ? 'is-mobile' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
+      <div className="pp-brandmark">
+        <NavLink to="/dashboard" onClick={onNavigate} className="pp-brandmark__logo" aria-label={`${appConfig.brand} 总览`}>
+          <img src="/brand/palpanel-mark.svg" alt="" width="32" height="32" />
         </NavLink>
-
+        <NavLink to="/dashboard" onClick={onNavigate} className="pp-brandmark__copy" aria-hidden={collapsed}>
+          <span className="pp-brandmark__name">{appConfig.brand}</span>
+          <span className="pp-brandmark__tag">dev · server control</span>
+        </NavLink>
         {!mobile && (
           <button
             type="button"
             onClick={() => setIsSidebarCollapsed(!collapsed)}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/[0.08] hover:text-white"
+            className="pp-rail-toggle"
             title={collapsed ? '展开侧边栏' : '收起侧边栏'}
             aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
           >
-            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+            {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
           </button>
         )}
       </div>
 
-      <div className="relative flex min-h-0 flex-1 flex-col px-3 py-4">
-        {!collapsed && (
-          <div className="relative mb-4">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={15} />
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索功能"
-              aria-label="搜索功能"
-              className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.055] pl-9 pr-9 text-xs font-medium text-white outline-none placeholder:text-slate-500 hover:bg-white/[0.075] focus:border-sky-400/60 focus:bg-white/[0.08] focus:ring-2 focus:ring-sky-400/10"
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery('')}
-                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 hover:bg-white/[0.08] hover:text-white"
-                aria-label="清除搜索"
-              >
-                <X size={14} />
-              </button>
-            )}
+      <nav className="pp-nav" aria-label="主导航">
+        {sidebarGroups.map((group) => (
+          <React.Fragment key={group.id}>
+            <div className="pp-nav__group">{group.title}</div>
+            {group.entries.map((entry) => {
+              const routes = entry.routeIDs.map((routeID) => routesByID.get(routeID)).filter((route): route is AppRoute => Boolean(route));
+              const primaryRoute = routes[0];
+              if (!primaryRoute) return null;
+              const active = routes.some((route) => routeIsActive(route, currentPath));
+              if (routes.length === 1 || collapsed) {
+                return (
+                  <NavLink
+                    key={entry.id}
+                    to={primaryRoute.path}
+                    onClick={onNavigate}
+                    title={collapsed ? entry.label : undefined}
+                    className={`pp-nav__item ${active ? 'is-active' : ''}`}
+                  >
+                    {primaryRoute.icon}
+                    <span className="pp-nav__label pp-truncate">{entry.label}</span>
+                  </NavLink>
+                );
+              }
+
+              const expanded = expandedEntries.has(entry.id);
+              return (
+                <React.Fragment key={entry.id}>
+                  <button
+                    type="button"
+                    onClick={() => toggleEntry(entry.id)}
+                    className={`pp-nav__item pp-nav__item--cluster ${active ? 'is-active' : ''}`}
+                    aria-expanded={expanded}
+                  >
+                    {primaryRoute.icon}
+                    <span className="pp-nav__label pp-truncate">{entry.label}</span>
+                    <ChevronDown size={14} className={`pp-nav__chevron ${expanded ? 'is-open' : ''}`} />
+                  </button>
+                  {expanded && (
+                    <div className="pp-nav__sub">
+                      {routes.map((route) => (
+                        <NavLink
+                          key={route.id}
+                          to={route.path}
+                          onClick={onNavigate}
+                          className={`pp-nav__subitem ${routeIsActive(route, currentPath) ? 'is-active' : ''}`}
+                        >
+                          {route.navLabel}
+                        </NavLink>
+                      ))}
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </nav>
+
+      {!collapsed && (
+        <section className="pp-heartbeat" aria-label="服务器心跳">
+          <div className="pp-heartbeat__top">
+            <span className={`pp-pulse ${running ? '' : 'is-down'}`} />
+            <span className="pp-heartbeat__label">服务器心跳</span>
+            <span className="pp-heartbeat__state">{running ? '运行中' : '已停止'}</span>
           </div>
-        )}
-
-        <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pr-1" aria-label="主导航">
-          {visibleGroups.map((group) => (
-            <div key={group.id} className="flex flex-col gap-1.5">
-              {!collapsed ? (
-                <span className="px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{group.title}</span>
-              ) : (
-                <div className="mx-2 my-1 h-px bg-white/[0.08]" />
-              )}
-
-              <div className="flex flex-col gap-1">
-                {group.items.map((item) => {
-                  const routeActive = currentPath === item.path || item.activePaths?.includes(currentPath);
-                  return (
-                    <NavLink
-                      key={item.id}
-                      to={item.path}
-                      title={collapsed ? item.navLabel : undefined}
-                      onClick={onNavigate}
-                      className={`group relative flex min-h-10 items-center overflow-hidden rounded-xl text-left text-[13px] font-semibold transition-colors ${
-                        collapsed ? 'justify-center px-2.5 py-2' : 'gap-3 px-3 py-2.5'
-                      } ${
-                        routeActive
-                          ? 'bg-white text-slate-950 shadow-[0_10px_26px_-16px_rgba(0,0,0,0.85)]'
-                          : 'text-slate-300 hover:bg-white/[0.065] hover:text-white'
-                      }`}
-                    >
-                      {routeActive && <span className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-sky-500" />}
-                      <span className={`shrink-0 transition-colors ${routeActive ? 'text-sky-600' : 'text-slate-500 group-hover:text-slate-200'}`}>
-                        {item.icon}
-                      </span>
-                      {!collapsed && <span className="truncate">{item.navLabel}</span>}
-                    </NavLink>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-
-          {!collapsed && visibleGroups.length === 0 && (
-            <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs font-medium leading-5 text-slate-500">
-              没有找到相关功能
-            </div>
-          )}
-        </nav>
-      </div>
-
-      <div className={`relative border-t border-white/[0.08] p-3 ${collapsed ? 'flex flex-col items-center gap-2' : 'flex items-center gap-3'}`}>
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.08] text-xs font-bold text-sky-300 ring-1 ring-white/[0.08]">
-          {(session?.name || appConfig.brand).slice(0, 2).toUpperCase()}
-        </div>
-        {!collapsed && (
-          <div className="min-w-0 flex-1">
-            <h4 className="truncate text-xs font-semibold text-white">{session?.name || 'Admin'}</h4>
-            <p className="truncate text-[10px] font-medium text-slate-500">管理员会话</p>
+          <div className="pp-heartbeat__meta">
+            <span><strong>{online}/{capacity}</strong>在线</span>
+            <span className="pp-right"><strong>{formatUptime(metrics?.uptime)}</strong>运行时间</span>
           </div>
-        )}
-        <button
-          type="button"
-          onClick={() => void logout()}
-          title="退出登录"
-          aria-label="退出登录"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-rose-500/10 hover:text-rose-300"
-        >
-          <LogOut size={16} />
+        </section>
+      )}
+
+      <div className="pp-rail-account">
+        <span className="pp-rail-account__avatar">{(session?.name || appConfig.brand).slice(0, 2).toUpperCase()}</span>
+        <span className="pp-rail-account__copy">
+          <strong>{session?.name || 'Admin'}</strong>
+          <span>管理员会话</span>
+        </span>
+        <button type="button" onClick={() => void logout()} className="pp-rail-account__logout" title="退出登录" aria-label="退出登录">
+          <LogOut size={15} />
         </button>
       </div>
     </aside>

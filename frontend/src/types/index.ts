@@ -451,6 +451,25 @@ export interface BackupInfo {
   status?: string;
 }
 
+export interface WebDAVConfig {
+  enabled: boolean;
+  base_url: string;
+  username: string;
+  remote_path: string;
+  upload_after_backup: boolean;
+  password_configured: boolean;
+}
+
+export interface WebDAVConfigUpdate {
+  enabled?: boolean;
+  base_url?: string;
+  username?: string;
+  password?: string;
+  clear_password?: boolean;
+  remote_path?: string;
+  upload_after_backup?: boolean;
+}
+
 export interface BackupVerifyResult {
   name: string;
   valid: boolean;

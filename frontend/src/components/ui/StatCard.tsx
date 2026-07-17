@@ -21,7 +21,7 @@ const iconTones: Record<string, string> = {
 const trendTones: Record<NonNullable<StatCardProps['trendType']>, string> = {
   up: 'text-emerald-700',
   down: 'text-rose-700',
-  info: 'text-blue-700',
+  info: 'text-slate-700',
   neutral: 'text-slate-500',
 };
 
@@ -36,21 +36,20 @@ export const StatCard: React.FC<StatCardProps> = ({
   const TrendIcon = trendType === 'up' ? ArrowUpRight : trendType === 'down' ? ArrowDownRight : Minus;
 
   return (
-    <div className="relative flex min-h-[150px] flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
-      <span className="absolute inset-x-5 top-0 h-0.5 rounded-b-full bg-gradient-to-r from-sky-400/70 via-blue-400/30 to-transparent" />
+    <div className="pp-card relative flex min-h-[132px] flex-col justify-between p-4 sm:p-5">
       <div className="flex items-start justify-between gap-4">
-        <span className="text-[13px] font-semibold leading-5 text-slate-500">{title}</span>
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${iconTones[color] || iconTones.sky}`}>
+        <span className="text-[12px] font-semibold leading-5 text-slate-500">{title}</span>
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${iconTones[color] || iconTones.sky}`}>
           {icon}
         </span>
       </div>
 
-      <div className="mt-5 min-w-0">
-        <strong className="block truncate text-[28px] font-bold leading-none tracking-[-0.035em] text-slate-900 sm:text-[30px]">
+      <div className="mt-4 min-w-0">
+        <strong className="pp-num block truncate text-[26px] font-bold leading-none tracking-[-0.035em] text-slate-900 sm:text-[28px]">
           {value}
         </strong>
         {trend && (
-          <span className={`mt-3 flex min-w-0 items-center gap-1.5 text-xs font-semibold ${trendTones[trendType]}`}>
+          <span className={`mt-2.5 flex min-w-0 items-center gap-1.5 text-[11px] font-semibold ${trendTones[trendType]}`}>
             <TrendIcon size={13} className="shrink-0" />
             <span className="truncate">{trend}</span>
           </span>

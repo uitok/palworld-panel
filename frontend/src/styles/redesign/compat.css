@@ -1,0 +1,163 @@
+/* Existing PalPanel pages keep their data and behavior while inheriting the redesign. */
+.pp-shell {
+  display: flex;
+  min-height: 100dvh;
+  background: var(--pp-bg);
+}
+
+.pp-shell__content {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--pp-bg);
+}
+
+.pp-topbar {
+  flex: none;
+  border-bottom: 1px solid var(--pp-line);
+  background: color-mix(in srgb, var(--pp-bg) 94%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.pp-topbar__inner {
+  width: min(100%, calc(var(--pp-content-max) + 56px));
+  min-height: 82px;
+  margin: 0 auto;
+  padding: 16px 28px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.pp-topbar__eyebrow {
+  color: var(--pp-ink-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.pp-topbar__title {
+  margin-top: 3px;
+  color: var(--pp-ink);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -.035em;
+}
+
+.pp-topbar__actions { display: flex; align-items: center; gap: 8px; }
+
+.pp-rail.is-collapsed { width: 72px; }
+.pp-rail.is-mobile { width: 100%; }
+.pp-rail.is-collapsed .pp-brandmark { justify-content: center; padding-inline: 10px; }
+.pp-rail.is-collapsed .pp-brandmark__copy,
+.pp-rail.is-collapsed .pp-nav__group,
+.pp-rail.is-collapsed .pp-nav__label,
+.pp-rail.is-collapsed .pp-nav__badge,
+.pp-rail.is-collapsed .pp-heartbeat,
+.pp-rail.is-collapsed .pp-rail-account__copy { display: none; }
+.pp-rail.is-collapsed .pp-nav__item { justify-content: center; padding-inline: 8px; }
+
+.pp-rail-toggle {
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--pp-rail-ink-dim);
+}
+.pp-rail-toggle:hover { color: var(--pp-ink); background: var(--pp-rail-2); }
+.pp-rail.is-collapsed .pp-rail-toggle { position: absolute; top: 58px; margin: 0; }
+
+.pp-rail-account {
+  margin: 0 12px 14px;
+  padding: 10px 8px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-top: 1px solid var(--pp-rail-line);
+}
+.pp-rail-account__avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--pp-brand-soft);
+  color: var(--pp-rail-accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.pp-rail-account__copy { min-width: 0; flex: 1; }
+.pp-rail-account__copy strong,
+.pp-rail-account__copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-rail-account__copy strong { color: var(--pp-ink); font-size: 12px; }
+.pp-rail-account__copy span { color: var(--pp-rail-ink-dim); font-size: 10px; }
+.pp-rail-account__logout { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; color: var(--pp-rail-ink-dim); }
+.pp-rail-account__logout:hover { color: #ffb4ae; background: rgba(204,75,68,.12); }
+.pp-brandmark a:hover,
+.pp-rail a:hover { text-decoration: none; }
+
+#app-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--pp-bg);
+}
+
+#app-main > div {
+  width: 100%;
+  max-width: calc(var(--pp-content-max) + 56px);
+  margin-inline: auto;
+}
+
+#app-main :where(section, article, div).bg-white:where(.rounded-lg, .rounded-xl, .rounded-2xl, .rounded-3xl) {
+  border-color: var(--pp-line);
+  background: var(--pp-surface);
+  box-shadow: none;
+}
+
+#app-main :where(input, select, textarea) {
+  border-color: var(--pp-line);
+}
+
+#app-main :where(input, select, textarea):focus {
+  border-color: var(--pp-brand);
+  box-shadow: 0 0 0 3px var(--pp-brand-ring);
+}
+
+#app-main :where(table) thead { background: var(--pp-surface-2); }
+#app-main :where(table) tbody tr:hover { background: var(--pp-surface-2); }
+
+.pp-mobile-actions {
+  border-top: 1px solid var(--pp-line);
+  background: color-mix(in srgb, var(--pp-surface) 96%, transparent);
+  box-shadow: 0 -12px 30px -24px rgba(64,75,86,.4);
+  backdrop-filter: blur(16px);
+}
+
+.pp-dialog-backdrop { background: rgba(48,56,68,.5); backdrop-filter: blur(3px); }
+.pp-dialog-panel { border: 1px solid var(--pp-line); background: var(--pp-surface); box-shadow: var(--pp-shadow-pop); }
+
+.pp-login-card {
+  width: min(390px, 100%);
+  padding: 30px 28px 26px;
+  border: 1px solid var(--pp-line);
+  border-radius: 18px;
+  background: var(--pp-surface);
+}
+
+@media (max-width: 1023px) {
+  .pp-topbar { position: sticky; top: 0; z-index: 30; }
+  .pp-topbar__inner { min-height: 66px; padding: 10px 14px; }
+  .pp-topbar__title { font-size: 19px; }
+}
+
+@media (max-width: 640px) {
+  .pp-topbar__actions .pp-button span { display: none; }
+  .pp-topbar__actions .pp-button { width: 36px; min-height: 36px; padding: 0; }
+}

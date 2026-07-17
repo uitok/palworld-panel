@@ -397,7 +397,7 @@ export const Mods: React.FC = () => {
 				type="button"
 				onClick={() => setActiveTab(tab.id)}
 				className={`shrink-0 rounded-md px-4 py-2 text-xs font-bold transition-all ${
-				  active ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+				  active ? 'bg-sky-100 text-sky-800 ring-1 ring-sky-200' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
 				}`}
 			  >
 				{tab.label}

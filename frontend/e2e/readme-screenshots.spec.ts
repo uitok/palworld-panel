@@ -173,6 +173,36 @@ const installAdminBackend = async (page: Page) => {
           active_status: saveStatus,
         };
         break;
+      case '/api/map/entities':
+        data = {
+          status: saveStatus,
+          summary: { total: 5, returned: 5, truncated: false },
+          live: { available: true, source: 'paldefender', online_players: 2, refreshed_at: '2026-07-16T09:18:10+08:00' },
+          entities: [
+            { type: 'player', id: 'player-01', label: 'Cattiva', x: 11200, y: -48600, z: 320, is_online: true, live: true, ping: 38, level: 54 },
+            { type: 'player', id: 'player-02', label: 'Lamball', x: -35600, y: -91200, z: 180, is_online: true, live: true, ping: 52, level: 49 },
+            { type: 'base', id: 'base-01', label: '火山基地', x: -42100, y: -25800, z: 540, guild_name: '帕鲁研究所' },
+            { type: 'base', id: 'base-02', label: '雪山据点', x: 68900, y: 31300, z: 780, guild_name: '帕鲁研究所' },
+            { type: 'map_object', id: 'object-01', label: '传送点', x: 29800, y: -7200, z: 210 },
+          ],
+        };
+        break;
+      case '/api/backups':
+        data = [
+          { name: '20260716T091800.000000000Z-scheduled.zip', path: 'data/backups/20260716T091800.000000000Z-scheduled.zip', size_bytes: 1288490188, created_at: '2026-07-16T09:18:00+08:00', reason: 'scheduled', status: 'available' },
+          { name: '20260715T230000.000000000Z-manual.zip', path: 'data/backups/20260715T230000.000000000Z-manual.zip', size_bytes: 1195376640, created_at: '2026-07-15T23:00:00+08:00', reason: 'manual', status: 'available' },
+        ];
+        break;
+      case '/api/backups/webdav/config':
+        data = {
+          enabled: true,
+          base_url: 'https://dav.example.com/remote.php/dav/files/palpanel',
+          username: 'palpanel-backup',
+          remote_path: 'PalPanel/server-01',
+          upload_after_backup: true,
+          password_configured: true,
+        };
+        break;
       case '/api/breeding/catalog':
         data = breedingCatalog;
         break;
@@ -249,7 +279,7 @@ test.describe('README screenshots', () => {
 
     await page.goto('/dashboard');
     await expect(page.getByText('在线人数与系统负载')).toBeVisible();
-    await expect(page.getByText('6 / 32')).toBeVisible();
+    await expect(page.getByText('6 / 32').first()).toBeVisible();
     await waitForFontsAndMotion(page);
     await page.screenshot({ path: '../docs/images/dashboard-new.png', animations: 'disabled' });
 
@@ -266,6 +296,18 @@ test.describe('README screenshots', () => {
     await page.locator('.passive-row').filter({ hasText: '传说' }).getByRole('button', { name: '必需' }).click();
     await waitForFontsAndMotion(page);
     await page.screenshot({ path: '../docs/images/breeding-lab-new.png', animations: 'disabled' });
+
+    await page.goto('/map');
+    await expect(page.getByRole('heading', { name: 'Palpagos 实时地图' })).toBeVisible();
+    await expect(page.getByText('火山基地')).toBeVisible();
+    await waitForFontsAndMotion(page);
+    await page.screenshot({ path: '../docs/images/live-map-new.png', animations: 'disabled', fullPage: true });
+
+    await page.goto('/backups');
+    await expect(page.getByRole('heading', { name: 'WebDAV 自动归档' })).toBeVisible();
+    await expect(page.locator('input[value="PalPanel/server-01"]')).toBeVisible();
+    await waitForFontsAndMotion(page);
+    await page.screenshot({ path: '../docs/images/backups-webdav-new.png', animations: 'disabled', fullPage: true });
   });
 
   test('captures the QQ breeding client on mobile', async ({ page }) => {

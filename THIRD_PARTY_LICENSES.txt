@@ -72,6 +72,15 @@ Runtime community icon references
   Referencing a remote image does not relicense that artwork under PalPanel's
   GPL.
 
+Palworld map visualization
+--------------------------
+- The 2048x2048 Palpagos map image under frontend/public/assets/maps is
+  derived from Kregap/palworld-map and distributed with its MIT notice.
+- The world-coordinate projection follows fa0311/palworld-map, licensed MIT.
+- Palworld, its map imagery, names, and artwork remain property of Pocketpair,
+  Inc. They are used only as an in-panel visualization and are not relicensed
+  under PalPanel's GPL.
+
 The release SBOM provides the exact package/version inventory. Corresponding
 license texts remain available from each dependency's source distribution and
 are preserved in the sav-cli vendored source archive where required by GPL.

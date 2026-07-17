@@ -1,0 +1,94 @@
+/* ============================================================
+   PalPanel 设计令牌 · 「暖砂雾蓝」主题
+   ------------------------------------------------------------
+   全部视觉决策集中在此文件。改配色 / 圆角 / 字体只动这里。
+   命名前缀 --pp- 避免与现有样式冲突。
+   ============================================================ */
+
+:root {
+  /* ---------- 字体 ---------- */
+  --pp-font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Segoe UI", system-ui, sans-serif;
+  --pp-font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  --pp-text-xs: 12px;
+  --pp-text-sm: 13px;
+  --pp-text-md: 14px;   /* 正文基准 */
+  --pp-text-lg: 16px;
+  --pp-text-xl: 20px;
+  --pp-text-2xl: 26px;  /* 统计大数字 */
+
+  /* ---------- 中性色（暖象牙内容区） ---------- */
+  --pp-bg: #f7f4ee;
+  --pp-surface: #ffffff;       /* 卡片 */
+  --pp-surface-2: #faf8f4;     /* 表头 / 嵌套区域 */
+  --pp-surface-3: #f0ece5;     /* 输入框底 / hover */
+  --pp-line: #e2ddd4;          /* 常规边框 */
+  --pp-line-strong: #c9c1b5;   /* 强调边框 */
+
+  --pp-ink: #303844;
+  --pp-ink-2: #66717e;
+  --pp-ink-3: #6a7480;
+
+  /* ---------- 品牌色（雾霾蓝） ---------- */
+  --pp-brand: #356a9a;
+  --pp-brand-strong: #2b5a86;
+  --pp-brand-soft: #e4edf5;
+  --pp-brand-ring: rgba(53, 106, 154, 0.22);
+
+  /* ---------- 浅色侧栏（暖砂岩） ---------- */
+  --pp-rail: #ece6dc;
+  --pp-rail-2: #e2d9cc;
+  --pp-rail-active: #d9e5f0;
+  --pp-rail-line: rgba(70, 78, 88, 0.14);
+  --pp-rail-ink: #4b5563;
+  --pp-rail-ink-dim: #5f6468;
+  --pp-rail-accent: #356a9a;
+
+  /* ---------- 语义色 ---------- */
+  --pp-ok: #2f73b7;
+  --pp-ok-soft: #e5eff8;
+  --pp-warn: #9a6500;
+  --pp-warn-soft: #f8edd2;
+  --pp-danger: #b85443;
+  --pp-danger-soft: #f8e8e4;
+  --pp-info: #4c7ea8;
+  --pp-info-soft: #e7eef4;
+
+  /* ---------- 日志 / 终端 ---------- */
+  --pp-term-bg: #34495e;
+  --pp-term-ink: #e8f0f7;
+  --pp-term-dim: #afc0cf;
+
+  /* ---------- 几何 ---------- */
+  --pp-radius-sm: 6px;
+  --pp-radius: 10px;      /* 控件 */
+  --pp-radius-lg: 14px;   /* 卡片 */
+  --pp-radius-pill: 999px;
+
+  --pp-gap-1: 4px;
+  --pp-gap-2: 8px;
+  --pp-gap-3: 12px;
+  --pp-gap-4: 16px;
+  --pp-gap-5: 20px;
+  --pp-gap-6: 24px;
+  --pp-gap-8: 32px;
+
+  --pp-rail-w: 236px;     /* 侧栏宽度 */
+  --pp-content-max: 1180px;
+
+  /* ---------- 阴影（克制：默认靠边框，浮层才用影） ---------- */
+  --pp-shadow-pop: 0 8px 28px rgba(64, 75, 86, 0.16);
+  --pp-shadow-card-hover: 0 2px 10px rgba(64, 75, 86, 0.08);
+
+  /* ---------- 动效 ---------- */
+  --pp-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --pp-dur: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --pp-dur: 0ms; }
+  * { animation: none !important; transition: none !important; }
+}

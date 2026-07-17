@@ -74,12 +74,12 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   return (
     <div className="min-h-dvh w-full font-sans text-slate-800">
-      <div className="relative mx-auto flex min-h-dvh w-full overflow-hidden bg-slate-50 lg:h-dvh lg:min-h-0">
+      <div className="pp-shell relative overflow-hidden lg:h-dvh lg:min-h-0">
         <div className="hidden lg:block">
           <Sidebar />
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="pp-shell__content">
           <Header
             onMenuClick={() => setMobileNavOpen(true)}
             onAnnounceClick={() => setAnnounceOpen(true)}
@@ -87,9 +87,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             onRestartClick={() => setRestartOpen(true)}
           />
 
-          <main id="app-main" className="min-h-0 flex-1 overflow-y-auto">{children}</main>
+          <main id="app-main">{children}</main>
 
-          <div className="shrink-0 border-t border-slate-200/80 bg-white/92 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 shadow-[0_-14px_34px_-24px_rgba(8,17,31,0.55)] backdrop-blur-xl lg:hidden">
+          <div className="pp-mobile-actions shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 lg:hidden">
             <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
               <button
                 type="button"
@@ -125,10 +125,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           <button
             type="button"
             aria-label="关闭导航"
-            className="absolute inset-0 bg-slate-950/62 backdrop-blur-[3px]"
+            className="pp-dialog-backdrop absolute inset-0"
             onClick={() => setMobileNavOpen(false)}
           />
-          <div className="absolute bottom-0 left-0 top-0 w-[86vw] max-w-[320px] shadow-2xl">
+          <div className="absolute bottom-0 left-0 top-0 w-[86vw] max-w-[300px] shadow-2xl">
             <Sidebar mobile onNavigate={() => setMobileNavOpen(false)} />
           </div>
         </div>
@@ -241,12 +241,12 @@ const Dialog: React.FC<React.PropsWithChildren<{ title: string; onClose: () => v
   onClose,
   children,
 }) => (
-  <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/62 p-0 backdrop-blur-[3px] sm:items-center sm:p-4">
+  <div className="pp-dialog-backdrop fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
     <div
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      className="animate-scale-up max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-2xl sm:p-6"
+      className="pp-dialog-panel animate-scale-up max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-2xl p-5 sm:rounded-2xl sm:p-6"
     >
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-base font-bold text-slate-900">{title}</h3>
@@ -268,12 +268,12 @@ const ConfirmDialog: React.FC<{
   onCancel: () => void;
   onConfirm: () => void;
 }> = ({ icon, title, description, confirmText, confirmClass, onCancel, onConfirm }) => (
-  <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/62 p-0 backdrop-blur-[3px] sm:items-center sm:p-4">
+  <div className="pp-dialog-backdrop fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
     <div
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      className="animate-scale-up w-full max-w-sm rounded-t-2xl border border-slate-200 bg-white p-6 text-center shadow-2xl sm:rounded-2xl"
+      className="pp-dialog-panel animate-scale-up w-full max-w-sm rounded-t-2xl p-6 text-center sm:rounded-2xl"
     >
       <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-sky-50 text-sky-500">
         {icon}

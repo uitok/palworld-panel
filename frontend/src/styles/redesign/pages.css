@@ -1,0 +1,173 @@
+/* ============================================================
+   pages.css — 页面级样式
+   ============================================================ */
+
+/* ---------------- 登录页 ---------------- */
+
+.pp-login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(1100px 500px at 80% -10%, rgba(53, 106, 154, 0.12), transparent 60%),
+    radial-gradient(900px 480px at -10% 110%, rgba(184, 84, 67, 0.07), transparent 55%),
+    var(--pp-bg);
+  padding: 24px;
+}
+.pp-login__card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--pp-surface);
+  border: 1px solid var(--pp-line);
+  border-radius: 18px;
+  padding: 30px 28px 26px;
+}
+.pp-login__logo {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: var(--pp-ink-2);
+  margin-bottom: 14px;
+}
+.pp-login__logo img { width: 44px; height: 44px; display: block; }
+.pp-login__title { font-size: 19px; font-weight: 700; }
+.pp-login__sub { font-size: var(--pp-text-sm); color: var(--pp-ink-2); margin: 4px 0 20px; }
+.pp-login__form { display: flex; flex-direction: column; gap: 14px; }
+.pp-login__foot {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--pp-line);
+  font-size: var(--pp-text-xs);
+  color: var(--pp-ink-3);
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--pp-font-mono);
+}
+
+/* ---------------- 仪表盘：心跳条 ---------------- */
+
+.pp-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: var(--pp-surface);
+  border: 1px solid var(--pp-line);
+  border-radius: var(--pp-radius-lg);
+  padding: 14px 18px;
+  margin-bottom: var(--pp-gap-4);
+  flex-wrap: wrap;
+}
+.pp-hero__state { display: flex; align-items: center; gap: 10px; }
+.pp-hero__state .pp-pulse { width: 11px; height: 11px; }
+.pp-hero__name { font-weight: 700; font-size: var(--pp-text-lg); }
+.pp-hero__addr { font-family: var(--pp-font-mono); font-size: var(--pp-text-xs); color: var(--pp-ink-3); }
+.pp-hero__divider { width: 1px; align-self: stretch; background: var(--pp-line); }
+.pp-hero__item { font-size: var(--pp-text-xs); color: var(--pp-ink-2); }
+.pp-hero__item strong {
+  display: block;
+  font-family: var(--pp-font-mono);
+  font-size: 15px;
+  color: var(--pp-ink);
+  font-weight: 600;
+}
+.pp-hero__actions { margin-left: auto; display: flex; gap: 8px; }
+@media (max-width: 860px) {
+  .pp-hero__divider { display: none; }
+  .pp-hero__actions { margin-left: 0; width: 100%; }
+}
+
+/* ---------------- 世界数据：玩家头像 ---------------- */
+
+.pp-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+/* 帕鲁属性小标签 */
+.pp-elem {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--pp-radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+}
+.pp-elem--grass { background: #e4edf5; color: #356a9a; }
+.pp-elem--fire { background: #fbe7dd; color: #b4552a; }
+.pp-elem--water { background: #e2eefb; color: #3a6fb0; }
+.pp-elem--electric { background: #faf3d5; color: #97781b; }
+.pp-elem--dark { background: #e9e4f0; color: #64518c; }
+.pp-elem--ice { background: #e0f2f4; color: #35818d; }
+
+/* ---------------- GM 工具 ---------------- */
+
+.pp-gm-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--pp-line);
+  border-radius: var(--pp-radius);
+  background: var(--pp-surface);
+}
+.pp-gm-item__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--pp-surface-3);
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.pp-gm-item__name { font-size: var(--pp-text-sm); font-weight: 600; }
+.pp-gm-item__id { font-size: 11px; color: var(--pp-ink-3); font-family: var(--pp-font-mono); }
+.pp-gm-item__qty {
+  margin-left: auto;
+  width: 76px;
+  height: 30px;
+  text-align: center;
+  font-family: var(--pp-font-mono);
+}
+
+/* ---------------- 设置页：密钥行 ---------------- */
+
+.pp-key {
+  font-family: var(--pp-font-mono);
+  font-size: 12.5px;
+  background: var(--pp-surface-3);
+  border-radius: 6px;
+  padding: 3px 8px;
+  color: var(--pp-ink-2);
+}
+
+/* ---------------- 备份页：容量环 ---------------- */
+
+.pp-ring { position: relative; width: 120px; height: 120px; }
+.pp-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.pp-ring__label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+.pp-ring__label strong { font-family: var(--pp-font-mono); font-size: 19px; display: block; }
+.pp-ring__label span { font-size: 11px; color: var(--pp-ink-3); }
+
+/* ---------------- 视图切换 ---------------- */
+
+.pp-view { display: none; }
+.pp-view.is-active { display: block; animation: pp-view-in 240ms var(--pp-ease); }
+
+@keyframes pp-view-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}

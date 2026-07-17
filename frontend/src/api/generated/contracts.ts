@@ -417,5 +417,22 @@ export interface components {
       "data": unknown;
       "ok": true;
     };
+    "WebDAVConfig": {
+      "base_url": string;
+      "enabled": boolean;
+      "password_configured": boolean;
+      "remote_path": string;
+      "upload_after_backup": boolean;
+      "username": string;
+    };
+    "WebDAVConfigUpdate": {
+      "base_url"?: string;
+      "clear_password"?: boolean;
+      "enabled"?: boolean;
+      "password"?: string;
+      "remote_path"?: string;
+      "upload_after_backup"?: boolean;
+      "username"?: string;
+    };
   };
 }

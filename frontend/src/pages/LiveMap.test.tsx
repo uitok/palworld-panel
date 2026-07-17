@@ -48,7 +48,7 @@ describe('LiveMap', () => {
     renderPage();
 
     expect(await screen.findByText('PalDefender')).toBeInTheDocument();
-    expect(screen.getByText(/底图为坐标示意/)).toBeInTheDocument();
+    expect(screen.getByText(/投影到游戏地图/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Builder 100, 200, 30/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /捣蛋猫 300, 400, 0/ })).not.toBeInTheDocument();
 

@@ -107,6 +107,51 @@ function Clear-WebUIStage {
     Remove-Item -Recurse -Force
 }
 
+function Invoke-GoBuildWithWindowsLockRetry {
+  param([string[]]$Arguments, [string]$WorkingDirectory, [int]$MaxAttempts = 5)
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    Push-Location $WorkingDirectory
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      $output = @(& go @Arguments 2>&1)
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+      Pop-Location
+    }
+    $output | ForEach-Object { Write-Host $_ }
+    if ($exitCode -eq 0) {
+      return
+    }
+
+    $outputText = ($output | Out-String)
+    $isTransientWindowsLock = $outputText -match '(?i)access is denied|being used by another process|process cannot access the file'
+    if (-not $isTransientWindowsLock -or $attempt -eq $MaxAttempts) {
+      throw "go $($Arguments -join ' ') failed with exit code $exitCode"
+    }
+    Write-Warning "Windows temporarily locked a Go build artifact; retrying ($attempt/$MaxAttempts)."
+    Start-Sleep -Seconds 2
+  }
+}
+
+function Get-FileSHA256WithWindowsLockRetry {
+  param([Parameter(Mandatory = $true)][string]$Path, [int]$MaxAttempts = 8)
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      return (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    } catch {
+      $isTransientWindowsLock = $_.Exception.Message -match '(?i)being used by another process|process cannot access the file'
+      if (-not $isTransientWindowsLock -or $attempt -eq $MaxAttempts) {
+        throw
+      }
+      Start-Sleep -Milliseconds (250 * $attempt)
+    }
+  }
+}
+
 function Remove-PackageTempWithRetry {
   param([int]$MaxAttempts = 5)
 
@@ -220,14 +265,14 @@ try {
   $env:GOOS = "windows"
   $env:GOARCH = "amd64"
   $env:CGO_ENABLED = "0"
-  Invoke-External "go" @("build", "-tags", "embed_webui", "-trimpath", "-ldflags", $backendLdflags, "-o", (Join-Path $PackageDir "palpanel-server.exe"), "./cmd/palpanel") (Join-Path $RootDir "backend")
-  Invoke-External "go" @("build", "-trimpath", "-ldflags", "$backendLdflags -H windowsgui", "-o", (Join-Path $PackageDir "PalPanel.exe"), "./cmd/palpanel-launcher") (Join-Path $RootDir "backend")
+  Invoke-GoBuildWithWindowsLockRetry -Arguments @("build", "-tags", "embed_webui", "-trimpath", "-ldflags", $backendLdflags, "-o", (Join-Path $PackageDir "palpanel-server.exe"), "./cmd/palpanel") -WorkingDirectory (Join-Path $RootDir "backend")
+  Invoke-GoBuildWithWindowsLockRetry -Arguments @("build", "-trimpath", "-ldflags", "$backendLdflags -H windowsgui", "-o", (Join-Path $PackageDir "PalPanel.exe"), "./cmd/palpanel-launcher") -WorkingDirectory (Join-Path $RootDir "backend")
 
   $env:CGO_ENABLED = "1"
   $env:CC = $MingwGcc
   $env:CXX = $MingwGxx
   $env:PATH = $MingwBin + [System.IO.Path]::PathSeparator + $oldPath
-  Invoke-External "go" @("build", "-trimpath", "-ldflags", $savLdflags, "-o", (Join-Path $PackageDir "sav-cli.exe"), "./cmd/sav_cli") (Join-Path $RootDir "sav-cli")
+  Invoke-GoBuildWithWindowsLockRetry -Arguments @("build", "-trimpath", "-ldflags", $savLdflags, "-o", (Join-Path $PackageDir "sav-cli.exe"), "./cmd/sav_cli") -WorkingDirectory (Join-Path $RootDir "sav-cli")
   $palcalcPublish = Join-Path $RootDir "dist\palcalc-win-x64"
   if (Test-Path $palcalcPublish) { Remove-Item -Recurse -Force $palcalcPublish }
   Invoke-External "dotnet" @("publish", (Join-Path $RootDir "palcalc-bridge\PalCalc.Bridge.csproj"), "-c", "Release", "-r", "win-x64", "--self-contained", "true", "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-p:UseSharedCompilation=false", "-o", $palcalcPublish) $RootDir
@@ -247,7 +292,7 @@ $checksumLines = Get-ChildItem -LiteralPath $PackageDir -Recurse -File |
   Sort-Object FullName |
   ForEach-Object {
     $relative = $_.FullName.Substring($PackageDir.Length).TrimStart("\") -replace "\\", "/"
-    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = Get-FileSHA256WithWindowsLockRetry -Path $_.FullName
     "$hash  ./$relative"
   }
 Set-Content -LiteralPath (Join-Path $PackageDir "checksums.txt") -Value $checksumLines -Encoding ASCII
