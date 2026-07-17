@@ -267,6 +267,13 @@ docs/                       OpenAPI、发布说明、验证记录与截图
   <img src="docs/images/2.jpg" width="320" style="max-width: 100%; height: auto;" alt="PalPanel QQ 交流群二维码">
 </p>
 
+提交问题前，请尽量提供：
+
+- PalPanel 版本和操作系统
+- 使用的运行模式，例如 Windows 原生或 Linux Docker/Wine
+- 相关操作步骤
+- 已隐藏密码、Token、API Key 和公网地址的日志
+
 ## 许可证
 
 PalPanel 使用 [GPL-3.0-or-later](LICENSE)。PalCalc v1.17.6 保留 MIT 许可证；其他第三方组件、数据和素材的许可证见 [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt)。
