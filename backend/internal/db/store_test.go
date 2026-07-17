@@ -322,3 +322,95 @@ func TestSaveSourceIndexMetadataLifecycle(t *testing.T) {
 		t.Fatalf("metadata was not preserved by rename: %#v, %v", got, err)
 	}
 }
+
+func TestBreedingStorageLifecycle(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "breeding.db"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.CreateJob(ctx, "job-breed", "breeding", "queued"); err != nil {
+		t.Fatal(err)
+	}
+	result := BreedingResult{
+		ID: "result-1", JobID: "job-breed", Subject: "user:admin", SourceID: "server",
+		Fingerprint: "sha256:save", RequestJSON: `{"target":"Anubis"}`, Status: "running",
+	}
+	if err := store.CreateBreedingResult(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteBreedingResult(ctx, result.JobID, "completed", `{"results":[{"pal_id":"Anubis"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	gotResult, err := store.GetBreedingResultByJob(ctx, result.JobID)
+	if err != nil || gotResult.Status != "completed" || gotResult.ResultJSON == "" {
+		t.Fatalf("GetBreedingResultByJob = %#v, %v", gotResult, err)
+	}
+	results, err := store.ListBreedingResults(ctx, result.Subject, 0)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("ListBreedingResults = %#v, %v", results, err)
+	}
+	cached, err := store.FindCachedBreedingResult(ctx, result.SourceID, result.Fingerprint, result.RequestJSON)
+	if err != nil || cached.JobID != result.JobID {
+		t.Fatalf("FindCachedBreedingResult = %#v, %v", cached, err)
+	}
+
+	preset := BreedingPreset{ID: "preset-1", Subject: result.Subject, Name: "Fast", ConfigJSON: `{"steps":4}`}
+	if err := store.UpsertBreedingPreset(ctx, preset); err != nil {
+		t.Fatal(err)
+	}
+	preset.Name = "Updated"
+	if err := store.UpsertBreedingPreset(ctx, preset); err != nil {
+		t.Fatal(err)
+	}
+	presets, err := store.ListBreedingPresets(ctx, result.Subject)
+	if err != nil || len(presets) != 1 || presets[0].Name != "Updated" {
+		t.Fatalf("ListBreedingPresets = %#v, %v", presets, err)
+	}
+	if err := store.DeleteBreedingPreset(ctx, result.Subject, preset.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteBreedingPreset(ctx, result.Subject, preset.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing preset error = %v", err)
+	}
+
+	container := CustomPalContainer{ID: "container-1", Subject: result.Subject, Name: "Stock", PalsJSON: `[{"character_id":"Anubis"}]`}
+	if err := store.UpsertCustomPalContainer(ctx, container); err != nil {
+		t.Fatal(err)
+	}
+	container.Name = "Updated stock"
+	if err := store.UpsertCustomPalContainer(ctx, container); err != nil {
+		t.Fatal(err)
+	}
+	gotContainer, err := store.GetCustomPalContainer(ctx, result.Subject, container.ID)
+	if err != nil || gotContainer.Name != "Updated stock" {
+		t.Fatalf("GetCustomPalContainer = %#v, %v", gotContainer, err)
+	}
+	containers, err := store.ListCustomPalContainers(ctx, result.Subject)
+	if err != nil || len(containers) != 1 {
+		t.Fatalf("ListCustomPalContainers = %#v, %v", containers, err)
+	}
+	if err := store.DeleteCustomPalContainer(ctx, result.Subject, container.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteCustomPalContainer(ctx, result.Subject, container.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing container error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	session := BreedSession{ID: "session-1", Subject: result.Subject, TokenHash: "hash-1", PlayerUID: "uid-1", ExpiresAt: now.Add(time.Hour).Format(time.RFC3339Nano)}
+	if err := store.CreateBreedSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	gotSession, err := store.GetBreedSession(ctx, session.TokenHash, now)
+	if err != nil || gotSession.PlayerUID != session.PlayerUID {
+		t.Fatalf("GetBreedSession = %#v, %v", gotSession, err)
+	}
+	if err := store.DeleteExpiredBreedSessions(ctx, now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetBreedSession(ctx, session.TokenHash, now); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expired session error = %v", err)
+	}
+}
