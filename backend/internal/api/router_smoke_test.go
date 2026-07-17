@@ -33,6 +33,7 @@ func TestAuthenticatedReadRoutesReturnStructuredResponses(t *testing.T) {
 		"/api/jobs",
 		"/api/jobs/missing",
 		"/api/audit-logs",
+		"/api/system/debug",
 		"/api/alerts",
 		"/api/schedules",
 		"/api/server/status",
@@ -59,6 +60,10 @@ func TestAuthenticatedReadRoutesReturnStructuredResponses(t *testing.T) {
 		"/api/server/metrics",
 		"/api/server/game-data",
 		"/api/save/index/status",
+		"/api/save-sources",
+		"/api/breeding/history",
+		"/api/breeding/presets",
+		"/api/breeding/custom-containers",
 		"/api/players",
 		"/api/players/missing",
 		"/api/players/missing/inventory",
@@ -72,6 +77,14 @@ func TestAuthenticatedReadRoutesReturnStructuredResponses(t *testing.T) {
 		"/api/map/entities",
 		"/api/players/bans",
 		"/api/players/whitelist",
+		"/api/security/paldefender/gm/commands",
+		"/api/security/paldefender/gm/commands/runtime",
+		"/api/security/paldefender/gm/catalog/technology",
+		"/api/security/paldefender/gm/catalog/skins",
+		"/api/security/paldefender/gm/catalog/references",
+		"/api/security/paldefender/gm/pal-templates",
+		"/api/security/paldefender/access",
+		"/api/security/paldefender/whitelist",
 	}
 	for _, path := range paths {
 		t.Run(strings.TrimPrefix(path, "/api/"), func(t *testing.T) {
@@ -104,7 +117,9 @@ func TestWriteRoutesValidateBadInput(t *testing.T) {
 		{http.MethodPut, "/api/schedules/missing", "{"},
 		{http.MethodDelete, "/api/schedules/missing", ""},
 		{http.MethodPost, "/api/schedules/missing/run", ""},
+		{http.MethodPut, "/api/system/debug", "{"},
 		{http.MethodPut, "/api/server/runtime", `{"mode":"invalid"}`},
+		{http.MethodPost, "/api/server/import", "{"},
 		{http.MethodPost, "/api/server/world/reset", "{}"},
 		{http.MethodPost, "/api/server/safe-restart", `{"waittime":1}`},
 		{http.MethodPut, "/api/server/startup", "{"},
@@ -127,6 +142,18 @@ func TestWriteRoutesValidateBadInput(t *testing.T) {
 		{http.MethodPut, "/api/players/whitelist", "{"},
 		{http.MethodPost, "/api/players/missing/kick", "{}"},
 		{http.MethodPost, "/api/players/missing/ban", "{}"},
+		{http.MethodPost, "/api/save-sources/import", ""},
+		{http.MethodPatch, "/api/save-sources/missing", "{}"},
+		{http.MethodPost, "/api/save-sources/missing/activate", ""},
+		{http.MethodPost, "/api/save-sources/missing/rebuild", ""},
+		{http.MethodDelete, "/api/save-sources/missing", ""},
+		{http.MethodPost, "/api/breeding/presets", "{"},
+		{http.MethodPost, "/api/breeding/custom-containers", "{"},
+		{http.MethodPost, "/api/breeding/jobs", "{"},
+		{http.MethodGet, "/api/breeding/jobs/missing/result", ""},
+		{http.MethodPost, "/api/breeding/jobs/missing/pause", ""},
+		{http.MethodPost, "/api/breeding/jobs/missing/resume", ""},
+		{http.MethodPost, "/api/breeding/jobs/missing/cancel", ""},
 	}
 	for _, test := range tests {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {
@@ -227,6 +254,63 @@ func TestManagementWriteWorkflows(t *testing.T) {
 	recorder = performJSONRequest(t, router, http.MethodDelete, "/api/players/bans/76561198000000000", "")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("delete ban = %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPatch, "/api/save-sources/server", `{"name":"Managed server save"}`},
+		{http.MethodPost, "/api/breeding/presets", `{"id":"preset-smoke","name":"Fast route","config":{"settings":{"max_breeding_steps":4}}}`},
+		{http.MethodPost, "/api/breeding/custom-containers", `{"id":"container-smoke","name":"Breeding stock","pals":[{"character_id":"Anubis","nickname":"Anubis","level":50}]}`},
+	} {
+		recorder = performJSONRequest(t, router, request.method, request.path, request.body)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s %s = %d: %s", request.method, request.path, recorder.Code, recorder.Body.String())
+		}
+	}
+	recorder = performJSONRequest(t, router, http.MethodPut, "/api/system/debug", `{"enabled":true}`)
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "debug_logging_unavailable") {
+		t.Fatalf("PUT /api/system/debug = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	for _, path := range []string{"/api/breeding/presets", "/api/breeding/custom-containers", "/api/save-sources"} {
+		recorder = performJSONRequest(t, router, http.MethodGet, path, "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d: %s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+	for _, path := range []string{"/api/breeding/presets/preset-smoke", "/api/breeding/custom-containers/container-smoke"} {
+		recorder = performJSONRequest(t, router, http.MethodDelete, path, "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("DELETE %s = %d: %s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestBreedingAndAstrBotPublicRoutesRejectInvalidSessions(t *testing.T) {
+	router := newSmokeRouter(t)
+	for _, test := range []struct {
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{http.MethodPost, "/api/breed/session/exchange", "{}", http.StatusBadRequest},
+		{http.MethodGet, "/api/breed/me", "", http.StatusUnauthorized},
+		{http.MethodGet, "/api/breed/catalog", "", http.StatusUnauthorized},
+		{http.MethodPost, "/api/integrations/astrbot/binding-challenges", "{}", http.StatusServiceUnavailable},
+		{http.MethodPost, "/api/integrations/astrbot/quick-solves", "{}", http.StatusServiceUnavailable},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+		if test.body != "" {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), `"ok":false`) {
+			t.Errorf("%s %s = %d %s", test.method, test.path, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 

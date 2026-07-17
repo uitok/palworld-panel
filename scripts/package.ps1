@@ -107,6 +107,25 @@ function Clear-WebUIStage {
     Remove-Item -Recurse -Force
 }
 
+function Remove-PackageTempWithRetry {
+  param([int]$MaxAttempts = 5)
+
+  if (-not (Test-Path -LiteralPath $PackageTemp)) { return }
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      Remove-PalPanelManagedDirectory -RepositoryRoot $RootDir -RuntimeRoot $ManagedRuntimeRoot -TargetPath $PackageTemp
+      return
+    } catch {
+      if ($attempt -eq $MaxAttempts) {
+        Write-Warning "Package succeeded, but the temporary directory is still locked and was retained: $PackageTemp ($($_.Exception.Message))"
+        return
+      }
+      Write-Warning "Temporary build files are still locked; retrying cleanup ($attempt/$MaxAttempts)."
+      Start-Sleep -Seconds 2
+    }
+  }
+}
+
 try {
   $commitOutput = & git -C $RootDir rev-parse HEAD
   if ($LASTEXITCODE -ne 0) {
@@ -211,7 +230,7 @@ try {
   Invoke-External "go" @("build", "-trimpath", "-ldflags", $savLdflags, "-o", (Join-Path $PackageDir "sav-cli.exe"), "./cmd/sav_cli") (Join-Path $RootDir "sav-cli")
   $palcalcPublish = Join-Path $RootDir "dist\palcalc-win-x64"
   if (Test-Path $palcalcPublish) { Remove-Item -Recurse -Force $palcalcPublish }
-  Invoke-External "dotnet" @("publish", (Join-Path $RootDir "palcalc-bridge\PalCalc.Bridge.csproj"), "-c", "Release", "-r", "win-x64", "--self-contained", "true", "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-o", $palcalcPublish) $RootDir
+  Invoke-External "dotnet" @("publish", (Join-Path $RootDir "palcalc-bridge\PalCalc.Bridge.csproj"), "-c", "Release", "-r", "win-x64", "--self-contained", "true", "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-p:UseSharedCompilation=false", "-o", $palcalcPublish) $RootDir
   Copy-Item -Force (Join-Path $palcalcPublish "palcalc-bridge.exe") (Join-Path $PackageDir "palcalc-bridge.exe")
 } finally {
   $env:GOOS = $oldGoos
@@ -241,7 +260,14 @@ Compress-Archive -Path $PackageDir -DestinationPath $Archive -Force
   $env:GOCACHE = $PreviousGoCache
   $env:NPM_CONFIG_CACHE = $PreviousNpmCache
   if ($PackageSucceeded -and (Test-Path -LiteralPath $PackageTemp)) {
-    Remove-PalPanelManagedDirectory -RepositoryRoot $RootDir -RuntimeRoot $ManagedRuntimeRoot -TargetPath $PackageTemp
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      & dotnet build-server shutdown 2>&1 | ForEach-Object { Write-Host $_ }
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
+    Remove-PackageTempWithRetry
   } elseif (-not $PackageSucceeded) {
     Write-Warning "Package staging was retained for diagnosis: $PackageTemp"
   }

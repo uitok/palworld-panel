@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
@@ -162,5 +163,92 @@ func TestBuildMapEntitiesPreservesStaticEntities(t *testing.T) {
 		if entity["source"] != "save" {
 			t.Fatalf("unexpected static entity source: %#v", entity)
 		}
+	}
+}
+
+func TestSaveIndexQueryHelpersAndFilters(t *testing.T) {
+	if got := stringFromAny("  ", json.Number("42")); got != "42" {
+		t.Fatalf("stringFromAny json number = %q", got)
+	}
+	if got := stringFromAny(float64(12.5)); got != "12.5" {
+		t.Fatalf("stringFromAny float = %q", got)
+	}
+	if got := numberDefault("bad", float32(2.5)); got != 2.5 {
+		t.Fatalf("numberDefault = %v", got)
+	}
+	for _, test := range []struct {
+		value any
+		want  float64
+		ok    bool
+	}{
+		{float64(1), 1, true}, {float32(2), 2, true}, {3, 3, true}, {int64(4), 4, true},
+		{json.Number("5.5"), 5.5, true}, {" 6.5 ", 6.5, true}, {"bad", 0, false}, {struct{}{}, 0, false},
+	} {
+		got, ok := numberFromAny(test.value)
+		if got != test.want || ok != test.ok {
+			t.Errorf("numberFromAny(%#v) = %v, %v", test.value, got, ok)
+		}
+	}
+
+	newQueryContext := func(target string) *gin.Context {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Request = httptest.NewRequest("GET", target, nil)
+		return context
+	}
+	context := newQueryContext("/api/players?limit=2&page=3&offset=-1")
+	if limit, offset := limitOffset(context); limit != 2 || offset != 0 {
+		t.Fatalf("limitOffset explicit offset = %d, %d", limit, offset)
+	}
+	context = newQueryContext("/api/players?limit=2&page=3")
+	if limit, offset := limitOffset(context); limit != 2 || offset != 4 {
+		t.Fatalf("limitOffset page = %d, %d", limit, offset)
+	}
+	page, meta := paginate([]int{1, 2, 3, 4, 5}, 2, 2)
+	if len(page) != 2 || page[0] != 3 || meta["page"] != 2 {
+		t.Fatalf("paginate = %#v %#v", page, meta)
+	}
+	page, meta = paginate([]int{1, 2}, 0, 99)
+	if len(page) != 0 || meta["offset"] != 2 {
+		t.Fatalf("paginate clamped offset = %#v %#v", page, meta)
+	}
+
+	status := statusWithOnlineState(saveindex.Status{}, onlinePlayersResult{Stale: true, Error: "offline"})
+	if !status.Stale || len(status.Warnings) != 2 {
+		t.Fatalf("statusWithOnlineState = %#v", status)
+	}
+	if got := appendUniqueString(status.Warnings, status.Warnings[0]); len(got) != 2 {
+		t.Fatalf("appendUniqueString duplicated value: %#v", got)
+	}
+
+	guilds := []saveindex.Guild{{ID: "guild-1", Name: "Guild", Members: []saveindex.GuildMember{{PlayerUID: "online"}, {PlayerUID: "offline"}}}}
+	applyGuildOnlineCounts(guilds, map[string]onlinePlayer{"online": {PlayerUID: "online"}})
+	if guilds[0].OnlineMemberCount != 1 {
+		t.Fatalf("applyGuildOnlineCounts = %#v", guilds)
+	}
+
+	players := []saveindex.Player{
+		{PlayerUID: "uid-1", SteamID: "steam-1", Nickname: "Online", GuildID: "guild-1", GuildName: "Guild", IsOnline: true},
+		{PlayerUID: "uid-2", SteamID: "steam-2", Nickname: "Offline", IsOnline: false},
+	}
+	context = newQueryContext("/api/players?q=online&online=true")
+	if got := filterPlayers(players, context); len(got) != 1 || got[0].PlayerUID != "uid-1" {
+		t.Fatalf("filterPlayers online = %#v", got)
+	}
+	context = newQueryContext("/api/guilds?q=guild-1")
+	if got := filterGuilds(guilds, context); len(got) != 1 {
+		t.Fatalf("filterGuilds = %#v", got)
+	}
+	bases := []saveindex.Base{{ID: "base-1", Name: "Main", GuildID: "guild-1"}, {ID: "base-2", Name: "Other", GuildID: "guild-2"}}
+	context = newQueryContext("/api/bases?guild_id=guild-1&q=main")
+	if got := filterBases(bases, context); len(got) != 1 || got[0].ID != "base-1" {
+		t.Fatalf("filterBases = %#v", got)
+	}
+	pals := []saveindex.Pal{
+		{InstanceID: "pal-1", CharacterID: "Anubis", OwnerPlayerUID: "uid-1", GuildID: "guild-1", ContainerID: "box-1", Status: "stored"},
+		{InstanceID: "pal-2", CharacterID: "PinkCat", OwnerPlayerUID: "uid-2", GuildID: "guild-2", ContainerID: "box-2", Status: "party"},
+	}
+	context = newQueryContext("/api/pals?q=anubis&status=stored&owner_player_uid=uid-1&guild_id=guild-1&container_id=box-1")
+	if got := filterPals(pals, players, context); len(got) != 1 || got[0].InstanceID != "pal-1" {
+		t.Fatalf("filterPals = %#v", got)
 	}
 }
