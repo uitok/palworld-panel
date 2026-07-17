@@ -209,13 +209,6 @@ npm run check
 npm run test:e2e
 ```
 
-重新生成 README 截图：
-
-```bash
-cd frontend
-npm run screenshots:readme
-```
-
 接口定义见 [`docs/openapi.yaml`](docs/openapi.yaml)。
 
 ## 安全与限制
