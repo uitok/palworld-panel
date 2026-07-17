@@ -1,0 +1,34 @@
+[Unit]
+Description=PalPanel PalCalc breeding solver sidecar
+After=local-fs.target
+PartOf=palpanel.service
+
+[Service]
+Type=simple
+User=palpanel
+Group=palpanel
+UMask=0077
+Environment=PALCALC_BRIDGE_URLS=http://127.0.0.1:8091
+Environment=PALCALC_BRIDGE_CONCURRENCY=1
+ExecStart=/opt/palpanel/current/bin/palcalc-bridge
+Restart=always
+RestartSec=3s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/var/lib/palpanel
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=palpanel-palcalc
+
+[Install]
+WantedBy=multi-user.target

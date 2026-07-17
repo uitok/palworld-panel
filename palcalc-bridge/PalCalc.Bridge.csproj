@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <AssemblyName>palcalc-bridge</AssemblyName>
+    <RootNamespace>PalCalc.Bridge</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\third_party\palcalc\PalCalc.Model\PalCalc.Model.csproj" />
+    <ProjectReference Include="..\third_party\palcalc\PalCalc.Solver\PalCalc.Solver.csproj" />
+  </ItemGroup>
+</Project>

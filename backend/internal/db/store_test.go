@@ -132,7 +132,7 @@ func TestStoreMigratesLegacyModsTable(t *testing.T) {
 		t.Fatalf("legacy mod defaults not applied: %#v", mods[0])
 	}
 	version, err := store.SchemaVersion(context.Background())
-	if err != nil || version != 4 {
+	if err != nil || version != 6 {
 		t.Fatalf("schema version = %d, %v", version, err)
 	}
 }
@@ -286,5 +286,39 @@ func TestStoreOperationalEntitiesAndErrors(t *testing.T) {
 	}
 	if err := store.UpdateJob(ctx, "missing", "failed", 0, "missing", "missing"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("UpdateJob error = %v", err)
+	}
+}
+
+func TestSaveSourceIndexMetadataLifecycle(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "save-sources.db"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	server := SaveSource{ID: "server", Name: "当前服务器存档", Kind: "server"}
+	if err := store.UpsertSaveSource(ctx, server); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ActivateSaveSource(ctx, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateSaveSourceIndex(ctx, server.ID, "sha256:fixture", "sav-cli-test", []string{"one warning"}, "2026-07-16T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ActiveSaveSource(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fingerprint != "sha256:fixture" || got.ParserVersion != "sav-cli-test" || got.IndexedAt == "" || len(got.Warnings) != 1 {
+		t.Fatalf("unexpected indexed source: %#v", got)
+	}
+	got.Name = "重命名后的服务器存档"
+	if err := store.UpsertSaveSource(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.GetSaveSource(ctx, server.ID)
+	if err != nil || got.Name != "重命名后的服务器存档" || got.Fingerprint != "sha256:fixture" {
+		t.Fatalf("metadata was not preserved by rename: %#v, %v", got, err)
 	}
 }

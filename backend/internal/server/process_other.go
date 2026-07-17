@@ -10,6 +10,10 @@ import (
 	"path/filepath"
 )
 
+func unmanagedWindowsServerProcess(string) (string, bool, error) {
+	return "", false, nil
+}
+
 type trackedWindowsProcess struct{}
 
 func prepareWindowsProcess(*exec.Cmd) {}

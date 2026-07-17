@@ -85,6 +85,7 @@ describe('Settings page', () => {
       ports: { game: 8211, rest: 8212 },
       warnings: [],
       paths: {},
+      server_imported: false,
       settings_path: '/srv/PalWorldSettings.ini',
     });
     vi.mocked(serverApi.getVersion).mockResolvedValue({
@@ -184,7 +185,7 @@ describe('Settings page', () => {
     auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'old-model', api_key_present: true, timeout_seconds: 90, proxy_configured: false, proxy_url: '', custom_header_names: [] });
     renderSettings();
 
-    expect(await screen.findByText('AI 翻译')).toBeInTheDocument();
+    await screen.findByRole('button', { name: '保存 AI 配置' });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'translate-model' } });
     fireEvent.click(screen.getByRole('button', { name: '保存 AI 配置' }));
 
@@ -210,7 +211,7 @@ describe('Settings page', () => {
     });
     renderSettings();
 
-    expect(await screen.findByText('AI 翻译')).toBeInTheDocument();
+    await screen.findByRole('button', { name: '保存 AI 配置' });
     fireEvent.change(screen.getByLabelText('请求超时（秒）'), { target: { value: '120' } });
     fireEvent.change(screen.getByLabelText(/Proxy URL/), { target: { value: 'socks5://proxy-user:proxy-pass@127.0.0.1:10808' } });
     fireEvent.change(screen.getByLabelText(/自定义请求头/), { target: { value: '{"X-Tenant-ID":"tenant-b"}' } });

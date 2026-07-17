@@ -84,6 +84,16 @@ func PerformanceMiddleware(cfg appconfig.Config) gin.HandlerFunc {
 		c.Next()
 		elapsed := time.Since(start)
 		timingWriter.setTimingHeader()
+		if cfg.DebugLogger != nil && cfg.DebugLogger.Enabled() && strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			cfg.DebugLogger.Printf(
+				"http method=%s path=%s status=%d duration_ms=%s remote=%s",
+				c.Request.Method,
+				c.Request.URL.Path,
+				c.Writer.Status(),
+				strconv.FormatFloat(float64(elapsed.Microseconds())/1000, 'f', 1, 64),
+				c.Request.RemoteAddr,
+			)
+		}
 		if elapsed >= slowAfter && cfg.LogLevel != "error" {
 			log.Printf("slow request method=%s path=%s status=%d duration_ms=%s", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), strconv.FormatFloat(float64(elapsed.Microseconds())/1000, 'f', 1, 64))
 		}

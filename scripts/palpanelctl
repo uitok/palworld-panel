@@ -12,6 +12,7 @@ fi
 ctl="$script_path"
 backend_bin="$package_dir/bin/palpanel"
 sav_bin="$package_dir/bin/sav-cli"
+palcalc_bin="$package_dir/bin/palcalc-bridge"
 
 opt_root="${PALPANEL_INSTALL_ROOT:-/opt/palpanel}"
 etc_dir="${PALPANEL_ETC_DIR:-/etc/palpanel}"
@@ -25,6 +26,7 @@ portable_data="${PALPANEL_DATA_DIR:-$package_dir/data}"
 runtime_dir="${PALPANEL_RUNTIME_DIR:-$package_dir/run}"
 log_dir="${PALPANEL_LOG_DIR:-$package_dir/logs}"
 sidecar_port="${PALPANEL_SAVE_INDEXER_PORT:-8090}"
+palcalc_port="${PALPANEL_PALCALC_PORT:-8091}"
 max_log_bytes="${PALPANEL_MAX_LOG_BYTES:-10485760}"
 max_log_files="${PALPANEL_MAX_LOG_FILES:-5}"
 
@@ -191,12 +193,14 @@ backend_health_url() {
 supervisor_cleanup() {
   stop_pid_file "$runtime_dir/backend.pid"
   stop_pid_file "$runtime_dir/sav-cli.pid"
+  stop_pid_file "$runtime_dir/palcalc-bridge.pid"
   rm -f "$runtime_dir/ready" "$runtime_dir/supervisor.pid"
 }
 
 supervise() {
   require_binary "$backend_bin"
   require_binary "$sav_bin"
+  require_binary "$palcalc_bin"
   ensure_portable_config
   mkdir -p "$portable_data" "$runtime_dir" "$log_dir"
   if pid_running "$runtime_dir/supervisor.pid"; then
@@ -204,8 +208,10 @@ supervise() {
   fi
   local sav_health_url="http://127.0.0.1:$sidecar_port/health"
   local panel_health_url
+  local palcalc_health_url="http://127.0.0.1:$palcalc_port/health"
   panel_health_url="$(backend_health_url)"
   require_unused_health_endpoint "sav-cli" "$sav_health_url" || return 1
+  require_unused_health_endpoint "palcalc-bridge" "$palcalc_health_url" || return 1
   require_unused_health_endpoint "palpanel" "$panel_health_url" || return 1
   printf '%s\n' "$BASHPID" >"$runtime_dir/supervisor.pid"
   rm -f "$runtime_dir/ready"
@@ -220,12 +226,22 @@ supervise() {
     return 1
   fi
 
+  rotate_log "$log_dir/palcalc-bridge.log"
+  PALCALC_BRIDGE_URLS="http://127.0.0.1:$palcalc_port" PALCALC_BRIDGE_CONCURRENCY=1 \
+    "$palcalc_bin" >>"$log_dir/palcalc-bridge.log" 2>&1 &
+  printf '%s\n' "$!" >"$runtime_dir/palcalc-bridge.pid"
+  if ! wait_for_health "$palcalc_health_url" "$runtime_dir/palcalc-bridge.pid" 90; then
+    printf 'palcalc-bridge failed its health check\n' >&2
+    return 1
+  fi
+
   rotate_log "$log_dir/palpanel.log"
   PALPANEL_BACKEND_DIR="$package_dir/backend" \
   PALPANEL_DATA_DIR="$portable_data" \
   PALPANEL_RUNNER_DIR="$package_dir/backend/deployments/wine-runner" \
   PALPANEL_SAVE_INDEXER_ENABLED=true \
   PALPANEL_SAVE_INDEXER_URL="http://127.0.0.1:$sidecar_port" \
+  PALPANEL_PALCALC_URL="http://127.0.0.1:$palcalc_port" \
     "$backend_bin" --config "$portable_config" >>"$log_dir/palpanel.log" 2>&1 &
   printf '%s\n' "$!" >"$runtime_dir/backend.pid"
   if ! wait_for_health "$panel_health_url" "$runtime_dir/backend.pid"; then
@@ -234,9 +250,10 @@ supervise() {
   fi
   : >"$runtime_dir/ready"
 
-  while pid_running "$runtime_dir/backend.pid" && pid_running "$runtime_dir/sav-cli.pid"; do
+  while pid_running "$runtime_dir/backend.pid" && pid_running "$runtime_dir/sav-cli.pid" && pid_running "$runtime_dir/palcalc-bridge.pid"; do
     rotate_log "$log_dir/palpanel.log"
     rotate_log "$log_dir/sav-cli.log"
+    rotate_log "$log_dir/palcalc-bridge.log"
     sleep 2
   done
   printf 'a managed process exited unexpectedly\n' >&2
@@ -258,7 +275,8 @@ portable_start() {
     if [[ -f "$runtime_dir/ready" ]]; then
       if kill -0 "$supervisor_pid" 2>/dev/null &&
         pid_running "$runtime_dir/backend.pid" &&
-        pid_running "$runtime_dir/sav-cli.pid"; then
+        pid_running "$runtime_dir/sav-cli.pid" &&
+        pid_running "$runtime_dir/palcalc-bridge.pid"; then
         printf 'PalPanel started: %s\n' "$(backend_health_url | sed 's|/api/health$|/|')"
         return 0
       fi
@@ -279,6 +297,7 @@ portable_stop() {
   fi
   stop_pid_file "$runtime_dir/backend.pid"
   stop_pid_file "$runtime_dir/sav-cli.pid"
+  stop_pid_file "$runtime_dir/palcalc-bridge.pid"
   rm -f "$runtime_dir/ready"
   printf 'PalPanel stopped\n'
 }
@@ -286,10 +305,12 @@ portable_stop() {
 portable_status() {
   local backend_state="stopped"
   local sav_state="stopped"
+  local palcalc_state="stopped"
   pid_running "$runtime_dir/backend.pid" && backend_state="running"
   pid_running "$runtime_dir/sav-cli.pid" && sav_state="running"
-  printf 'palpanel: %s\nsav-cli: %s\n' "$backend_state" "$sav_state"
-  [[ "$backend_state" == "running" && "$sav_state" == "running" ]]
+  pid_running "$runtime_dir/palcalc-bridge.pid" && palcalc_state="running"
+  printf 'palpanel: %s\nsav-cli: %s\npalcalc-bridge: %s\n' "$backend_state" "$sav_state" "$palcalc_state"
+  [[ "$backend_state" == "running" && "$sav_state" == "running" && "$palcalc_state" == "running" ]]
 }
 
 show_logs() {
@@ -297,16 +318,16 @@ show_logs() {
   [[ "${1:-}" == "-f" || "${1:-}" == "--follow" ]] && follow=1
   if system_mode; then
     if (( follow )); then
-      exec journalctl -u palpanel.service -u palpanel-sav-cli.service -f
+      exec journalctl -u palpanel.service -u palpanel-sav-cli.service -u palpanel-palcalc.service -f
     fi
-    exec journalctl -u palpanel.service -u palpanel-sav-cli.service -n 200 --no-pager
+    exec journalctl -u palpanel.service -u palpanel-sav-cli.service -u palpanel-palcalc.service -n 200 --no-pager
   fi
   mkdir -p "$log_dir"
-  touch "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
+  touch "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/palcalc-bridge.log" "$log_dir/controller.log"
   if (( follow )); then
-    exec tail -n 100 -F "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
+    exec tail -n 100 -F "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/palcalc-bridge.log" "$log_dir/controller.log"
   fi
-  tail -n 100 "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/controller.log"
+  tail -n 100 "$log_dir/palpanel.log" "$log_dir/sav-cli.log" "$log_dir/palcalc-bridge.log" "$log_dir/controller.log"
 }
 
 show_config() {
@@ -438,11 +459,14 @@ install_system() {
   sed -e "s|/opt/palpanel|$opt_root|g" -e "s|/var/lib/palpanel|$system_data_dir|g" \
     -e "s|User=palpanel|User=$service_user|g" -e "s|Group=palpanel|Group=$service_user|g" \
     "$version_dir/systemd/palpanel-sav-cli.service" >"$systemd_dir/palpanel-sav-cli.service"
-  chmod 644 "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service"
+  sed -e "s|/opt/palpanel|$opt_root|g" -e "s|/var/lib/palpanel|$system_data_dir|g" \
+    -e "s|User=palpanel|User=$service_user|g" -e "s|Group=palpanel|Group=$service_user|g" \
+    "$version_dir/systemd/palpanel-palcalc.service" >"$systemd_dir/palpanel-palcalc.service"
+  chmod 644 "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service" "$systemd_dir/palpanel-palcalc.service"
   if service_control_enabled; then
     systemctl daemon-reload
-    systemctl enable palpanel-sav-cli.service palpanel.service
-    systemctl restart palpanel-sav-cli.service palpanel.service
+    systemctl enable palpanel-sav-cli.service palpanel-palcalc.service palpanel.service
+    systemctl restart palpanel-sav-cli.service palpanel-palcalc.service palpanel.service
   fi
   printf 'installed PalPanel %s in %s\n' "$version" "$version_dir"
 }
@@ -453,9 +477,9 @@ uninstall_system() {
   [[ "${1:-}" == "--purge" ]] && purge=1 && shift
   [[ $# -eq 0 ]] || fail "unknown uninstall option: $1"
   if service_control_enabled; then
-    systemctl disable --now palpanel.service palpanel-sav-cli.service 2>/dev/null || true
+    systemctl disable --now palpanel.service palpanel-sav-cli.service palpanel-palcalc.service 2>/dev/null || true
   fi
-  rm -f "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service"
+  rm -f "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service" "$systemd_dir/palpanel-palcalc.service"
   if service_control_enabled; then
     systemctl daemon-reload
   fi
@@ -503,22 +527,22 @@ case "$command" in
     ;;
   run)
     if system_mode; then
-      systemctl start palpanel-sav-cli.service palpanel.service
-      exec journalctl -u palpanel.service -u palpanel-sav-cli.service -f
+      systemctl start palpanel-sav-cli.service palpanel-palcalc.service palpanel.service
+      exec journalctl -u palpanel.service -u palpanel-sav-cli.service -u palpanel-palcalc.service -f
     fi
     supervise
     ;;
   start)
-    if system_mode; then systemctl start palpanel-sav-cli.service palpanel.service; else portable_start; fi
+    if system_mode; then systemctl start palpanel-sav-cli.service palpanel-palcalc.service palpanel.service; else portable_start; fi
     ;;
   stop)
-    if system_mode; then systemctl stop palpanel.service palpanel-sav-cli.service; else portable_stop; fi
+    if system_mode; then systemctl stop palpanel.service palpanel-sav-cli.service palpanel-palcalc.service; else portable_stop; fi
     ;;
   restart)
-    if system_mode; then systemctl restart palpanel-sav-cli.service palpanel.service; else portable_stop && portable_start; fi
+    if system_mode; then systemctl restart palpanel-sav-cli.service palpanel-palcalc.service palpanel.service; else portable_stop && portable_start; fi
     ;;
   status)
-    if system_mode; then systemctl status palpanel.service palpanel-sav-cli.service --no-pager; else portable_status; fi
+    if system_mode; then systemctl status palpanel.service palpanel-sav-cli.service palpanel-palcalc.service --no-pager; else portable_status; fi
     ;;
   logs) show_logs "$@" ;;
   config) show_config "$@" ;;

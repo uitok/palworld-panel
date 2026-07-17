@@ -109,7 +109,8 @@ func run(args []string) error {
 
 	serverPath := filepath.Join(root, "palpanel-server.exe")
 	savPath := filepath.Join(root, "sav-cli.exe")
-	for _, path := range []string{serverPath, savPath} {
+	palcalcPath := filepath.Join(root, "palcalc-bridge.exe")
+	for _, path := range []string{serverPath, savPath, palcalcPath} {
 		if info, statErr := os.Stat(path); statErr != nil || info.IsDir() {
 			return fmt.Errorf("required executable is missing: %s", path)
 		}
@@ -165,11 +166,15 @@ func run(args []string) error {
 	defer windows.CloseHandle(job)
 
 	savLog := filepath.Join(logsPath, "sav-cli.log")
+	palcalcLog := filepath.Join(logsPath, "palcalc-bridge.log")
 	serverLog := filepath.Join(logsPath, "palpanel.log")
 	if err := rotateLog(savLog, 10*1024*1024, 5); err != nil {
 		return err
 	}
 	if err := rotateLog(serverLog, 10*1024*1024, 5); err != nil {
+		return err
+	}
+	if err := rotateLog(palcalcLog, 10*1024*1024, 5); err != nil {
 		return err
 	}
 	savChild, err := startChild(job, savPath, []string{"serve", "--host", "127.0.0.1", "--port", "8090"}, nil, savLog)
@@ -180,6 +185,14 @@ func run(args []string) error {
 	if err := waitForHealth("http://127.0.0.1:8090/health", savChild, 30*time.Second); err != nil {
 		return fmt.Errorf("sav-cli health check: %w", err)
 	}
+	palcalcChild, err := startChild(job, palcalcPath, nil, map[string]string{"PALCALC_BRIDGE_URLS": "http://127.0.0.1:8091", "PALCALC_BRIDGE_CONCURRENCY": "1"}, palcalcLog)
+	if err != nil {
+		return fmt.Errorf("start palcalc bridge: %w", err)
+	}
+	defer palcalcChild.closeLog()
+	if err := waitForHealth("http://127.0.0.1:8091/health", palcalcChild, 45*time.Second); err != nil {
+		return fmt.Errorf("palcalc bridge health check: %w", err)
+	}
 
 	childEnv := map[string]string{
 		"PALPANEL_BACKEND_DIR":          filepath.Join(root, "backend"),
@@ -187,6 +200,7 @@ func run(args []string) error {
 		"PALPANEL_DATA_DIR":             dataPath,
 		"PALPANEL_SAVE_INDEXER_ENABLED": "true",
 		"PALPANEL_SAVE_INDEXER_URL":     "http://127.0.0.1:8090",
+		"PALPANEL_PALCALC_URL":          "http://127.0.0.1:8091",
 	}
 	serverArgs := []string{"--config", configPath}
 	if layout.Structured {
@@ -205,7 +219,7 @@ func run(args []string) error {
 
 	stopRotation := make(chan struct{})
 	defer close(stopRotation)
-	go rotateWhileRunning(stopRotation, []string{savLog, serverLog})
+	go rotateWhileRunning(stopRotation, []string{savLog, palcalcLog, serverLog})
 	if !opts.noBrowser {
 		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", dashboardURL).Start()
 	}
@@ -227,9 +241,9 @@ func run(args []string) error {
 				dismissMessageBox(title, finished)
 			},
 		)
-		return waitForPromptOrChildren(prompt, savChild, serverChild)
+		return waitForPromptOrManagedChildren(prompt, namedChild{"sav-cli", savChild}, namedChild{"palcalc bridge", palcalcChild}, namedChild{"palpanel server", serverChild})
 	}
-	return waitForEitherChild(savChild, serverChild)
+	return waitForEitherChild(savChild, palcalcChild, serverChild)
 }
 
 func acquireInstanceMutex(root string) (windows.Handle, bool, error) {

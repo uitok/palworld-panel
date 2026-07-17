@@ -50,6 +50,21 @@ func TestLoadAllowsExplicitDevNoAuth(t *testing.T) {
 	if cfg.RCONPort != DefaultRCONPort {
 		t.Fatalf("RCONPort = %d", cfg.RCONPort)
 	}
+	if cfg.EffectiveRCONHost() != "127.0.0.1" {
+		t.Fatalf("RCONHost = %q", cfg.EffectiveRCONHost())
+	}
+}
+
+func TestLoadAllowsContainerRCONHost(t *testing.T) {
+	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
+	t.Setenv("PALPANEL_RCON_HOST", "palworld-server")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EffectiveRCONHost() != "palworld-server" {
+		t.Fatalf("RCONHost = %q", cfg.EffectiveRCONHost())
+	}
 }
 
 func TestLoadUsesPalDefenderRESTOverrides(t *testing.T) {
@@ -145,6 +160,7 @@ func TestLoadRejectsInvalidScalarConfiguration(t *testing.T) {
 		"PALPANEL_RCON_PORT":                      "70000",
 		"PALPANEL_LISTEN_ADDR":                    "127.0.0.1:not-a-port",
 		"PALPANEL_MONITOR_RETENTION_DAYS":         "-1",
+		"PALPANEL_RCON_HOST":                      "bad host:25575",
 	}
 	for name, value := range tests {
 		t.Run(name, func(t *testing.T) {

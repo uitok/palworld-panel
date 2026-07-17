@@ -13,6 +13,7 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "screenshots:readme": "node scripts/readme-screenshots.mjs",
     "check": "npm run check:api-types && npm run typecheck && npm run lint && npm run test && npm run build",
     "preview": "vite preview"
   },

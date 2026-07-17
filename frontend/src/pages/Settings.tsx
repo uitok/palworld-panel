@@ -45,6 +45,7 @@ export const Settings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [aiConfig, setAIConfig] = useState<AITranslationConfig | null>(null);
+  const [aiConfigLoading, setAIConfigLoading] = useState(false);
   const [aiBaseURL, setAIBaseURL] = useState('');
   const [aiModel, setAIModel] = useState('');
   const [aiAPIKey, setAIAPIKey] = useState('');
@@ -106,6 +107,7 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     if (!canConfigureAI) return;
     let active = true;
+    setAIConfigLoading(true);
     void aiTranslationApi.getConfig()
       .then((config) => {
         if (!active) return;
@@ -122,6 +124,9 @@ export const Settings: React.FC = () => {
       })
       .catch((error) => {
         if (active) setMessage(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (active) setAIConfigLoading(false);
       });
     return () => {
       active = false;
@@ -131,7 +136,12 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     if (!session?.permissions.includes('security:write')) return;
     void authApi.listKeys()
-      .then(setDevelopmentKeys)
+      .then((keys) => {
+        setDevelopmentKeys((current) => {
+          const currentIDs = new Set(current.map((key) => key.id));
+          return [...current, ...keys.filter((key) => !currentIDs.has(key.id))];
+        });
+      })
       .catch((error) => setMessage(getErrorMessage(error)));
   }, [session]);
 
@@ -484,7 +494,14 @@ export const Settings: React.FC = () => {
         </section>
       )}
 
-      {canConfigureAI && (
+      {canConfigureAI && aiConfigLoading && (
+        <section className="flex min-h-32 items-center justify-center rounded-xl border border-slate-200 bg-white p-5 text-sm font-semibold text-slate-500 sm:p-6">
+          <RefreshCw className="mr-2 animate-spin text-sky-500" size={15} />
+          正在读取 AI 翻译配置...
+        </section>
+      )}
+
+      {canConfigureAI && !aiConfigLoading && (
         <section className="rounded-lg border border-slate-100 bg-white p-5 sm:p-6">
           <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">

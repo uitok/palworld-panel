@@ -9,6 +9,7 @@ import type { Base } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { SaveIndexStatusBar } from '../components/ui/SaveIndexStatusBar';
+import { SaveDataTabs } from '../components/ui/SaveDataTabs';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const pageSize = 50;
@@ -81,6 +82,7 @@ export const Bases: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <SaveDataTabs />
       {notice && (
         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3.5 text-xs font-semibold text-sky-700">
           <Sparkles size={16} className="mr-2 inline" />

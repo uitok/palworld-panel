@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -154,6 +155,60 @@ type APIKey struct {
 	CreatedAt  string `json:"created_at"`
 }
 
+type SaveSource struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Kind          string   `json:"kind"`
+	Path          string   `json:"path,omitempty"`
+	Active        bool     `json:"active"`
+	Fingerprint   string   `json:"fingerprint,omitempty"`
+	ParserVersion string   `json:"parser_version,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+	IndexedAt     string   `json:"indexed_at,omitempty"`
+	CreatedAt     string   `json:"created_at"`
+	UpdatedAt     string   `json:"updated_at"`
+}
+
+type BreedingResult struct {
+	ID          string `json:"id"`
+	JobID       string `json:"job_id"`
+	Subject     string `json:"subject"`
+	SourceID    string `json:"source_id"`
+	Fingerprint string `json:"fingerprint"`
+	RequestJSON string `json:"request_json"`
+	ResultJSON  string `json:"result_json"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type BreedingPreset struct {
+	ID         string `json:"id"`
+	Subject    string `json:"subject"`
+	Name       string `json:"name"`
+	ConfigJSON string `json:"config_json"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+type CustomPalContainer struct {
+	ID        string `json:"id"`
+	Subject   string `json:"subject"`
+	Name      string `json:"name"`
+	PalsJSON  string `json:"pals_json"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type BreedSession struct {
+	ID        string `json:"id"`
+	Subject   string `json:"subject"`
+	TokenHash string `json:"-"`
+	PlayerUID string `json:"player_uid"`
+	ExpiresAt string `json:"expires_at"`
+	CreatedAt string `json:"created_at"`
+}
+
 var ErrAlreadyInitialized = errors.New("panel is already initialized")
 
 func Open(path string) (*Store, error) {
@@ -246,7 +301,71 @@ func migrations() []schemaMigration {
 		{version: 2, apply: migrateOperationalReliability},
 		{version: 3, apply: migrateJobErrorCodes},
 		{version: 4, apply: migrateAccountAuthentication},
+		{version: 5, apply: migrateBreedingAndSaveSources},
+		{version: 6, apply: migrateSaveSourceIndexMetadata},
 	}
+}
+
+func migrateSaveSourceIndexMetadata(ctx context.Context, tx *sql.Tx) error {
+	return execAll(ctx, tx,
+		`ALTER TABLE save_sources ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE save_sources ADD COLUMN parser_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE save_sources ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE save_sources ADD COLUMN indexed_at TEXT NOT NULL DEFAULT ''`,
+	)
+}
+
+func migrateBreedingAndSaveSources(ctx context.Context, tx *sql.Tx) error {
+	return execAll(ctx, tx,
+		`CREATE TABLE IF NOT EXISTS save_sources (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			path TEXT NOT NULL DEFAULT '',
+			active INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_save_sources_active ON save_sources(active) WHERE active=1`,
+		`CREATE TABLE IF NOT EXISTS breeding_results (
+			id TEXT PRIMARY KEY,
+			job_id TEXT NOT NULL UNIQUE,
+			subject TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			request_json TEXT NOT NULL,
+			result_json TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_breeding_results_subject ON breeding_results(subject,created_at)`,
+		`CREATE TABLE IF NOT EXISTS breeding_presets (
+			id TEXT PRIMARY KEY,
+			subject TEXT NOT NULL,
+			name TEXT NOT NULL,
+			config_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(subject,name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS custom_pal_containers (
+			id TEXT PRIMARY KEY,
+			subject TEXT NOT NULL,
+			name TEXT NOT NULL,
+			pals_json TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS breed_sessions (
+			id TEXT PRIMARY KEY,
+			subject TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			player_uid TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+	)
 }
 
 func migrateBaseline(ctx context.Context, tx *sql.Tx) error {
@@ -1144,6 +1263,291 @@ func (s *Store) ResetUserPassword(ctx context.Context, username, passwordHash st
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) UpsertSaveSource(ctx context.Context, source SaveSource) error {
+	if strings.TrimSpace(source.ID) == "" || strings.TrimSpace(source.Name) == "" || strings.TrimSpace(source.Kind) == "" {
+		return errors.New("save source id, name and kind are required")
+	}
+	stamp := now()
+	if source.CreatedAt == "" {
+		source.CreatedAt = stamp
+	}
+	source.UpdatedAt = stamp
+	_, err := s.db.ExecContext(ctx, `INSERT INTO save_sources(id,name,kind,path,active,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,path=excluded.path,updated_at=excluded.updated_at`,
+		source.ID, source.Name, source.Kind, source.Path, boolInt(source.Active), source.CreatedAt, source.UpdatedAt)
+	return err
+}
+
+func (s *Store) ListSaveSources(ctx context.Context) ([]SaveSource, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,kind,path,active,fingerprint,parser_version,warnings_json,indexed_at,created_at,updated_at FROM save_sources ORDER BY active DESC,created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SaveSource{}
+	for rows.Next() {
+		var item SaveSource
+		var active int
+		var warningsJSON string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Path, &active, &item.Fingerprint, &item.ParserVersion, &warningsJSON, &item.IndexedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Active = active == 1
+		item.Warnings = decodeTags(warningsJSON)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetSaveSource(ctx context.Context, id string) (SaveSource, error) {
+	var item SaveSource
+	var active int
+	var warningsJSON string
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,kind,path,active,fingerprint,parser_version,warnings_json,indexed_at,created_at,updated_at FROM save_sources WHERE id=?`, id).
+		Scan(&item.ID, &item.Name, &item.Kind, &item.Path, &active, &item.Fingerprint, &item.ParserVersion, &warningsJSON, &item.IndexedAt, &item.CreatedAt, &item.UpdatedAt)
+	item.Active = active == 1
+	item.Warnings = decodeTags(warningsJSON)
+	return item, err
+}
+
+func (s *Store) ActiveSaveSource(ctx context.Context) (SaveSource, error) {
+	var item SaveSource
+	var active int
+	var warningsJSON string
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,kind,path,active,fingerprint,parser_version,warnings_json,indexed_at,created_at,updated_at FROM save_sources WHERE active=1 LIMIT 1`).
+		Scan(&item.ID, &item.Name, &item.Kind, &item.Path, &active, &item.Fingerprint, &item.ParserVersion, &warningsJSON, &item.IndexedAt, &item.CreatedAt, &item.UpdatedAt)
+	item.Active = active == 1
+	item.Warnings = decodeTags(warningsJSON)
+	return item, err
+}
+
+func (s *Store) UpdateSaveSourceIndex(ctx context.Context, id, fingerprint, parserVersion string, warnings []string, indexedAt string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE save_sources SET fingerprint=?,parser_version=?,warnings_json=?,indexed_at=?,updated_at=? WHERE id=?`, fingerprint, parserVersion, encodeTags(warnings), indexedAt, now(), id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ActivateSaveSource(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE save_sources SET active=0,updated_at=? WHERE active=1`, now()); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE save_sources SET active=1,updated_at=? WHERE id=?`, now(), id)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeleteSaveSource(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM save_sources WHERE id=? AND kind!='server' AND active=0`, id)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) CreateBreedingResult(ctx context.Context, item BreedingResult) error {
+	stamp := now()
+	if item.CreatedAt == "" {
+		item.CreatedAt = stamp
+	}
+	item.UpdatedAt = stamp
+	_, err := s.db.ExecContext(ctx, `INSERT INTO breeding_results(id,job_id,subject,source_id,fingerprint,request_json,result_json,status,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`, item.ID, item.JobID, item.Subject, item.SourceID, item.Fingerprint, item.RequestJSON, item.ResultJSON, item.Status, item.CreatedAt, item.UpdatedAt)
+	return err
+}
+
+func (s *Store) CompleteBreedingResult(ctx context.Context, jobID, status, resultJSON string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE breeding_results SET status=?,result_json=?,updated_at=? WHERE job_id=?`, status, resultJSON, now(), jobID)
+	return err
+}
+
+func (s *Store) GetBreedingResultByJob(ctx context.Context, jobID string) (BreedingResult, error) {
+	var item BreedingResult
+	err := s.db.QueryRowContext(ctx, `SELECT id,job_id,subject,source_id,fingerprint,request_json,result_json,status,created_at,updated_at FROM breeding_results WHERE job_id=?`, jobID).
+		Scan(&item.ID, &item.JobID, &item.Subject, &item.SourceID, &item.Fingerprint, &item.RequestJSON, &item.ResultJSON, &item.Status, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *Store) ListBreedingResults(ctx context.Context, subject string, limit int) ([]BreedingResult, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,job_id,subject,source_id,fingerprint,request_json,result_json,status,created_at,updated_at FROM breeding_results WHERE subject=? ORDER BY created_at DESC LIMIT ?`, subject, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BreedingResult{}
+	for rows.Next() {
+		var item BreedingResult
+		if err := rows.Scan(&item.ID, &item.JobID, &item.Subject, &item.SourceID, &item.Fingerprint, &item.RequestJSON, &item.ResultJSON, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) FindCachedBreedingResult(ctx context.Context, sourceID, fingerprint, requestJSON string) (BreedingResult, error) {
+	var item BreedingResult
+	err := s.db.QueryRowContext(ctx, `SELECT id,job_id,subject,source_id,fingerprint,request_json,result_json,status,created_at,updated_at
+		FROM breeding_results WHERE source_id=? AND fingerprint=? AND request_json=? AND status='completed' AND result_json!=''
+		ORDER BY updated_at DESC LIMIT 1`, sourceID, fingerprint, requestJSON).
+		Scan(&item.ID, &item.JobID, &item.Subject, &item.SourceID, &item.Fingerprint, &item.RequestJSON, &item.ResultJSON, &item.Status, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *Store) ListBreedingPresets(ctx context.Context, subject string) ([]BreedingPreset, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,subject,name,config_json,created_at,updated_at FROM breeding_presets WHERE subject=? ORDER BY name`, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BreedingPreset{}
+	for rows.Next() {
+		var item BreedingPreset
+		if err := rows.Scan(&item.ID, &item.Subject, &item.Name, &item.ConfigJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) UpsertBreedingPreset(ctx context.Context, item BreedingPreset) error {
+	stamp := now()
+	if item.CreatedAt == "" {
+		item.CreatedAt = stamp
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO breeding_presets(id,subject,name,config_json,created_at,updated_at) VALUES(?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET name=excluded.name,config_json=excluded.config_json,updated_at=excluded.updated_at WHERE breeding_presets.subject=excluded.subject`,
+		item.ID, item.Subject, item.Name, item.ConfigJSON, item.CreatedAt, stamp)
+	if err != nil {
+		return err
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) DeleteBreedingPreset(ctx context.Context, subject, id string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM breeding_presets WHERE subject=? AND id=?`, subject, id)
+	if err != nil {
+		return err
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ListCustomPalContainers(ctx context.Context, subject string) ([]CustomPalContainer, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,subject,name,pals_json,created_at,updated_at FROM custom_pal_containers WHERE subject=? ORDER BY name`, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CustomPalContainer{}
+	for rows.Next() {
+		var item CustomPalContainer
+		if err := rows.Scan(&item.ID, &item.Subject, &item.Name, &item.PalsJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetCustomPalContainer(ctx context.Context, subject, id string) (CustomPalContainer, error) {
+	var item CustomPalContainer
+	err := s.db.QueryRowContext(ctx, `SELECT id,subject,name,pals_json,created_at,updated_at FROM custom_pal_containers WHERE subject=? AND id=?`, subject, id).
+		Scan(&item.ID, &item.Subject, &item.Name, &item.PalsJSON, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *Store) UpsertCustomPalContainer(ctx context.Context, item CustomPalContainer) error {
+	stamp := now()
+	if item.CreatedAt == "" {
+		item.CreatedAt = stamp
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT INTO custom_pal_containers(id,subject,name,pals_json,created_at,updated_at) VALUES(?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET name=excluded.name,pals_json=excluded.pals_json,updated_at=excluded.updated_at WHERE custom_pal_containers.subject=excluded.subject`,
+		item.ID, item.Subject, item.Name, item.PalsJSON, item.CreatedAt, stamp)
+	if err != nil {
+		return err
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) DeleteCustomPalContainer(ctx context.Context, subject, id string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM custom_pal_containers WHERE subject=? AND id=?`, subject, id)
+	if err != nil {
+		return err
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) CreateBreedSession(ctx context.Context, item BreedSession) error {
+	if item.CreatedAt == "" {
+		item.CreatedAt = now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO breed_sessions(id,subject,token_hash,player_uid,expires_at,created_at) VALUES(?,?,?,?,?,?)`,
+		item.ID, item.Subject, item.TokenHash, item.PlayerUID, item.ExpiresAt, item.CreatedAt)
+	return err
+}
+
+func (s *Store) GetBreedSession(ctx context.Context, tokenHash string, at time.Time) (BreedSession, error) {
+	var item BreedSession
+	err := s.db.QueryRowContext(ctx, `SELECT id,subject,token_hash,player_uid,expires_at,created_at FROM breed_sessions WHERE token_hash=? AND expires_at>?`, tokenHash, at.UTC().Format(time.RFC3339Nano)).
+		Scan(&item.ID, &item.Subject, &item.TokenHash, &item.PlayerUID, &item.ExpiresAt, &item.CreatedAt)
+	return item, err
+}
+
+func (s *Store) DeleteExpiredBreedSessions(ctx context.Context, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM breed_sessions WHERE expires_at<=?`, at.UTC().Format(time.RFC3339Nano))
+	return err
 }
 
 func boolInt(v bool) int {

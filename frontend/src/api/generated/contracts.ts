@@ -205,9 +205,23 @@ export interface components {
       "version"?: string;
       "workshop_id"?: string;
     };
+    "PalDefenderAccessSettingsUpdate": {
+      "admin_auto_login": boolean;
+      "admin_ips": Array<string>;
+      "use_admin_whitelist": boolean;
+      "use_whitelist": boolean;
+      "whitelist_message": string;
+    };
     "PalDefenderBroadcastRequest": {
       "alert"?: boolean;
       "message": string;
+    };
+    "PalDefenderExportedPalTemplateInfo": {
+      "modified_at": string;
+      "name": string;
+      "path": string;
+      "player_id": string;
+      "size": number;
     };
     "PalDefenderGMInventory": {
       "Inventory": components["schemas"]["PalDefenderInventory"];
@@ -246,6 +260,12 @@ export interface components {
     };
     "PalDefenderGiveItemsRequest": {
       "Items": Array<components["schemas"]["PalDefenderItemGrant"]>;
+    };
+    "PalDefenderGivePalTemplatesRequest": {
+      "PalTemplates": Array<string>;
+    };
+    "PalDefenderGivePalsRequest": {
+      "Pals": Array<components["schemas"]["PalDefenderPalGrant"]>;
     };
     "PalDefenderInventory": {
       "Armor": components["schemas"]["PalDefenderInventoryContainer"];
@@ -289,6 +309,49 @@ export interface components {
       "Message": string;
       "SendType"?: "PlayerChat" | "PlayerGlobalChat" | "PlayerGuildChat" | "PlayerLogNormal" | "PlayerLogImportant" | "PlayerLogVeryImportant";
     };
+    "PalDefenderPalGrant": {
+      "Level": number;
+      "PalID": string;
+    };
+    "PalDefenderPalTemplate": {
+      "ActiveSkills"?: Array<string>;
+      "CondensedPals"?: number;
+      "CraftSpeed"?: number;
+      "DisableWorkPreferences"?: Array<string>;
+      "Exp"?: number;
+      "ExtraWorkSuitabilities"?: Record<string, number>;
+      "FriendshipPoints"?: number;
+      "Gender"?: "Male" | "Female" | "None";
+      "HP"?: number;
+      "Hunger"?: number;
+      "IVs"?: Record<string, number>;
+      "ImportedCharacter"?: boolean;
+      "LearntSkills"?: Array<string>;
+      "Level"?: number;
+      "MP"?: number;
+      "MaxHunger"?: number;
+      "Nickname"?: string;
+      "PalID": string;
+      "PalSouls"?: Record<string, number>;
+      "PartnerSkillLevel"?: number;
+      "Passives"?: Array<string>;
+      "PhysicalHealth"?: string;
+      "SAN"?: number;
+      "SP"?: number;
+      "Shield"?: number;
+      "Shiny"?: boolean;
+      "SkinId"?: string;
+      "Support"?: number;
+      "UniqueNPCID"?: string;
+      "UnusedStatusPoints"?: number;
+      "WorkerSick"?: string;
+    };
+    "PalDefenderProgressionGrantRequest": {
+      "AncientTechnologyPoints"?: number;
+      "EXP"?: number;
+      "Relics"?: Record<string, number>;
+      "TechnologyPoints"?: number;
+    };
     "PalDefenderPunishmentRequest": {
       "IP"?: boolean;
       "Reason"?: string;
@@ -301,6 +364,9 @@ export interface components {
       "Patch": number;
       "Version": string;
       "VersionLong": string;
+    };
+    "PalDefenderTechnologyRequest": {
+      "Technology": unknown;
     };
     "Schedule": components["schemas"]["ScheduleInput"] & {
       "created_at": string;

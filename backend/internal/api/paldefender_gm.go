@@ -149,6 +149,15 @@ func failPalDefenderGM(c *gin.Context, err error) {
 	case errors.Is(err, paldefender.ErrRESTUnavailable):
 		fail(c, http.StatusServiceUnavailable, "paldefender_rest_unavailable", paldefender.ErrRESTUnavailable.Error())
 		return
+	case errors.Is(err, paldefender.ErrRCONDisabled), errors.Is(err, paldefender.ErrRCONPasswordMissing), errors.Is(err, paldefender.ErrRCONBase64Unsupported):
+		fail(c, http.StatusConflict, "paldefender_rcon_not_ready", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrRCONUnavailable):
+		fail(c, http.StatusServiceUnavailable, "paldefender_rcon_unavailable", paldefender.ErrRCONUnavailable.Error())
+		return
+	case errors.Is(err, paldefender.ErrRCONAuthentication), errors.Is(err, paldefender.ErrRCONInvalidResponse):
+		fail(c, http.StatusBadGateway, "paldefender_rcon_failed", err.Error())
+		return
 	}
 	var restErr *paldefender.RESTError
 	if errors.As(err, &restErr) {

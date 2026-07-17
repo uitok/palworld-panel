@@ -34,6 +34,9 @@ func Inspect(data []byte) (Info, error) {
 	if idx := bytes.Index(data, []byte("GVAS")); idx >= 0 {
 		info.GVASOffset = idx
 	}
+	if err == nil && info.Magic != "PlZ" && info.Magic != "PlM" {
+		err = incompatible("unsupported or invalid Palworld .sav header")
+	}
 	return info, err
 }
 

@@ -1,0 +1,1 @@
+"""PalPanel AstrBot plugin."""

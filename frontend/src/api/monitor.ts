@@ -1,5 +1,13 @@
 import { apiClient, handleRequest } from './client';
-import type { MonitorSample, MonitorSnapshot } from '../types';
+import type { DebugLogStatus, MonitorSample, MonitorSnapshot } from '../types';
+
+const emptyDebugStatus: DebugLogStatus = {
+  enabled: false,
+  path: '',
+  size: 0,
+  max_bytes: 20 * 1024 * 1024,
+  max_files: 5,
+};
 
 const emptySample: MonitorSample = {
   id: '',
@@ -53,6 +61,17 @@ const mapHistory = (raw: unknown): MonitorSample[] => {
   return raw.map(mapSample);
 };
 
+const mapDebugStatus = (raw: unknown): DebugLogStatus => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    enabled: Boolean(data.enabled),
+    path: String(data.path || ''),
+    size: Number(data.size || 0),
+    max_bytes: Number(data.max_bytes || 20 * 1024 * 1024),
+    max_files: Number(data.max_files || 5),
+  };
+};
+
 export const monitorApi = {
   snapshot: () =>
     handleRequest<unknown, MonitorSnapshot>(
@@ -66,5 +85,19 @@ export const monitorApi = {
       () => apiClient.get(`/monitor/history?limit=${limit}`),
       [],
       { map: mapHistory, quiet: true },
+    ),
+
+  debugStatus: () =>
+    handleRequest<unknown, DebugLogStatus>(
+      () => apiClient.get('/system/debug'),
+      emptyDebugStatus,
+      { map: mapDebugStatus, quiet: true, fallbackOnError: true },
+    ),
+
+  setDebug: (enabled: boolean) =>
+    handleRequest<unknown, DebugLogStatus>(
+      () => apiClient.put('/system/debug', { enabled }),
+      emptyDebugStatus,
+      { map: mapDebugStatus, quiet: true, fallbackOnError: false },
     ),
 };

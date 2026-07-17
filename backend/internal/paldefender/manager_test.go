@@ -48,9 +48,57 @@ func TestInstallReleaseFromZip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	installedSum := sha256.Sum256(installed)
-	if hex.EncodeToString(installedSum[:]) != BundledPalDefenderSHA256 {
-		t.Fatal("install did not prefer the bundled PalDefender.dll")
+	if string(installed) != "paldefender" {
+		t.Fatalf("zip PalDefender.dll was not installed: %q", installed)
+	}
+}
+
+func TestInstallReleasePrefersDirectGitHubAssets(t *testing.T) {
+	assets := map[string][]byte{
+		"d3d9.dll":        []byte("direct-loader"),
+		"PalDefender.dll": []byte("direct-paldefender"),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := assets[strings.TrimPrefix(r.URL.Path, "/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	releaseAssets := make([]Asset, 0, len(assets)+1)
+	for name, body := range assets {
+		sum := sha256.Sum256(body)
+		releaseAssets = append(releaseAssets, Asset{
+			Name:               name,
+			Size:               int64(len(body)),
+			Digest:             "sha256:" + hex.EncodeToString(sum[:]),
+			BrowserDownloadURL: server.URL + "/" + name,
+		})
+	}
+	zipBytes := makePalDefenderZip(t)
+	zipSum := sha256.Sum256(zipBytes)
+	releaseAssets = append(releaseAssets, Asset{
+		Name:               "PalDefender.zip",
+		Digest:             "sha256:" + hex.EncodeToString(zipSum[:]),
+		BrowserDownloadURL: server.URL + "/PalDefender.zip",
+	})
+
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	if err := manager.installRelease(t.Context(), Release{TagName: "v1.8.3", Assets: releaseAssets}); err != nil {
+		t.Fatalf("installRelease returned error: %v", err)
+	}
+	for name, want := range assets {
+		got, err := os.ReadFile(filepath.Join(manager.cfg.Win64Dir(), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s = %q, want direct asset %q", name, got, want)
+		}
 	}
 }
 
@@ -101,36 +149,12 @@ func TestInstallReleaseRequiresPublishedDigest(t *testing.T) {
 	}
 }
 
-func TestBundledPalDefenderMetadataAndReplacement(t *testing.T) {
-	info := BundledInfo()
-	if info.Version != "1.8.1" || info.SHA256 != BundledPalDefenderSHA256 || info.Size != 3287552 {
-		t.Fatalf("BundledInfo = %#v", info)
+func TestReleaseVersionUsesGitHubTag(t *testing.T) {
+	if got := releaseVersion(Release{TagName: " v1.8.3 "}); got != "1.8.3" {
+		t.Fatalf("releaseVersion = %q", got)
 	}
-	if err := validateBundledDLL(); err != nil {
-		t.Fatal(err)
-	}
-	manager, cleanup := testManager(t)
-	defer cleanup()
-	destination := filepath.Join(manager.cfg.Win64Dir(), "PalDefender.dll")
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(destination, []byte("older"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.installBundledDLL(); err != nil {
-		t.Fatal(err)
-	}
-	installed, err := os.ReadFile(destination)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(installed)
-	if hex.EncodeToString(sum[:]) != BundledPalDefenderSHA256 {
-		t.Fatal("installed bundle hash mismatch")
-	}
-	if fileExists(destination + ".palpanel-replaced") {
-		t.Fatal("replacement staging file was not cleaned")
+	if got := releaseVersion(Release{Name: "1.8.3"}); got != "" {
+		t.Fatalf("releaseVersion should require tag_name, got %q", got)
 	}
 }
 
@@ -147,7 +171,7 @@ func TestStatusDistinguishesInstalledFilesFromStartupLogEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := manager.Status(t.Context())
-	if err != nil || !status.Installed || status.LoadVerified {
+	if err != nil || !status.Installed || status.LoadVerified || status.ReleaseSource != "github_latest" {
 		t.Fatalf("status before startup evidence = %#v, %v", status, err)
 	}
 	if err := os.WriteFile(manager.cfg.ServerLogPath(), []byte("PalDefender version 1.8.1 loaded"), 0o600); err != nil {

@@ -120,7 +120,7 @@ export const Security: React.FC = () => {
             <div className="flex flex-col gap-3">
               <InfoRow label="安装状态" value={status.installed ? '已安装' : '未安装'} ok={status.installed} />
               <InfoRow label="版本" value={status.version || '未知'} ok={Boolean(status.version)} />
-              <InfoRow label="内置 DLL" value={status.bundled.version ? `v${status.bundled.version}` : '不可用'} ok={Boolean(status.bundled.version)} />
+              <InfoRow label="更新来源" value={status.release_source === 'github_latest' ? 'GitHub 最新稳定版' : status.release_source} ok={status.release_source === 'github_latest'} />
               <InfoRow label="REST API" value={status.rest_api_enabled ? '已启用' : '未启用'} ok={status.rest_api_enabled} />
               <InfoRow label="PalDefender 加载" value={status.load_verified ? '启动日志已确认' : '尚未确认'} ok={status.load_verified} />
               <InfoRow
@@ -148,7 +148,7 @@ export const Security: React.FC = () => {
         <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
           <h3 className="mb-4 flex items-center gap-2 text-[15px] font-bold text-slate-800">
             <Sparkles size={18} className="text-sky-500" />
-            加载器 Release
+            GitHub 最新版
           </h3>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
             <p className="text-[11px] font-semibold text-slate-400">Latest</p>
@@ -159,7 +159,7 @@ export const Security: React.FC = () => {
             <p className="mt-3 text-[11px] font-semibold text-slate-500">
               {(latest?.assets || []).map((asset) => asset.name).join(' / ') || '暂无资产信息'}
             </p>
-            {status?.bundled.sha256 && <p className="mt-3 break-all font-mono text-[9px] text-slate-400">DLL SHA-256: {status.bundled.sha256}</p>}
+            <p className="mt-3 text-[10px] font-medium leading-4 text-slate-500">安装和更新都会读取官方最新稳定版，并校验 GitHub Release 公布的 SHA-256。</p>
           </div>
           {activeJob && (
             <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-3">

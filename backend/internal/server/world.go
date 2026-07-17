@@ -150,7 +150,7 @@ func (m Manager) runWorldReset(ctx context.Context, jobID, expectedWorldID strin
 		return
 	}
 
-	stagingRoot := filepath.Join(m.cfg.ServerDir, "Pal", "Saved", ".palpanel-world-reset")
+	stagingRoot := filepath.Join(m.cfg.ServerDirectory(), "Pal", "Saved", ".palpanel-world-reset")
 	stagedPath := filepath.Join(stagingRoot, jobID)
 	if err := os.MkdirAll(stagingRoot, 0o700); err != nil {
 		m.failBeforeWorldMove(ctx, jobID, wasRunning, 38, "world staging setup failed", err.Error()+"; verified backup retained at "+backup.Path)
@@ -293,7 +293,7 @@ func validateWorldID(worldID string) error {
 }
 
 func (m Manager) worldsRoot() string {
-	return filepath.Join(m.cfg.ServerDir, "Pal", "Saved", "SaveGames", "0")
+	return filepath.Join(m.cfg.ServerDirectory(), "Pal", "Saved", "SaveGames", "0")
 }
 
 func (m Manager) worldPath(worldID string) string {

@@ -9,6 +9,7 @@ import type { Pal } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { SaveIndexStatusBar } from '../components/ui/SaveIndexStatusBar';
+import { SaveDataTabs } from '../components/ui/SaveDataTabs';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const suitabilityText: Record<string, string> = {
@@ -104,6 +105,7 @@ export const Pals: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <SaveDataTabs />
       {notice && (
         <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-3 text-xs font-semibold text-amber-800">
           <AlertCircle className="mr-2 inline" size={14} />

@@ -25,6 +25,8 @@ type Manager struct {
 	cfg         appconfig.Config
 	client      *http.Client
 	mu          sync.Mutex
+	sourceMu    sync.RWMutex
+	sourcePath  string
 	cacheMu     sync.Mutex
 	cache       *cacheFile
 	cacheMTime  time.Time
@@ -61,7 +63,7 @@ type Player struct {
 	InventorySummary map[string]any `json:"inventory_summary,omitempty"`
 	Ping             *float64       `json:"ping,omitempty"`
 	IP               string         `json:"ip,omitempty"`
-	Raw              any            `json:"raw,omitempty"`
+	Raw              any            `json:"-"`
 }
 
 type GuildMember struct {
@@ -77,7 +79,7 @@ type Guild struct {
 	Members           []GuildMember `json:"members"`
 	BaseIDs           []string      `json:"base_ids"`
 	OnlineMemberCount int           `json:"online_member_count"`
-	Raw               any           `json:"raw,omitempty"`
+	Raw               any           `json:"-"`
 }
 
 type Worker struct {
@@ -97,7 +99,7 @@ type Base struct {
 	Workers         []Worker    `json:"workers"`
 	Containers      []string    `json:"containers"`
 	Status          string      `json:"status"`
-	Raw             any         `json:"raw,omitempty"`
+	Raw             any         `json:"-"`
 }
 
 type Pal struct {
@@ -106,13 +108,23 @@ type Pal struct {
 	Nickname       string      `json:"nickname"`
 	Level          int         `json:"level"`
 	OwnerPlayerUID string      `json:"owner_player_uid"`
+	OldOwnerUIDs   []string    `json:"old_owner_uids"`
 	GuildID        string      `json:"guild_id"`
 	ContainerID    string      `json:"container_id"`
+	SlotIndex      int         `json:"slot_index"`
+	LocationType   string      `json:"location_type"`
 	Location       Coordinates `json:"location"`
+	Gender         string      `json:"gender"`
+	Rank           int         `json:"rank"`
+	IVHP           int         `json:"iv_hp"`
+	IVAttack       int         `json:"iv_attack"`
+	IVDefense      int         `json:"iv_defense"`
 	Skills         []string    `json:"skills"`
+	EquippedSkills []string    `json:"equipped_skills"`
 	Passives       []string    `json:"passives"`
+	OnExpedition   bool        `json:"on_expedition"`
 	Status         string      `json:"status"`
-	Raw            any         `json:"raw,omitempty"`
+	Raw            any         `json:"-"`
 }
 
 type Slot struct {
@@ -321,11 +333,29 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 }
 
 func (m *Manager) FindWorldDir() (string, error) {
-	worldDir, err := findWorldDir(filepath.Join(m.cfg.ServerDir, "Pal", "Saved", "SaveGames"))
+	m.sourceMu.RLock()
+	override := m.sourcePath
+	m.sourceMu.RUnlock()
+	if strings.TrimSpace(override) != "" {
+		return findWorldDir(override)
+	}
+	worldDir, err := findWorldDir(filepath.Join(m.cfg.ServerDirectory(), "Pal", "Saved", "SaveGames"))
 	if err != nil {
 		return "", err
 	}
 	return worldDir, nil
+}
+
+// SetSourcePath changes the active save source. An empty path restores the
+// managed server save. Switching sources invalidates the single active cache.
+func (m *Manager) SetSourcePath(path string) {
+	m.sourceMu.Lock()
+	changed := filepath.Clean(m.sourcePath) != filepath.Clean(path)
+	m.sourcePath = strings.TrimSpace(path)
+	m.sourceMu.Unlock()
+	if changed {
+		m.Invalidate()
+	}
 }
 
 func (m *Manager) Invalidate() {
@@ -379,11 +409,11 @@ func (m *Manager) callIndexer(ctx context.Context, worldDir string) (Index, erro
 	}
 	var envelope sidecarEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return Index{}, fmt.Errorf("save indexer returned invalid JSON: %w", err)
+		return Index{}, errors.New("save indexer returned a non-JSON response; verify the sav-cli version and inspect its text logs")
 	}
 	if resp.StatusCode >= 400 || !envelope.OK {
 		if envelope.Error != nil {
-			return Index{}, fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+			return Index{}, errors.New("save indexer failed; inspect the sav-cli text logs")
 		}
 		return Index{}, fmt.Errorf("save indexer returned status %d", resp.StatusCode)
 	}

@@ -1,0 +1,15 @@
+{
+  "panel_url": {"type": "string", "description": "PalPanel 地址", "default": "http://127.0.0.1:8080"},
+  "panel_public_url": {"type": "string", "description": "群成员访问的 PalPanel 公网或局域网地址", "default": "http://127.0.0.1:8080"},
+  "panel_id": {"type": "string", "description": "面板实例 ID", "default": "palpanel"},
+  "shared_secret": {"type": "string", "description": "与 PalPanel 相同的 HMAC 密钥", "default": "", "obvious_hint": true},
+  "allowed_group_id": {"type": "string", "description": "允许使用插件的 QQ 群号", "default": ""},
+  "admin_qq_ids": {"type": "string", "description": "插件管理员 QQ 号，多个用英文逗号分隔", "default": ""},
+  "listen_host": {"type": "string", "description": "插件内部 API 监听地址", "default": "127.0.0.1"},
+  "listen_port": {"type": "int", "description": "插件内部 API 端口", "default": 8092},
+  "daily_points": {"type": "int", "description": "每日签到奖励", "default": 10},
+  "solve_cost": {"type": "int", "description": "每次成功配种计算费用", "default": 1},
+  "timezone": {"type": "string", "description": "签到时区", "default": "Asia/Shanghai"},
+  "ticket_ttl_seconds": {"type": "int", "description": "面板登录票据有效期", "default": 300},
+  "quick_solve_timeout_seconds": {"type": "int", "description": "QQ 快捷配种等待超时", "default": 300}
+}

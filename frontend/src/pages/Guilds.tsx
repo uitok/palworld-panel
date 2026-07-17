@@ -8,6 +8,7 @@ import { useServerStore } from '../store/useServerStore';
 import type { Guild } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { SaveIndexStatusBar } from '../components/ui/SaveIndexStatusBar';
+import { SaveDataTabs } from '../components/ui/SaveDataTabs';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const pageSize = 50;
@@ -56,6 +57,7 @@ export const Guilds: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <SaveDataTabs />
       {error && (
         <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-3 text-xs font-semibold text-rose-700">
           <AlertCircle className="mr-2 inline" size={14} />

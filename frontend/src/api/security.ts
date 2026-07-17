@@ -5,8 +5,16 @@ import { mapJob } from './tasks';
 export const palDefenderPanelPermissions = [
   'REST.Version.Read',
   'REST.Players.Read',
+  'REST.Pals.Read',
+  'REST.Pals.Give',
+  'REST.PalTemplates.Give',
   'REST.Items.Read',
   'REST.Items.Give',
+  'REST.Techs.Read',
+  'REST.Techs.Learn',
+  'REST.Techs.Forget',
+  'REST.Progression.Read',
+  'REST.Progression.Give',
   'REST.Messages.Send.PlayerChat',
   'REST.Messages.Send.GlobalChat',
   'REST.Messages.Send.GuildChat',
@@ -23,7 +31,7 @@ export const palDefenderPanelPermissions = [
 
 const fallbackStatus: PalDefenderStatus = {
   installed: false,
-  bundled: { version: '', sha256: '', size: 0 },
+  release_source: 'github_latest',
   needs_first_start: false,
   files: {},
   paths: {},
@@ -77,14 +85,7 @@ const mapStatus = (raw: unknown): PalDefenderStatus => {
   return {
     installed: Boolean(data.installed),
     version: data.version ? String(data.version) : undefined,
-    bundled: (() => {
-      const bundled = data.bundled && typeof data.bundled === 'object' ? (data.bundled as Record<string, unknown>) : {};
-      return {
-        version: String(bundled.version || ''),
-        sha256: String(bundled.sha256 || ''),
-        size: Number(bundled.size || 0),
-      };
-    })(),
+    release_source: String(data.release_source || 'github_latest'),
     needs_first_start: Boolean(data.needs_first_start),
     files:
       data.files && typeof data.files === 'object' && !Array.isArray(data.files)

@@ -13,7 +13,10 @@ export const mapJobStatus = (status: unknown): Job['status'] => {
       return 'success';
     case 'running':
     case 'processing':
+    case 'paused':
       return 'running';
+    case 'canceled':
+    case 'cancelled':
     case 'failed':
     case 'error':
       return 'failed';

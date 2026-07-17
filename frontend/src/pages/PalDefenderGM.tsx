@@ -63,7 +63,7 @@ const newGrant = (): GrantRow => ({ key: grantKey++, ItemID: '', Count: 1 });
 const identifierFor = (player: PalDefenderGMPlayer) => player.UserId || player.PlayerUID;
 const isOnline = (player: PalDefenderGMPlayer) => player.Status.toLowerCase() === 'online';
 
-export const PalDefenderGM: React.FC = () => {
+export const LegacyPalDefenderGM: React.FC = () => {
   const queryClient = useQueryClient();
   const { session } = useServerStore();
   const canWrite = Boolean(session?.permissions.includes('players:write'));
@@ -561,6 +561,8 @@ const InventoryItemIdentity: React.FC<{
     </div>
   );
 };
+
+export { PlayerCenter as PalDefenderGM } from './PlayerCenter';
 
 const ItemGrantField: React.FC<{
   label: string;

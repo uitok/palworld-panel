@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+
+	"palpanel/internal/debuglog"
 )
 
 const DefaultDockerRunnerBaseImage = "scottyhardy/docker-wine:latest@sha256:477aae36af41923cfb5eefb23923b035f8010caa49eaded952316f937dd8a49b"
@@ -73,6 +76,7 @@ type Config struct {
 	WorkshopAppID                string
 	GamePort                     int
 	QueryPort                    int
+	RCONHost                     string
 	RCONPort                     int
 	RESTPort                     int
 	PalworldRESTBaseURL          string
@@ -87,11 +91,76 @@ type Config struct {
 	SaveIndexerURL               string
 	SaveIndexCacheDir            string
 	SaveIndexTimeoutSeconds      int
+	SaveSourcesDir               string
+	PalCalcBridgeURL             string
+	PalCalcTimeoutSeconds        int
+	AstrBotPluginURL             string
+	AstrBotPanelID               string
+	AstrBotSharedSecret          string
 	PerfSlowRequestMS            int
 	MonitorRetentionDays         int
 	AITranslationTimeoutSeconds  int
 	LogLevel                     string
+	DebugLogger                  *debuglog.Logger
 	RunnerDir                    string
+	serverDirectoryState         *ServerDirectoryState
+}
+
+// ServerDirectoryState is shared by the backend managers so a validated
+// Windows server import can take effect immediately without restarting the
+// panel. Config values are copied into several managers, while this state is
+// intentionally shared between those copies.
+type ServerDirectoryState struct {
+	mu       sync.RWMutex
+	path     string
+	imported bool
+}
+
+func newServerDirectoryState(path string, imported bool) *ServerDirectoryState {
+	return &ServerDirectoryState{path: filepath.Clean(path), imported: imported}
+}
+
+// WithServerDirectoryState ensures copied Config values share a mutable server
+// directory. appconfig.Load already returns an initialized state; this helper
+// also keeps focused unit-test configurations usable.
+func (c Config) WithServerDirectoryState() Config {
+	if c.serverDirectoryState == nil {
+		c.serverDirectoryState = newServerDirectoryState(c.ServerDir, false)
+	}
+	return c
+}
+
+func (c Config) ServerDirectory() string {
+	if c.serverDirectoryState == nil {
+		return filepath.Clean(c.ServerDir)
+	}
+	c.serverDirectoryState.mu.RLock()
+	defer c.serverDirectoryState.mu.RUnlock()
+	return c.serverDirectoryState.path
+}
+
+func (c Config) ServerDirectoryImported() bool {
+	if c.serverDirectoryState == nil {
+		return false
+	}
+	c.serverDirectoryState.mu.RLock()
+	defer c.serverDirectoryState.mu.RUnlock()
+	return c.serverDirectoryState.imported
+}
+
+func (c Config) BindImportedServerDirectory(path string) error {
+	if c.serverDirectoryState == nil {
+		return fmt.Errorf("server directory state is not initialized")
+	}
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" || path == "." {
+		return fmt.Errorf("server directory is empty")
+	}
+	c.serverDirectoryState.mu.Lock()
+	c.serverDirectoryState.path = path
+	c.serverDirectoryState.imported = true
+	c.serverDirectoryState.mu.Unlock()
+	return nil
 }
 
 func Load() (Config, error) {
@@ -241,6 +310,7 @@ func Load() (Config, error) {
 		WorkshopAppID:                env("PALPANEL_WORKSHOP_APP_ID", "1623730"),
 		GamePort:                     envInt("PALPANEL_GAME_PORT", 8211),
 		QueryPort:                    envInt("PALPANEL_QUERY_PORT", 27015),
+		RCONHost:                     strings.TrimSpace(env("PALPANEL_RCON_HOST", "127.0.0.1")),
 		RCONPort:                     envInt("PALPANEL_RCON_PORT", DefaultRCONPort),
 		RESTPort:                     restPort,
 		PalworldRESTBaseURL:          env("PALWORLD_REST_BASE_URL", fmt.Sprintf("http://127.0.0.1:%d/v1/api", restPort)),
@@ -255,12 +325,19 @@ func Load() (Config, error) {
 		SaveIndexerURL:               env("PALPANEL_SAVE_INDEXER_URL", "http://127.0.0.1:8090"),
 		SaveIndexCacheDir:            saveIndexCacheDir,
 		SaveIndexTimeoutSeconds:      envInt("PALPANEL_SAVE_INDEX_TIMEOUT_SECONDS", 120),
+		SaveSourcesDir:               filepath.Join(dataDir, "save-sources"),
+		PalCalcBridgeURL:             strings.TrimRight(env("PALPANEL_PALCALC_URL", "http://127.0.0.1:8091"), "/"),
+		PalCalcTimeoutSeconds:        envInt("PALPANEL_PALCALC_TIMEOUT_SECONDS", 300),
+		AstrBotPluginURL:             strings.TrimRight(env("PALPANEL_ASTRBOT_PLUGIN_URL", "http://127.0.0.1:8092"), "/"),
+		AstrBotPanelID:               env("PALPANEL_ASTRBOT_PANEL_ID", "palpanel"),
+		AstrBotSharedSecret:          strings.TrimSpace(os.Getenv("PALPANEL_ASTRBOT_SHARED_SECRET")),
 		PerfSlowRequestMS:            envInt("PALPANEL_PERF_SLOW_REQUEST_MS", 500),
 		MonitorRetentionDays:         envInt("PALPANEL_MONITOR_RETENTION_DAYS", DefaultMonitorRetentionDays),
 		AITranslationTimeoutSeconds:  envInt("PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS", DefaultAITranslationTimeoutSeconds),
 		LogLevel:                     strings.ToLower(env("PALPANEL_LOG_LEVEL", "info")),
 		RunnerDir:                    runnerDir,
 	}
+	cfg.serverDirectoryState = newServerDirectoryState(serverDir, false)
 	if err := validateListenAddress(cfg.ListenAddr); err != nil {
 		return Config{}, err
 	}
@@ -297,6 +374,9 @@ func Load() (Config, error) {
 	if cfg.MonitorRetentionDays < 0 || cfg.MonitorRetentionDays > 3650 {
 		return Config{}, fmt.Errorf("PALPANEL_MONITOR_RETENTION_DAYS must be between 0 and 3650")
 	}
+	if !validRCONHost(cfg.RCONHost) {
+		return Config{}, fmt.Errorf("PALPANEL_RCON_HOST must be a hostname or IP address without a port")
+	}
 	for name, port := range map[string]int{
 		"PALPANEL_GAME_PORT":             cfg.GamePort,
 		"PALPANEL_QUERY_PORT":            cfg.QueryPort,
@@ -326,7 +406,7 @@ func (c Config) EnsureDirs() error {
 			return err
 		}
 	}
-	dirs := []string{c.DataDir, c.ServerDir, c.WinePrefixDir, c.ToolsDir, c.SteamCMDDir, c.UE4SSDir, c.UploadsDir, c.BackupsDir, c.LogsDir, c.SaveIndexCacheDir}
+	dirs := []string{c.DataDir, c.ServerDirectory(), c.WinePrefixDir, c.ToolsDir, c.SteamCMDDir, c.UE4SSDir, c.UploadsDir, c.BackupsDir, c.LogsDir, c.SaveIndexCacheDir, c.SaveSourcesDir}
 	for _, dir := range dirs {
 		if strings.TrimSpace(dir) == "" {
 			continue
@@ -352,19 +432,19 @@ func (c Config) EnsureDirs() error {
 }
 
 func (c Config) PalServerExePath() string {
-	return filepath.Join(c.ServerDir, "PalServer.exe")
+	return filepath.Join(c.ServerDirectory(), "PalServer.exe")
 }
 
 func (c Config) DefaultPalWorldSettingsPath() string {
-	return filepath.Join(c.ServerDir, "DefaultPalWorldSettings.ini")
+	return filepath.Join(c.ServerDirectory(), "DefaultPalWorldSettings.ini")
 }
 
 func (c Config) PalWorldSettingsPath() string {
-	return filepath.Join(c.ServerDir, "Pal", "Saved", "Config", "WindowsServer", "PalWorldSettings.ini")
+	return filepath.Join(c.ServerDirectory(), "Pal", "Saved", "Config", "WindowsServer", "PalWorldSettings.ini")
 }
 
 func (c Config) ModsDir() string {
-	return filepath.Join(c.ServerDir, "Mods")
+	return filepath.Join(c.ServerDirectory(), "Mods")
 }
 
 func (c Config) WorkshopModsDir() string {
@@ -376,11 +456,11 @@ func (c Config) PalModSettingsPath() string {
 }
 
 func (c Config) LegacyModsDir() string {
-	return filepath.Join(c.ServerDir, "Pal", "Content", "Paks", "LogicMods", "Mods")
+	return filepath.Join(c.ServerDirectory(), "Pal", "Content", "Paks", "LogicMods", "Mods")
 }
 
 func (c Config) Win64Dir() string {
-	return filepath.Join(c.ServerDir, "Pal", "Binaries", "Win64")
+	return filepath.Join(c.ServerDirectory(), "Pal", "Binaries", "Win64")
 }
 
 func (c Config) PalDefenderDir() string {
@@ -392,6 +472,14 @@ func (c Config) EffectiveRCONPort() int {
 		return c.RCONPort
 	}
 	return DefaultRCONPort
+}
+
+func (c Config) EffectiveRCONHost() string {
+	host := strings.Trim(strings.TrimSpace(c.RCONHost), "[]")
+	if host == "" {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 func (c Config) EffectivePalDefenderRESTPort() int {
@@ -414,6 +502,10 @@ func (c Config) SteamCMDBinaryPath() string {
 
 func (c Config) ServerLogPath() string {
 	return filepath.Join(c.LogsDir, "palserver.log")
+}
+
+func (c Config) DebugLogPath() string {
+	return filepath.Join(c.LogsDir, "palpanel-debug.log")
 }
 
 func (c Config) AITranslationKeyPath() string {
@@ -522,6 +614,30 @@ func validateListenAddress(address string) error {
 		return fmt.Errorf("PALPANEL_LISTEN_ADDR port must be between 1 and 65535")
 	}
 	return nil
+}
+
+func validRCONHost(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.ContainsAny(raw, "\r\n\t /") {
+		return false
+	}
+	if strings.HasPrefix(raw, "[") != strings.HasSuffix(raw, "]") {
+		return false
+	}
+	host := strings.Trim(raw, "[]")
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if strings.Contains(host, ":") {
+		return false
+	}
+	for _, char := range host {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '.' || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return host != ""
 }
 
 func env(key, fallback string) string {

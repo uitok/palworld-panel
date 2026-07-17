@@ -41,8 +41,16 @@ const (
 var panelRESTPermissions = []string{
 	"REST.Version.Read",
 	"REST.Players.Read",
+	"REST.Pals.Read",
+	"REST.Pals.Give",
+	"REST.PalTemplates.Give",
 	"REST.Items.Read",
 	"REST.Items.Give",
+	"REST.Techs.Read",
+	"REST.Techs.Learn",
+	"REST.Techs.Forget",
+	"REST.Progression.Read",
+	"REST.Progression.Give",
 	"REST.Messages.Send.PlayerChat",
 	"REST.Messages.Send.GlobalChat",
 	"REST.Messages.Send.GuildChat",
@@ -76,6 +84,8 @@ type Release struct {
 	TagName     string  `json:"tag_name"`
 	Name        string  `json:"name"`
 	PublishedAt string  `json:"published_at"`
+	Draft       bool    `json:"draft"`
+	Prerelease  bool    `json:"prerelease"`
 	Assets      []Asset `json:"assets"`
 }
 
@@ -89,7 +99,7 @@ type Asset struct {
 type Status struct {
 	Installed       bool                  `json:"installed"`
 	Version         string                `json:"version,omitempty"`
-	Bundled         BundledAssetInfo      `json:"bundled"`
+	ReleaseSource   string                `json:"release_source"`
 	NeedsFirstStart bool                  `json:"needs_first_start"`
 	Files           map[string]bool       `json:"files"`
 	Paths           map[string]string     `json:"paths"`
@@ -120,6 +130,13 @@ func (m Manager) Releases(ctx context.Context) ([]Release, error) {
 	if err := m.getJSON(ctx, releasesURL, &releases); err != nil {
 		return nil, err
 	}
+	stable := releases[:0]
+	for _, release := range releases {
+		if !release.Draft && !release.Prerelease {
+			stable = append(stable, release)
+		}
+	}
+	releases = stable
 	if len(releases) > 5 {
 		releases = releases[:5]
 	}
@@ -159,7 +176,7 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 	return Status{
 		Installed:       installed,
 		Version:         version,
-		Bundled:         BundledInfo(),
+		ReleaseSource:   "github_latest",
 		NeedsFirstStart: installed && !dirExists(m.cfg.PalDefenderDir()),
 		Files:           files,
 		Paths: map[string]string{
@@ -391,12 +408,16 @@ func (m Manager) installJob(ctx context.Context, typ, message string) (db.Job, e
 			m.update(jobID, "failed", 35, "PalDefender release lookup failed", err.Error())
 			return
 		}
+		installedVersion := releaseVersion(release)
+		if installedVersion == "" {
+			m.update(jobID, "failed", 35, "PalDefender release lookup failed", "latest GitHub release has no tag_name")
+			return
+		}
 		m.update(jobID, "running", 55, "downloading and transactionally installing PalDefender assets", "")
 		if err := m.installRelease(jobCtx, release); err != nil {
 			m.update(jobID, "failed", 55, "PalDefender install stage failed", err.Error())
 			return
 		}
-		installedVersion := BundledPalDefenderVersion + "+bundled"
 		if err := m.store.SetKV(jobCtx, kvVersion, installedVersion); err != nil {
 			m.update(jobID, "failed", 90, "installed version persistence failed", err.Error())
 			return
@@ -419,9 +440,23 @@ func (m Manager) installRelease(ctx context.Context, release Release) error {
 		return err
 	}
 	defer func() { _ = m.removeManagedDirectory(stage) }()
-	var loaderPath string
-	zipAsset := findAsset(release.Assets, "PalDefender.zip")
-	if zipAsset.BrowserDownloadURL != "" {
+	loaderAsset := findAsset(release.Assets, "d3d9.dll")
+	palDefenderAsset := findAsset(release.Assets, "PalDefender.dll")
+	var loaderPath, palDefenderPath string
+	if loaderAsset.BrowserDownloadURL != "" && palDefenderAsset.BrowserDownloadURL != "" {
+		loaderPath = filepath.Join(stage, "d3d9.dll")
+		if err := m.downloadAsset(ctx, loaderAsset, loaderPath); err != nil {
+			return err
+		}
+		palDefenderPath = filepath.Join(stage, "PalDefender.dll")
+		if err := m.downloadAsset(ctx, palDefenderAsset, palDefenderPath); err != nil {
+			return err
+		}
+	} else {
+		zipAsset := findAsset(release.Assets, "PalDefender.zip")
+		if zipAsset.BrowserDownloadURL == "" {
+			return fmt.Errorf("latest release must provide d3d9.dll and PalDefender.dll, or a PalDefender.zip fallback")
+		}
 		zipPath := filepath.Join(stage, "PalDefender.zip")
 		if err := m.downloadAsset(ctx, zipAsset, zipPath); err != nil {
 			return err
@@ -435,22 +470,10 @@ func (m Manager) installRelease(ctx context.Context, release Release) error {
 		if err != nil {
 			return err
 		}
-	} else {
-		asset := findAsset(release.Assets, "d3d9.dll")
-		if asset.BrowserDownloadURL == "" {
-			return fmt.Errorf("release asset d3d9.dll not found")
-		}
-		loaderPath = filepath.Join(stage, "d3d9.dll")
-		if err := m.downloadAsset(ctx, asset, loaderPath); err != nil {
+		palDefenderPath, err = findFile(extracted, "PalDefender.dll")
+		if err != nil {
 			return err
 		}
-	}
-	if err := validateBundledDLL(); err != nil {
-		return err
-	}
-	bundledPath := filepath.Join(stage, "PalDefender.dll")
-	if err := os.WriteFile(bundledPath, bundledPalDefenderDLL, 0o600); err != nil {
-		return err
 	}
 	backupDir := filepath.Join(m.cfg.BackupsDir, "paldefender-"+time.Now().UTC().Format("20060102T150405.000000000Z")+"-"+id.New("backup"))
 	mutations := make([]ue4ssMutation, 0, 2)
@@ -459,7 +482,7 @@ func (m Manager) installRelease(ctx context.Context, release Release) error {
 		name   string
 	}{
 		{source: loaderPath, name: "d3d9.dll"},
-		{source: bundledPath, name: "PalDefender.dll"},
+		{source: palDefenderPath, name: "PalDefender.dll"},
 	} {
 		mutation, err := m.replaceUE4SSFile(item.source, filepath.Join(m.cfg.Win64Dir(), item.name), filepath.Join(backupDir, item.name))
 		if err != nil {
@@ -478,15 +501,11 @@ func (m Manager) installRelease(ctx context.Context, release Release) error {
 	return nil
 }
 
-func (m Manager) copyInstalledFiles(root string) error {
-	path, err := findFile(root, "d3d9.dll")
-	if err != nil {
-		return err
-	}
-	if err := copyFile(path, filepath.Join(m.cfg.Win64Dir(), "d3d9.dll")); err != nil {
-		return err
-	}
-	return m.installBundledDLL()
+func releaseVersion(release Release) string {
+	version := strings.TrimSpace(release.TagName)
+	version = strings.TrimPrefix(version, "v")
+	version = strings.TrimPrefix(version, "V")
+	return strings.TrimSpace(version)
 }
 
 func (m Manager) downloadAsset(ctx context.Context, asset Asset, dst string) error {

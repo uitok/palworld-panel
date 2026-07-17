@@ -1,5 +1,6 @@
 import { apiClient, handleRequest } from './client';
-import type { SaveIndexStatus } from '../types';
+import { emptySummary, mapSummary } from './entityList';
+import type { MapEntitiesResponse, MapEntity, SaveIndexStatus } from '../types';
 
 export const emptySaveIndexStatus: SaveIndexStatus = {
   enabled: false,
@@ -44,6 +45,46 @@ export const mapSaveIndexStatus = (raw: unknown): SaveIndexStatus => {
   };
 };
 
+export const mapMapEntity = (raw: unknown): MapEntity => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const location = data.location && typeof data.location === 'object' ? (data.location as Record<string, unknown>) : {};
+  return {
+    type: String(data.type || 'map_object'),
+    id: String(data.id || ''),
+    label: String(data.label || data.raw_label || data.id || '未知对象'),
+    raw_label: data.raw_label ? String(data.raw_label) : undefined,
+    x: Number(data.x ?? location.x ?? 0),
+    y: Number(data.y ?? location.y ?? 0),
+    z: Number(data.z ?? location.z ?? 0),
+    is_online: data.is_online == null ? undefined : Boolean(data.is_online),
+    live: data.live == null ? undefined : Boolean(data.live),
+    source: String(data.source || 'save'),
+    guild_id: data.guild_id ? String(data.guild_id) : undefined,
+    guild_name: data.guild_name ? String(data.guild_name) : undefined,
+    level: data.level == null ? undefined : Number(data.level),
+    ping: data.ping == null ? undefined : Number(data.ping),
+    owner_id: data.owner_id ? String(data.owner_id) : undefined,
+    pals_count: data.pals_count == null ? undefined : Number(data.pals_count),
+  };
+};
+
+export const mapMapEntitiesResponse = (raw: unknown): MapEntitiesResponse => {
+  const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const live = data.live && typeof data.live === 'object' ? (data.live as Record<string, unknown>) : {};
+  const entities = Array.isArray(data.entities) ? data.entities.map(mapMapEntity) : [];
+  return {
+    entities,
+    status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+    summary: data.summary ? mapSummary(data.summary) : { ...emptySummary, total: entities.length, returned: entities.length },
+    live: {
+      available: Boolean(live.available),
+      source: String(live.source || ''),
+      online_players: Number(live.online_players || 0),
+      refreshed_at: String(live.refreshed_at || ''),
+    },
+  };
+};
+
 export const saveIndexApi = {
   getStatus: () =>
     handleRequest<unknown, SaveIndexStatus>(
@@ -57,5 +98,17 @@ export const saveIndexApi = {
       () => apiClient.post('/save/index/rebuild'),
       { status: emptySaveIndexStatus },
       { quiet: true, fallbackOnError: false },
+    ),
+
+  getMapEntities: () =>
+    handleRequest<unknown, MapEntitiesResponse>(
+      () => apiClient.get('/map/entities'),
+      {
+        entities: [],
+        status: emptySaveIndexStatus,
+        summary: emptySummary,
+        live: { available: false, source: '', online_players: 0, refreshed_at: '' },
+      },
+      { map: mapMapEntitiesResponse, quiet: true },
     ),
 };

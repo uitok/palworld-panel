@@ -67,3 +67,26 @@ func TestValidateManagedPathRejectsRuntimeRootAsDeleteTarget(t *testing.T) {
 		t.Fatalf("managed child path was rejected: %v", err)
 	}
 }
+
+func TestValidateManagedPathAllowsOnlyBoundExternalServerTree(t *testing.T) {
+	base := t.TempDir()
+	runtimeRoot := filepath.Join(base, "runtime")
+	externalServer := filepath.Join(base, "PalServer")
+	if err := os.MkdirAll(filepath.Join(externalServer, "Pal", "Saved"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := (Config{
+		RuntimeRoot: runtimeRoot,
+		DataDir:     filepath.Join(runtimeRoot, "data"),
+		ServerDir:   filepath.Join(runtimeRoot, "palworld"),
+	}).WithServerDirectoryState()
+	if err := cfg.BindImportedServerDirectory(externalServer); err != nil {
+		t.Fatalf("BindImportedServerDirectory returned error: %v", err)
+	}
+	if err := cfg.ValidateManagedPath(filepath.Join(externalServer, "Pal", "Saved"), false); err != nil {
+		t.Fatalf("bound server path was rejected: %v", err)
+	}
+	if err := cfg.ValidateManagedPath(filepath.Join(base, "unrelated"), false); err == nil {
+		t.Fatal("unrelated external path was accepted")
+	}
+}

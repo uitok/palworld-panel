@@ -3,7 +3,10 @@ package monitor
 import (
 	"context"
 	"encoding/csv"
+	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -91,10 +94,12 @@ func (m Manager) History(ctx context.Context, limit int) ([]db.MonitorSample, er
 
 func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
 	sample := db.MonitorSample{ID: id.New("mon"), CreatedAt: m.currentTime().UTC().Format(time.RFC3339Nano)}
+	runtimeMode := ""
 	status, err := m.server.Status(ctx)
 	if err != nil {
 		sample.UnavailableReason = err.Error()
 	} else {
+		runtimeMode = status.RuntimeMode
 		sample.GamePortHealthy = status.Container.Status == "running"
 		sample.QueryPortHealthy = status.Container.Status == "running"
 		if status.RuntimeMode == server.RuntimeWineDocker {
@@ -104,8 +109,8 @@ func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
 		}
 	}
 	m.fillDiskStats(ctx, &sample)
-	m.fillRESTStats(ctx, &sample)
-	m.fillRCONHealth(ctx, &sample)
+	m.fillRESTStats(ctx, &sample, runtimeMode)
+	m.fillRCONHealth(ctx, &sample, runtimeMode)
 	if m.cfg.MonitorRetentionDays == 0 {
 		return sample, nil
 	}
@@ -131,27 +136,47 @@ func (m Manager) Prune(ctx context.Context) error {
 	}
 }
 
-func (m Manager) fillRESTStats(ctx context.Context, sample *db.MonitorSample) {
-	resp, err := m.palworldREST().Do(ctx, "GET", "metrics", nil)
+func (m Manager) fillRESTStats(ctx context.Context, sample *db.MonitorSample, runtimeMode string) {
+	settings, settingsErr := palconfig.Read(m.cfg.PalWorldSettingsPath())
+	if enabled := strings.TrimSpace(settings["RESTAPIEnabled"]); settingsErr == nil && enabled != "" && !strings.EqualFold(enabled, "True") {
+		sample.RESTHealthy = false
+		appendReason(sample, "REST: disabled in PalWorldSettings.ini (RESTAPIEnabled=False)")
+		m.debugf("health rest state=disabled")
+		return
+	}
+	if settingsErr == nil && runtimeMode == server.RuntimeWineDocker && isLoopbackURL(m.palrest.BaseURL) {
+		configuredPort := strings.TrimSpace(settings["RESTAPIPort"])
+		if configuredPort != "" && configuredPort != strconv.Itoa(m.cfg.RESTPort) {
+			sample.RESTHealthy = false
+			appendReason(sample, fmt.Sprintf("REST: PalWorldSettings.ini uses port %s but the Linux container maps host port %d; make RESTAPIPort and PALPANEL_REST_PORT match, then recreate the game container", configuredPort, m.cfg.RESTPort))
+			m.debugf("health rest state=port_mismatch settings_port=%s mapped_port=%d", configuredPort, m.cfg.RESTPort)
+			return
+		}
+	}
+	client := m.palworldREST(settings, runtimeMode)
+	resp, err := client.Do(ctx, "GET", "metrics", nil)
 	if err != nil {
 		sample.RESTHealthy = false
-		appendReason(sample, "REST: "+err.Error())
+		if resp.Status == http.StatusUnauthorized {
+			appendReason(sample, "REST: authentication failed (HTTP 401); the running server may still be using an older AdminPassword, save the current settings and restart Palworld")
+			m.debugf("health rest endpoint=%s state=authentication_failed status=%d", client.BaseURL, resp.Status)
+		} else {
+			appendReason(sample, "REST: "+err.Error())
+			m.debugf("health rest endpoint=%s state=failed status=%d error=%q", client.BaseURL, resp.Status, err.Error())
+		}
 		return
 	}
 	sample.RESTHealthy = resp.Status < 400
+	m.debugf("health rest endpoint=%s state=healthy status=%d", client.BaseURL, resp.Status)
 	data := mapFromAny(resp.Body)
 	sample.CurrentPlayers = int(numberValue(data, "current_players", "currentPlayerNum", "currentplayernum", "players"))
 	sample.MaxPlayers = int(numberValue(data, "max_players", "maxPlayerNum", "maxplayernum"))
 }
 
-func (m Manager) palworldREST() palrest.Client {
+func (m Manager) palworldREST(settings palconfig.Settings, runtimeMode string) palrest.Client {
 	client := m.palrest
-	if strings.TrimSpace(client.Password) != "" {
-		return client
-	}
-	settings, err := palconfig.Read(m.cfg.PalWorldSettingsPath())
-	if err != nil {
-		return client
+	if port := strings.TrimSpace(settings["RESTAPIPort"]); port != "" && (runtimeMode != server.RuntimeWineDocker || !isLoopbackURL(client.BaseURL)) {
+		client.BaseURL = restBaseURLWithPort(client.BaseURL, port)
 	}
 	if password := strings.TrimSpace(settings["AdminPassword"]); password != "" {
 		client.Password = password
@@ -159,28 +184,89 @@ func (m Manager) palworldREST() palrest.Client {
 	return client
 }
 
-func (m Manager) fillRCONHealth(ctx context.Context, sample *db.MonitorSample) {
+func (m Manager) fillRCONHealth(ctx context.Context, sample *db.MonitorSample, runtimeMode string) {
 	settings, err := palconfig.Read(m.cfg.PalWorldSettingsPath())
-	if err != nil || !strings.EqualFold(settings["RCONEnabled"], "True") {
+	if err != nil {
 		sample.RCONHealthy = false
+		appendReason(sample, "RCON: cannot read PalWorldSettings.ini: "+err.Error())
+		m.debugf("health rcon state=settings_unavailable error=%q", err.Error())
+		return
+	}
+	if !strings.EqualFold(settings["RCONEnabled"], "True") {
+		sample.RCONHealthy = false
+		appendReason(sample, "RCON: disabled in PalWorldSettings.ini (RCONEnabled=False)")
+		m.debugf("health rcon state=disabled")
 		return
 	}
 	port := settings["RCONPort"]
 	if strings.TrimSpace(port) == "" {
 		port = "25575"
 	}
+	portNumber, parseErr := strconv.Atoi(port)
+	if parseErr != nil || portNumber < 1 || portNumber > 65535 {
+		sample.RCONHealthy = false
+		appendReason(sample, "RCON: invalid RCONPort in PalWorldSettings.ini")
+		m.debugf("health rcon state=invalid_port value=%q", port)
+		return
+	}
+	host := m.cfg.EffectiveRCONHost()
+	if runtimeMode == server.RuntimeWineDocker && isLoopbackHost(host) && portNumber != m.cfg.EffectiveRCONPort() {
+		sample.RCONHealthy = false
+		appendReason(sample, fmt.Sprintf("RCON: PalWorldSettings.ini uses port %d but the Linux container maps host port %d; make RCONPort and PALPANEL_RCON_PORT match, then recreate the game container", portNumber, m.cfg.EffectiveRCONPort()))
+		m.debugf("health rcon state=port_mismatch settings_port=%d mapped_port=%d", portNumber, m.cfg.EffectiveRCONPort())
+		return
+	}
+	target := net.JoinHostPort(host, strconv.Itoa(portNumber))
 	dial := m.dial
 	if dial == nil {
 		dial = net.DialTimeout
 	}
-	conn, err := dial("tcp", net.JoinHostPort("127.0.0.1", port), 2*time.Second)
+	conn, err := dial("tcp", target, 2*time.Second)
 	if err != nil {
 		sample.RCONHealthy = false
-		appendReason(sample, "RCON: "+err.Error())
+		appendReason(sample, "RCON: "+target+": "+err.Error())
+		m.debugf("health rcon endpoint=%s state=failed error=%q", target, err.Error())
 		return
 	}
 	_ = conn.Close()
 	sample.RCONHealthy = true
+	m.debugf("health rcon endpoint=%s state=healthy", target)
+}
+
+func (m Manager) debugf(format string, args ...any) {
+	if m.cfg.DebugLogger != nil {
+		m.cfg.DebugLogger.Printf(format, args...)
+	}
+}
+
+func restBaseURLWithPort(baseURL string, port string) string {
+	if _, err := strconv.Atoi(port); err != nil {
+		return strings.TrimRight(baseURL, "/")
+	}
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Host == "" {
+		return strings.TrimRight(baseURL, "/")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	parsed.Host = net.JoinHostPort(host, port)
+	return strings.TrimRight(parsed.String(), "/")
+}
+
+func isLoopbackURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && isLoopbackHost(parsed.Hostname())
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (m Manager) fillDockerStats(ctx context.Context, sample *db.MonitorSample) {

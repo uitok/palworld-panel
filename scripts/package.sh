@@ -87,9 +87,11 @@ copy_common_files() {
   cp "$root_dir/scripts/palpanelctl" "$package_dir/palpanelctl"
   cp "$root_dir/scripts/systemd/palpanel.service" "$package_dir/systemd/palpanel.service"
   cp "$root_dir/scripts/systemd/palpanel-sav-cli.service" "$package_dir/systemd/palpanel-sav-cli.service"
+  cp "$root_dir/scripts/systemd/palpanel-palcalc.service" "$package_dir/systemd/palpanel-palcalc.service"
   cp "$root_dir/LICENSE" "$package_dir/LICENSE"
   cp "$root_dir/THIRD_PARTY_LICENSES.txt" "$package_dir/THIRD_PARTY_LICENSES.txt"
   cp "$root_dir/sav-cli/LICENSE" "$package_dir/licenses/sav-cli-LICENSE.txt"
+  cp "$root_dir/third_party/palcalc/LICENSE.txt" "$package_dir/licenses/PalCalc-MIT.txt"
   cp "$gooz_dir/COPYING" "$package_dir/licenses/GPL-3.0.txt"
   cp "$root_dir/backend/internal/pallocalize/LICENSE.apache-2.0" "$package_dir/licenses/pallocalize-Apache-2.0.txt"
   cp "$root_dir/backend/internal/paldefender/assets/LICENSE.txt" "$package_dir/licenses/PalDefender-MIT.txt"
@@ -116,7 +118,10 @@ build_linux() {
   (cd "$root_dir/backend" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags embed_webui -trimpath -ldflags "$backend_ldflags" -o "$package_dir/bin/palpanel" ./cmd/palpanel)
   printf '[palpanel] Building cgo sav-cli linux-%s\n' "$arch"
   (cd "$root_dir/sav-cli" && CGO_ENABLED=1 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$sav_ldflags" -o "$package_dir/bin/sav-cli" ./cmd/sav_cli)
-  chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli"
+  printf '[palpanel] Publishing self-contained PalCalc bridge linux-%s\n' "$arch"
+  dotnet publish "$root_dir/palcalc-bridge/PalCalc.Bridge.csproj" -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "$staging_dir/palcalc-linux"
+  cp "$staging_dir/palcalc-linux/palcalc-bridge" "$package_dir/bin/palcalc-bridge"
+  chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli" "$package_dir/bin/palcalc-bridge"
 
   (cd "$package_dir" && find . -type f ! -name checksums.txt -print0 | sort -z | xargs -0 sha256sum) >"$checksum_tmp"
   mv "$checksum_tmp" "$package_dir/checksums.txt"

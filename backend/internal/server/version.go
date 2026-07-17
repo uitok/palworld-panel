@@ -121,7 +121,7 @@ func (m Manager) compatibilityWarnings(ctx context.Context) []string {
 	if fileExists(filepath.Join(m.cfg.Win64Dir(), "PalDefender.dll")) || dirExists(m.cfg.PalDefenderDir()) {
 		warnings = append(warnings, "已安装 PalDefender；Build 变化后请确认其版本兼容")
 	}
-	if hasLevelSave(filepath.Join(m.cfg.ServerDir, "Pal", "Saved", "SaveGames")) {
+	if hasLevelSave(filepath.Join(m.cfg.ServerDirectory(), "Pal", "Saved", "SaveGames")) {
 		warnings = append(warnings, "存档解析器兼容目标为 1.0.0；非空 1.0 存档实体尚无合规公开样本验证，更新后请重建索引确认存档结构")
 	}
 	return warnings
@@ -309,7 +309,39 @@ func (m Manager) isInstalled(ctx context.Context) bool {
 }
 
 func (m Manager) appManifestPath() string {
-	return filepath.Join(m.cfg.ServerDir, "steamapps", "appmanifest_"+palworldServerAppID+".acf")
+	return appManifestPathForRoot(m.cfg.ServerDirectory())
+}
+
+func appManifestPathForRoot(serverRoot string) string {
+	candidates := appManifestCandidates(serverRoot)
+	for _, candidate := range candidates {
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return candidates[0]
+}
+
+func appManifestCandidates(serverRoot string) []string {
+	name := "appmanifest_" + palworldServerAppID + ".acf"
+	candidates := []string{filepath.Join(serverRoot, "steamapps", name)}
+	parent := filepath.Dir(serverRoot)
+	if strings.EqualFold(filepath.Base(parent), "common") {
+		candidates = append(candidates, filepath.Join(filepath.Dir(parent), name))
+	}
+	candidates = append(candidates, filepath.Join(parent, name))
+
+	seen := make(map[string]bool, len(candidates))
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		key := strings.ToLower(filepath.Clean(candidate))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, filepath.Clean(candidate))
+	}
+	return result
 }
 
 func readAppManifestBuildID(path string) (string, error) {

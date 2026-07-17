@@ -45,6 +45,26 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"Items": 10}})
+		case "/v1/pdapi/progression/steam_1":
+			if r.Method == http.MethodPost {
+				_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"TechnologyPoints": 10}, "Totals": map[string]any{"TechnologyPoints": 15}})
+			} else {
+				_ = json.NewEncoder(w).Encode(map[string]any{"Meta": map[string]any{"Player": "steam_1", "PlayerUID": "uid_1"}, "Progression": map[string]any{"Player": map[string]any{"level": 20, "exp": 1000, "unusedStatusPoints": 2}, "Currencies": map[string]any{"technologyPoints": 5, "ancientTechnologyPoints": 1, "relics": map[string]any{}}, "Bosses": map[string]any{}, "Captures": map[string]any{}, "Activities": map[string]any{}}})
+			}
+		case "/v1/pdapi/give/progression/steam_1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"TechnologyPoints": 10}, "Totals": map[string]any{"TechnologyPoints": 15}})
+		case "/v1/pdapi/techs/steam_1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Meta": map[string]any{"Player": "steam_1", "PlayerUID": "uid_1", "UnlockedCount": 1, "LockedCount": 1, "TotalCount": 2}, "Techs": map[string]any{"Unlocked": []string{"Technology_ElecBaton"}}})
+		case "/v1/pdapi/learntech/steam_1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"UnlockedCount": 1, "Unlocked": []string{"Technology_GrapplingGun"}, "Skipped": []string{}})
+		case "/v1/pdapi/forgettech/steam_1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ForgottenCount": 1, "Forgotten": []string{"Technology_ElecBaton"}, "Skipped": []string{}})
+		case "/v1/pdapi/pals/steam_1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Meta": map[string]any{"Player": "steam_1", "PlayerUID": "uid_1", "TeamCount": 1, "PalboxCount": 0, "BaseCampCount": 0}, "Pals": map[string]any{"Team": map[string]any{"pal-1": map[string]any{"PalID": "Anubis"}}, "Palbox": map[string]any{}, "BaseCamps": []any{}}})
+		case "/v1/pdapi/give/pals/steam_1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"Pals": 1}})
+		case "/v1/pdapi/give/paltemplate/steam_1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"PalTemplates": 1}})
 		case "/v1/pdapi/SendPlayerMessage", "/v1/pdapi/Broadcast", "/v1/pdapi/Alert", "/v1/pdapi/kick/steam_1", "/v1/pdapi/ban/steam_1", "/v1/pdapi/unban/steam_1":
 			_ = json.NewEncoder(w).Encode(map[string]any{"Success": true})
 		default:
@@ -73,6 +93,14 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 		{http.MethodGet, "/api/security/paldefender/gm/items?q=Money", "", `"id":"Money"`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/inventory", "", `"ItemID":"Money"`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":10}]}`, `"Items":10`},
+		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/progression", "", `"technologyPoints":5`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/progression", `{"TechnologyPoints":10}`, `"TechnologyPoints":15`},
+		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/techs", "", `"Technology_ElecBaton"`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/techs/learn", `{"Technology":"Technology_GrapplingGun"}`, `"UnlockedCount":1`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/techs/forget", `{"Technology":"Technology_ElecBaton"}`, `"ForgottenCount":1`},
+		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/pals", "", `"PalID":"Anubis"`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/pals", `{"Pals":[{"PalID":"Anubis","Level":50}]}`, `"Pals":1`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/pal-templates", `{"PalTemplates":["reward_anubis"]}`, `"PalTemplates":1`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/message", `{"SendType":"PlayerChat","Message":"hello"}`, `"Success":true`},
 		{http.MethodPost, "/api/security/paldefender/gm/broadcast", `{"message":"maintenance","alert":false}`, `"Success":true`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/kick", `{"Reason":"AFK"}`, `"Success":true`},
@@ -106,7 +134,7 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 			gmWrites++
 		}
 	}
-	if gmWrites != 6 {
+	if gmWrites != 11 {
 		t.Fatalf("successful GM write audits = %d: %#v", gmWrites, audits)
 	}
 }

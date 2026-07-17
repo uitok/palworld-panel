@@ -566,7 +566,7 @@ func (m Manager) validateLocalActionTree(ctx context.Context, root string) error
 }
 
 func (m Manager) validateLocalActionPath(path string, allowMissing bool) error {
-	serverDir, err := filepath.Abs(filepath.Clean(m.cfg.ServerDir))
+	serverDir, err := filepath.Abs(filepath.Clean(m.cfg.ServerDirectory()))
 	if err != nil {
 		return err
 	}
@@ -612,7 +612,7 @@ func (m Manager) validateLocalActionPath(path string, allowMissing bool) error {
 }
 
 func (m Manager) localActionPathProtected(target string) bool {
-	for _, root := range []string{m.cfg.RuntimeRoot, m.cfg.DataDir, m.cfg.ServerDir, m.cfg.RepositoryRoot} {
+	for _, root := range []string{m.cfg.RuntimeRoot, m.cfg.DataDir, m.cfg.ServerDirectory(), m.cfg.RepositoryRoot} {
 		if strings.TrimSpace(root) != "" && sameScanPath(root, target) {
 			return true
 		}

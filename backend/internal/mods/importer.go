@@ -96,7 +96,7 @@ type importRegistry struct {
 
 func newImportRegistry(cfg appconfig.Config) *importRegistry {
 	root := ""
-	if strings.TrimSpace(cfg.ServerDir) != "" {
+	if strings.TrimSpace(cfg.ServerDirectory()) != "" {
 		root = filepath.Join(cfg.WorkshopModsDir(), ".palpanel-imports")
 		if err := cfg.ValidateManagedPath(root, false); err != nil {
 			root = ""

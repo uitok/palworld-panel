@@ -34,6 +34,7 @@ const (
 	kvInstalled   = "installed"
 	kvPID         = "windows_pid"
 	kvProcess     = "windows_process"
+	kvServerDir   = "server_directory_import"
 )
 
 type windowsProcessRecord struct {
@@ -61,6 +62,7 @@ type Manager struct {
 	downloadClient      *http.Client
 	worldResetTimeout   time.Duration
 	worldResetPoll      time.Duration
+	goos                string
 }
 
 type Status struct {
@@ -74,6 +76,7 @@ type Status struct {
 	Ports          map[string]int         `json:"ports"`
 	Warnings       []string               `json:"warnings"`
 	Paths          map[string]string      `json:"paths"`
+	ServerImported bool                   `json:"server_imported"`
 }
 
 type Prerequisite struct {
@@ -132,6 +135,7 @@ type LogResult struct {
 type RestartNotifier func(ctx context.Context, wait int, message string) error
 
 func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, executors ...*jobs.Executor) Manager {
+	cfg = cfg.WithServerDirectoryState()
 	executor := jobs.New(store, 4)
 	if len(executors) > 0 && executors[0] != nil {
 		executor = executors[0]
@@ -145,6 +149,7 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, exe
 		downloadClient:    &http.Client{Timeout: 5 * time.Minute},
 		worldResetTimeout: 180 * time.Second,
 		worldResetPoll:    time.Second,
+		goos:              runtime.GOOS,
 	}
 }
 
@@ -197,7 +202,7 @@ func (m Manager) Prerequisites(ctx context.Context) ([]Prerequisite, error) {
 	}
 	checks := []Prerequisite{
 		{ID: "data_dir", Label: "Data directory", OK: dirExists(m.cfg.DataDir), Required: true, Message: m.cfg.DataDir},
-		{ID: "server_dir", Label: "Server directory", OK: dirExists(m.cfg.ServerDir), Required: true, Message: m.cfg.ServerDir},
+		{ID: "server_dir", Label: "Server directory", OK: dirExists(m.cfg.ServerDirectory()), Required: true, Message: m.cfg.ServerDirectory()},
 	}
 	if mode == RuntimeWineDocker {
 		dockerCapability := detectDocker(ctx, m.cfg.DockerBinary)
@@ -686,10 +691,11 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 			"rcon":  m.cfg.EffectiveRCONPort(),
 			"rest":  m.cfg.RESTPort,
 		},
-		Warnings: warnings,
+		Warnings:       warnings,
+		ServerImported: m.cfg.ServerDirectoryImported(),
 		Paths: map[string]string{
 			"data":               m.cfg.DataDir,
-			"server":             m.cfg.ServerDir,
+			"server":             m.cfg.ServerDirectory(),
 			"palworld_settings":  m.cfg.PalWorldSettingsPath(),
 			"default_settings":   m.cfg.DefaultPalWorldSettingsPath(),
 			"pal_mod_settings":   m.cfg.PalModSettingsPath(),
@@ -777,7 +783,7 @@ func (m Manager) RestoreBackup(ctx context.Context, name string) (db.Job, error)
 		}
 		m.update(jobID, "running", 65, "restoring backup archive", "")
 		validateTarget := func(path string) error { return m.cfg.ValidateManagedPath(path, false) }
-		if err := extractZipSafeValidated(pathAbs, m.cfg.ServerDir, validateTarget); err != nil {
+		if err := extractZipSafeValidated(pathAbs, m.cfg.ServerDirectory(), validateTarget); err != nil {
 			m.update(jobID, "failed", 65, "restore failed", err.Error())
 			return
 		}
@@ -879,7 +885,7 @@ func (m Manager) startWindows(ctx context.Context, args []string) error {
 		return err
 	}
 	cmd := exec.Command(m.cfg.PalServerExePath(), args...)
-	cmd.Dir = m.cfg.ServerDir
+	cmd.Dir = m.cfg.ServerDirectory()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	prepareWindowsProcess(cmd)
@@ -1109,13 +1115,13 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 	zw := zip.NewWriter(out)
 	var files []BackupManifestFile
 	for _, root := range []string{
-		filepath.Join(m.cfg.ServerDir, "Pal", "Saved"),
+		filepath.Join(m.cfg.ServerDirectory(), "Pal", "Saved"),
 		m.cfg.ModsDir(),
 		m.cfg.PalDefenderDir(),
 		filepath.Join(m.cfg.Win64Dir(), "PalDefender.dll"),
 		filepath.Join(m.cfg.Win64Dir(), "d3d9.dll"),
 	} {
-		added, err := addPathToZip(zw, m.cfg.ServerDir, root)
+		added, err := addPathToZip(zw, m.cfg.ServerDirectory(), root)
 		if err != nil {
 			_ = zw.Close()
 			_ = out.Close()
@@ -1157,8 +1163,8 @@ func (m Manager) createBackupArchive(reason string) (BackupInfo, error) {
 }
 
 func (m Manager) snapshotUpdateProtectedFiles() (map[string]string, error) {
-	return snapshotFiles(m.cfg.ServerDir, []string{
-		filepath.Join(m.cfg.ServerDir, "Pal", "Saved"),
+	return snapshotFiles(m.cfg.ServerDirectory(), []string{
+		filepath.Join(m.cfg.ServerDirectory(), "Pal", "Saved"),
 		m.cfg.ModsDir(),
 		m.cfg.PalDefenderDir(),
 		filepath.Join(m.cfg.Win64Dir(), "PalDefender.dll"),

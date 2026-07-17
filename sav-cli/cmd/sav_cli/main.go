@@ -11,8 +11,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"palpanel/sav-cli/internal/buildinfo"
 	"palpanel/sav-cli/internal/indexer"
@@ -20,9 +23,11 @@ import (
 	"palpanel/sav-cli/internal/sidecar"
 )
 
+var escapedBytePattern = regexp.MustCompile(`\\[xX][0-9A-Fa-f]{2}`)
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, safeDiagnostic(err.Error()))
 		os.Exit(1)
 	}
 }
@@ -82,15 +87,35 @@ func runInspect(args []string) error {
 		return err
 	}
 	info, inspectErr := sav.Inspect(data)
+	if inspectErr != nil {
+		info.Magic = ""
+		info.SaveType = 0
+	}
 	payload := map[string]any{
 		"file":    *file,
 		"size":    len(data),
 		"inspect": info,
 	}
 	if inspectErr != nil {
-		payload["error"] = inspectErr.Error()
+		payload["error"] = safeDiagnostic(inspectErr.Error())
 	}
 	return writeJSON(*output, payload)
+}
+
+func safeDiagnostic(value string) string {
+	value = strings.ToValidUTF8(value, "")
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return -1
+		}
+		return r
+	}, value)
+	value = escapedBytePattern.ReplaceAllString(value, "[byte]")
+	runes := []rune(value)
+	if len(runes) > 512 {
+		value = string(runes[:512]) + "…"
+	}
+	return value
 }
 
 func runServe(args []string) error {
