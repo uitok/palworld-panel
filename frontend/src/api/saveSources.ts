@@ -40,7 +40,7 @@ export const saveSourcesApi = {
         },
       },
     ),
-  importZip: (file: File, name: string) => {
+  importArchive: (file: File, name: string) => {
     const body = new FormData();
     body.append('file', file);
     if (name.trim()) body.append('name', name.trim());

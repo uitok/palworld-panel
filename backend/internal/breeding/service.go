@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"palpanel/internal/appconfig"
@@ -24,6 +25,19 @@ type Service struct {
 	store     *db.Store
 	saveIndex *saveindex.Manager
 	client    *http.Client
+	statusMu  sync.RWMutex
+	lastError string
+	checkedAt time.Time
+}
+
+type Status struct {
+	Configured      bool   `json:"configured"`
+	Available       bool   `json:"available"`
+	UpstreamVersion string `json:"upstream_version,omitempty"`
+	DatabaseVersion string `json:"database_version,omitempty"`
+	LatencyMS       int64  `json:"latency_ms"`
+	LastError       string `json:"last_error,omitempty"`
+	CheckedAt       string `json:"checked_at,omitempty"`
 }
 
 type Target struct {
@@ -91,6 +105,43 @@ func New(cfg appconfig.Config, store *db.Store, index *saveindex.Manager) *Servi
 		timeout = 5 * time.Minute
 	}
 	return &Service{cfg: cfg, store: store, saveIndex: index, client: &http.Client{Timeout: timeout}}
+}
+
+func (s *Service) Status(ctx context.Context) Status {
+	status := Status{Configured: strings.TrimSpace(s.cfg.PalCalcBridgeURL) != ""}
+	if !status.Configured {
+		status.LastError = "PalCalc bridge URL is not configured"
+		return status
+	}
+	started := time.Now()
+	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	raw, err := s.request(checkCtx, http.MethodGet, "/health", nil)
+	status.LatencyMS = time.Since(started).Milliseconds()
+	s.statusMu.RLock()
+	status.LastError = s.lastError
+	status.CheckedAt = s.checkedAt.UTC().Format(time.RFC3339Nano)
+	s.statusMu.RUnlock()
+	if err != nil {
+		status.LastError = err.Error()
+		return status
+	}
+	var payload struct {
+		Status          string `json:"status"`
+		UpstreamVersion string `json:"upstream_version"`
+		DatabaseVersion string `json:"database_version"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		status.LastError = "PalCalc health response is invalid: " + err.Error()
+		return status
+	}
+	status.Available = strings.EqualFold(payload.Status, "ok")
+	status.UpstreamVersion = payload.UpstreamVersion
+	status.DatabaseVersion = payload.DatabaseVersion
+	if status.Available {
+		status.LastError = ""
+	}
+	return status
 }
 
 func (s *Service) Catalog(ctx context.Context) (json.RawMessage, error) {
@@ -293,17 +344,33 @@ func (s *Service) request(ctx context.Context, method, path string, payload any)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
+		s.recordStatus(err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
+		s.recordStatus(err)
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("palcalc bridge returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		err := fmt.Errorf("palcalc bridge returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		s.recordStatus(err)
+		return nil, err
 	}
+	s.recordStatus(nil)
 	return json.RawMessage(raw), nil
+}
+
+func (s *Service) recordStatus(err error) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.checkedAt = time.Now().UTC()
+	if err == nil {
+		s.lastError = ""
+		return
+	}
+	s.lastError = err.Error()
 }
 
 func withDefaults(input Settings) Settings {

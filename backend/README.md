@@ -80,6 +80,18 @@ Workshop search uses a byte-wise XOR-obfuscated key bundled in release binaries 
 
 Native Windows Workshop access uses SteamCMD's own cached login session. PalPanel persists only the validated Steam account name; it never accepts a Steam password or Steam Guard code and never reads SteamCMD credential configuration. `POST /api/mods/workshop/auth/start` opens a separate local SteamCMD console where the user completes login, and `POST /api/mods/workshop/auth/verify` verifies the cache with `NoPromptForPassword`. Both operations require the admin-only `security:write` permission and a loopback TCP client; forwarded client-IP headers cannot bypass that restriction. Before use, the backend restricts the SteamCMD `config` tree ACL to the current Windows account, SYSTEM, and Administrators without changing the SteamCMD binary or `steamapps` tree. `GET /api/mods/workshop/auth/status` reloads the saved account name and probes an existing cache after a backend restart. Workshop search, detail, translation, and every Workshop download path remain closed until verification succeeds. GitHub, public HTTPS ZIP, local ZIP, UE4SS, and PalDefender flows do not use this gate.
 
+## Community Server Discovery
+
+`GET /api/community-servers` exposes discoverable Palworld community servers through a backend-only BattleMetrics client. China and online servers are the defaults. Results are cached for 60 seconds; the most recent successful response can be served as stale data for up to 24 hours. Browsers and AstrBot never call BattleMetrics directly.
+
+Use `PALPANEL_COMMUNITY_SERVERS_PROXY_URL` for an HTTP, HTTPS, SOCKS5, or SOCKS5H proxy, or point `PALPANEL_COMMUNITY_SERVERS_API_BASE_URL` at a self-hosted compatible mirror. Source status, cache freshness, persistent-cache failures, and the last sanitized upstream error are available from `GET /api/community-servers/source-status`.
+
+## Mod Configuration Center
+
+The first typed adapters cover PalDefender, Workshop UE4SS Experimental `3625223587`, PalSchema `3625280368`, and Extended Base Range `3625907101`. Other recognized Workshop, UE4SS, PalSchema, Pak, and LogicMods installations use a restricted UTF-8 text editor for JSON, INI, CFG, TOML, YAML, TXT, and Lua files.
+
+The generic editor rejects files larger than 1 MiB, binary/NUL content, symlinks, reparse points, traversal, and files outside the validated Mod root. It never edits DLL, Pak, executable, `Info.json`, `InstallManifest.json`, or `PalModSettings.ini`. Writes use opaque file IDs, revision checks, parsing where supported, atomic replacement, and backups. Lua is marked as executable code and requires an explicit confirmation; PalPanel does not execute or semantically validate Lua. See [`../docs/workshop-mod-candidates-2026-07-18.md`](../docs/workshop-mod-candidates-2026-07-18.md) for the current popular-Mod review.
+
 Unified Mod import accepts a Workshop ID/URL, a public GitHub repository or Release URL, a public HTTPS ZIP, or a local ZIP. Every source is inspected before installation. Remote downloads ignore proxy variables and reject credentials, redirects to non-public addresses, oversized payloads, unsafe ZIP paths, links, special files, multiple `Info.json` files, and missing `PackageName`. New Mods install disabled; updates preserve record identity and enabled state, and enabled updates set `pending_restart` without restarting PalServer.
 
 ## AI Translation
@@ -165,7 +177,7 @@ Metrics retain the existing frontend fields and additionally map `basecampnum` t
 ## Main Endpoints
 
 - Lifecycle: `POST /api/server/install`, `POST /api/server/update`, `POST /api/server/update-if-needed`, `POST /api/server/start`, `POST /api/server/stop`, `POST /api/server/restart`, `POST /api/server/bootstrap`
-- Safe restart: `POST /api/server/safe-restart`
+- Safe stop/restart: `POST /api/server/safe-stop`, `POST /api/server/safe-restart`
 - Setup: `GET /api/server/prerequisites`, `GET/PUT /api/server/runtime`, `GET/PUT /api/server/startup`, `POST /api/server/initialize-config`
 - Authentication: `GET /api/auth/status`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, `GET/POST/DELETE /api/auth/api-keys`
 - Status/logs/jobs: `GET /api/server/status`, `GET /api/server/version`, `POST /api/server/version/check`, `GET /api/server/metrics`, `GET /api/server/game-data`, `GET /api/server/logs?tail=200`, `GET /api/jobs`, `GET /api/jobs/{id}`
@@ -176,6 +188,9 @@ Metrics retain the existing frontend fields and additionally map `basecampnum` t
 - Player access: `GET/POST/DELETE /api/players/bans`, `GET/PUT /api/players/whitelist`, `POST /api/players/{id}/kick`
 - Palworld config: `GET /api/config/palworld`, `PUT /api/config/palworld`, `GET /api/config/palworld/schema`, `POST /api/config/palworld/validate`
 - Mods: `GET /api/mods`, `POST /api/mods/import/inspect`, `POST /api/mods/import/inspect/{id}/select`, `POST /api/mods/import`, `GET /api/mods/workshop/auth/status`, `POST /api/mods/workshop/auth/start`, `POST /api/mods/workshop/auth/verify`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/workshop/{id}/translate`, plus compatible `/api/mods/upload` and `/api/mods/workshop` endpoints
+- Mod configuration: typed adapters under `/api/mods/configurations`; restricted raw files, revision checks, backups, and restores under `/api/mods/{id}/files`
+- Community servers: `GET /api/community-servers`, `GET /api/community-servers/source-status`, `POST /api/community-servers/refresh`
+- Breeding sidecar status: `GET /api/breeding/status`
 - AI translation: `GET/PUT /api/ai/translation/config`, `POST /api/ai/translation/test`
 - PalDefender: `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
 - PalDefender GM: status, players, inventory, progression, technologies, Pals, item grants, PalTemplate management/grants, messages and punishments under `/api/security/paldefender/gm`; typed RCON catalogs and commands under `/api/security/paldefender/gm/commands` and `/api/security/paldefender/gm/catalog`; access settings, whitelist and session-admin operations under `/api/security/paldefender/access`, `/api/security/paldefender/whitelist` and `/api/security/paldefender/admins`

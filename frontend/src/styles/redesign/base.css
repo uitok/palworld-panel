@@ -22,22 +22,14 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-h1, h2, h3, h4 { margin: 0; font-weight: 600; line-height: 1.35; }
+h1, h2, h3, h4 { margin: 0; }
 p { margin: 0; }
-a { color: var(--pp-brand); text-decoration: none; }
-a:hover { color: var(--pp-brand-strong); text-decoration: underline; }
+a { text-decoration: none; }
+a:hover { text-decoration: underline; }
 
 button {
-  font-family: inherit;
-  font-size: inherit;
   cursor: pointer;
-  border: none;
-  background: none;
-  color: inherit;
-  padding: 0;
 }
-
-input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 
 code, .pp-mono {
   font-family: var(--pp-font-mono);

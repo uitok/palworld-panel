@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Keep this script LF-only; the Dockerfile also normalizes copied sources so
+# Windows worktrees cannot produce an unusable /usr/bin/env "bash\\r" shebang.
 set -euo pipefail
 export LC_ALL=C
 

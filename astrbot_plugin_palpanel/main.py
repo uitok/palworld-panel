@@ -16,6 +16,15 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .security import body_bytes, signed_headers, verify_headers
 from .storage import PalPanelStore
+from .operations import (
+    admin_allowed,
+    CooldownGuard,
+    format_online_players,
+    format_rooms,
+    format_server_status,
+    group_allowed,
+    parse_wait_seconds,
+)
 
 
 class Main(Star):
@@ -27,6 +36,10 @@ class Main(Star):
         self.http: ClientSession | None = None
         self.runner: web.AppRunner | None = None
         self.nonces: dict[str, float] = {}
+        self.cooldowns = CooldownGuard(
+            query_seconds=max(0, float(self.config.get("query_cooldown_seconds", 5))),
+            control_seconds=max(0, float(self.config.get("control_cooldown_seconds", 15))),
+        )
 
     @filter.on_astrbot_loaded()
     async def loaded(self):
@@ -52,14 +65,133 @@ class Main(Star):
             await self.http.close()
 
     def _allowed(self, event: AstrMessageEvent) -> bool:
-        allowed = str(self.config.get("allowed_group_id", "")).strip()
-        return bool(event.get_group_id()) and (not allowed or event.get_group_id() == allowed)
+        return group_allowed(self.config.get("allowed_group_id", ""), event.get_group_id())
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
-        return event.get_sender_id() in self._admin_ids()
+        return admin_allowed(self.config.get("admin_qq_ids", ""), event.get_sender_id())
 
     def _admin_ids(self) -> set[str]:
         return {item.strip() for item in str(self.config.get("admin_qq_ids", "")).split(",") if item.strip()}
+
+    def _command_retry_after(self, event: AstrMessageEvent, action: str, *, control: bool = False) -> int:
+        return self.cooldowns.retry_after(
+            str(event.get_group_id() or "private"), event.get_sender_id(), action, control=control
+        )
+
+    async def _server_status_payload(self) -> dict:
+        return await self._panel_post("/api/integrations/astrbot/server-status", {})
+
+    async def _server_control(self, event: AstrMessageEvent, action: str, waittime: int = 60) -> dict:
+        return await self._panel_post("/api/integrations/astrbot/server-control", {
+            "actor_qq_id": event.get_sender_id(),
+            "group_id": str(event.get_group_id() or ""),
+            "action": action,
+            "waittime": waittime,
+            "message": "服务器将在倒计时结束后进行维护，请尽快前往安全地点。",
+        })
+
+    @filter.command("服状态", alias={"serverstatus", "服务器状态"})
+    async def server_status_command(self, event: AstrMessageEvent):
+        """查询 Palworld 服务器运行状态。"""
+        if not self._allowed(event):
+            return
+        retry = self._command_retry_after(event, "server_status")
+        if retry:
+            yield event.plain_result(f"查询太频繁，请 {retry} 秒后再试。")
+            return
+        try:
+            yield event.plain_result(format_server_status(await self._server_status_payload()))
+        except Exception as exc:
+            logger.warning("server status command failed: %s", exc)
+            yield event.plain_result("暂时无法查询服务器状态，请稍后重试。")
+
+    @filter.command("在线", alias={"online", "在线玩家"})
+    async def online_command(self, event: AstrMessageEvent):
+        """查询当前在线玩家。"""
+        if not self._allowed(event):
+            return
+        retry = self._command_retry_after(event, "online")
+        if retry:
+            yield event.plain_result(f"查询太频繁，请 {retry} 秒后再试。")
+            return
+        try:
+            maximum = max(200, int(self.config.get("output_max_chars", 1800)))
+            yield event.plain_result(format_online_players(await self._server_status_payload(), maximum))
+        except Exception as exc:
+            logger.warning("online players command failed: %s", exc)
+            yield event.plain_result("暂时无法查询在线玩家，请稍后重试。")
+
+    @filter.command("房间", alias={"rooms", "社区服"})
+    async def rooms_command(self, event: AstrMessageEvent, query: str = ""):
+        """查询可发现社区服务器：/房间 [关键词]。"""
+        if not self._allowed(event):
+            return
+        retry = self._command_retry_after(event, "rooms")
+        if retry:
+            yield event.plain_result(f"查询太频繁，请 {retry} 秒后再试。")
+            return
+        try:
+            limit = min(10, max(1, int(self.config.get("max_room_results", 10))))
+            maximum = max(200, int(self.config.get("output_max_chars", 1800)))
+            payload = await self._panel_post("/api/integrations/astrbot/community-servers", {
+                "query": query.strip(), "limit": limit, "country": "CN",
+            })
+            yield event.plain_result(format_rooms(payload, limit, maximum))
+        except Exception as exc:
+            logger.warning("community rooms command failed: %s", exc)
+            yield event.plain_result("社区服务器列表暂时不可用，请稍后重试。")
+
+    async def _run_control_command(self, event: AstrMessageEvent, action: str, wait: str | int | None = None):
+        if not self._allowed(event):
+            yield event.plain_result("该命令只能在配置的 QQ 群中使用。")
+            return
+        if not self._is_admin(event):
+            yield event.plain_result("你没有服务器控制权限。")
+            return
+        try:
+            waittime = parse_wait_seconds(wait, 60)
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
+            return
+        retry = self._command_retry_after(event, "server_control", control=True)
+        if retry:
+            yield event.plain_result(f"控制操作冷却中，请 {retry} 秒后再试。")
+            return
+        try:
+            payload = await self._server_control(event, action, waittime)
+            data = payload.get("data", payload)
+            job = data if isinstance(data, dict) else {}
+            job_id = job.get("id") or (job.get("job", {}) if isinstance(job.get("job"), dict) else {}).get("id")
+            labels = {"start": "开服", "safe_stop": "安全关服", "safe_restart": "安全重启", "force_stop": "强制关服"}
+            suffix = f"，任务 ID：{job_id}" if job_id else ""
+            yield event.plain_result(f"{labels[action]}操作已接受{suffix}。")
+        except Exception as exc:
+            logger.warning("server control command %s failed: %s", action, exc)
+            yield event.plain_result("服务器控制操作失败，请检查 PalPanel 状态和审计日志。")
+
+    @filter.command("开服", alias={"serverstart"})
+    async def start_server_command(self, event: AstrMessageEvent):
+        """管理员启动服务器。"""
+        async for result in self._run_control_command(event, "start", 60):
+            yield result
+
+    @filter.command("关服", alias={"serverstop"})
+    async def stop_server_command(self, event: AstrMessageEvent, wait: str = "60"):
+        """管理员安全关服：/关服 [5-300 秒]。"""
+        async for result in self._run_control_command(event, "safe_stop", wait):
+            yield result
+
+    @filter.command("重启", alias={"serverrestart"})
+    async def restart_server_command(self, event: AstrMessageEvent, wait: str = "60"):
+        """管理员安全重启：/重启 [5-300 秒]。"""
+        async for result in self._run_control_command(event, "safe_restart", wait):
+            yield result
+
+    @filter.command("强关", alias={"serverforcestop"})
+    async def force_stop_server_command(self, event: AstrMessageEvent):
+        """管理员强制停止服务器，可能造成未保存进度丢失。"""
+        async for result in self._run_control_command(event, "force_stop", 60):
+            yield result
 
     @filter.command("bd", alias={"绑定"})
     async def bind(self, event: AstrMessageEvent, nickname: str):
@@ -220,7 +352,7 @@ class Main(Star):
         return json.loads((request.get("raw_body") or b"{}").decode("utf-8"))
 
     async def _health(self, _request: web.Request):
-        return web.json_response({"status": "ok", "plugin": "astrbot_plugin_palpanel", "version": "0.1.0"})
+        return web.json_response({"status": "ok", "plugin": "astrbot_plugin_palpanel", "version": "0.2.0"})
 
     async def _catalog_sync(self, request: web.Request):
         data = await self._json(request)

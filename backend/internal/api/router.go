@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ import (
 	panelauth "palpanel/internal/auth"
 	"palpanel/internal/breeding"
 	"palpanel/internal/buildinfo"
+	"palpanel/internal/communityservers"
 	"palpanel/internal/db"
 	"palpanel/internal/id"
 	"palpanel/internal/mods"
@@ -49,6 +51,8 @@ type Server struct {
 	scheduler     scheduler.Manager
 	saveIndex     *saveindex.Manager
 	breeding      *breeding.Service
+	community     *communityservers.Service
+	communityAPI  *CommunityServersHandler
 	astrbot       *astrbotclient.Client
 	ai            *aitranslation.Service
 	auth          *panelauth.Service
@@ -63,7 +67,24 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 	webFiles, _ := webui.Load(cfg.FrontendDist)
 	saveManager := saveindex.NewManager(cfg)
 	initializeSaveSources(cfg, store, saveManager)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
+	var communityService *communityservers.Service
+	var communityAPI *CommunityServersHandler
+	if cfg.CommunityServersEnabled {
+		service, err := communityservers.New(communityservers.Options{
+			BaseURL: cfg.CommunityServersAPIBaseURL, ProxyURL: cfg.CommunityServersProxyURL,
+			CachePath: filepath.Join(cfg.DataDir, "cache", "community-servers.json"),
+			FreshTTL:  time.Duration(cfg.CommunityServersCacheTTL) * time.Second,
+			StaleTTL:  time.Duration(cfg.CommunityServersStaleTTL) * time.Second,
+			RateLimit: cfg.CommunityServersRateLimit,
+		})
+		if err != nil {
+			log.Printf("community server discovery disabled: %v", err)
+		} else {
+			communityService = service
+			communityAPI = NewCommunityServersHandler(service)
+		}
+	}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))
@@ -564,18 +585,17 @@ func (s Server) serverSafeRestart(c *gin.Context) {
 }
 
 func (s Server) serverForceStop(c *gin.Context) {
-	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodPost, "stop", nil)
-	if err != nil {
-		fail(c, http.StatusBadGateway, "palworld_force_stop_failed", err.Error())
+	if err := s.server.Stop(c.Request.Context()); err != nil {
+		fail(c, http.StatusInternalServerError, "server_force_stop_failed", err.Error())
 		return
 	}
 	s.invalidateServerCaches()
 	status, statusErr := s.server.Status(c.Request.Context())
 	if statusErr != nil {
-		ok(c, gin.H{"status": "stopped", "palworld": resp, "status_error": statusErr.Error()})
+		ok(c, gin.H{"status": "stopped", "status_error": statusErr.Error()})
 		return
 	}
-	ok(c, gin.H{"status": "stopped", "palworld": resp, "server": status})
+	ok(c, gin.H{"status": "stopped", "server": status})
 }
 
 func (s Server) getStartup(c *gin.Context) {

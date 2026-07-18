@@ -39,6 +39,44 @@ export interface components {
       "proxy_configured": boolean;
       "timeout_seconds": number;
     };
+    "AstrBotCommunityServerRequest": {
+      "country"?: string;
+      "limit"?: number;
+      "query"?: string;
+    };
+    "AstrBotControlRequest": {
+      "action": "start" | "safe_stop" | "safe_restart" | "force_stop";
+      "actor_qq_id": string;
+      "group_id"?: string;
+      "message"?: string;
+      "waittime"?: number;
+    };
+    "AstrBotOnlinePlayer": {
+      "level"?: number;
+      "name": string;
+    };
+    "AstrBotServerStatus": {
+      "info"?: {
+        "server_name"?: string;
+        "version"?: string;
+      };
+      "online_count": number;
+      "online_players": Array<components["schemas"]["AstrBotOnlinePlayer"]>;
+      "players_available"?: boolean;
+      "server": {
+        "container": {
+          "exists": boolean;
+          "status": string;
+        };
+        "pending_restart": boolean;
+        "runtime_mode": string;
+        "setup_step": string;
+      };
+    };
+    "AstrBotServerStatusEnvelope": {
+      "data": components["schemas"]["AstrBotServerStatus"];
+      "ok": true;
+    };
     "AuthCredentials": {
       "password": string;
       "username": string;
@@ -50,6 +88,70 @@ export interface components {
     };
     "AuthStatusEnvelope": {
       "data": components["schemas"]["AuthStatus"];
+      "ok": true;
+    };
+    "BreedingStatus": {
+      "available": boolean;
+      "checked_at"?: string;
+      "configured": boolean;
+      "database_version"?: string;
+      "last_error"?: string;
+      "latency_ms": number;
+      "upstream_version"?: string;
+    };
+    "BreedingStatusEnvelope": {
+      "data": components["schemas"]["BreedingStatus"];
+      "ok": true;
+    };
+    "CommunityServer": {
+      "address": string;
+      "connect": string;
+      "country": string;
+      "description"?: string;
+      "id": string;
+      "max_players": number;
+      "name": string;
+      "password": boolean;
+      "players": number;
+      "port": number;
+      "status": "online" | "offline";
+      "updated_at"?: string;
+      "version"?: string;
+    };
+    "CommunityServerResult": {
+      "cache_age_seconds": number;
+      "fetched_at": string;
+      "page": number;
+      "page_size": number;
+      "servers": Array<components["schemas"]["CommunityServer"]>;
+      "source": "battlemetrics";
+      "source_total": number;
+      "stale": boolean;
+      "total": number;
+    };
+    "CommunityServerResultEnvelope": {
+      "data": components["schemas"]["CommunityServerResult"];
+      "ok": true;
+    };
+    "CommunityServerSourceStatus": {
+      "base_url": string;
+      "cache_available": boolean;
+      "cache_error"?: string;
+      "cache_fresh": boolean;
+      "cache_writable": boolean;
+      "cached_queries": number;
+      "enabled": boolean;
+      "last_attempt_at"?: string;
+      "last_error"?: string;
+      "last_success_at"?: string;
+      "next_refresh_at"?: string;
+      "proxy_configured": boolean;
+      "rate_limit_per_minute": number;
+      "reachable": boolean;
+      "source": "battlemetrics";
+    };
+    "CommunityServerSourceStatusEnvelope": {
+      "data": components["schemas"]["CommunityServerSourceStatus"];
       "ok": true;
     };
     "DevelopmentKey": {
@@ -171,6 +273,70 @@ export interface components {
       "server_dir": string;
       "skipped_paths": Array<string>;
       "warnings": Array<string>;
+    };
+    "ModConfigBackup": {
+      "created_at": string;
+      "id": string;
+      "revision": string;
+      "size": number;
+    };
+    "ModConfigBackupListEnvelope": {
+      "data": Array<components["schemas"]["ModConfigBackup"]>;
+      "ok": true;
+    };
+    "ModConfigDocument": {
+      "content": string;
+      "fields"?: Array<components["schemas"]["ModConfigurationField"]>;
+      "file": components["schemas"]["ModConfigFile"];
+      "format": string;
+    };
+    "ModConfigDocumentEnvelope": {
+      "data": components["schemas"]["ModConfigDocument"];
+      "ok": true;
+    };
+    "ModConfigFile": {
+      "executable": boolean;
+      "extension": ".json" | ".ini" | ".cfg" | ".toml" | ".yaml" | ".yml" | ".txt" | ".lua";
+      "id": string;
+      "modified_at": string;
+      "name": string;
+      "path": string;
+      "revision": string;
+      "risk"?: string;
+      "size": number;
+    };
+    "ModConfigFileListEnvelope": {
+      "data": Array<components["schemas"]["ModConfigFile"]>;
+      "ok": true;
+    };
+    "ModConfigRestoreRequest": {
+      "revision": string;
+    };
+    "ModConfigWriteRequest": {
+      "confirm_executable"?: boolean;
+      "content": string;
+      "revision": string;
+    };
+    "ModConfigurationAdapter": {
+      "available": boolean;
+      "description": string;
+      "files": Array<components["schemas"]["ModConfigFile"]>;
+      "id": string;
+      "name": string;
+      "reload_behavior": "online_reload" | "restart_required";
+      "workshop_id"?: string;
+    };
+    "ModConfigurationAdapterListEnvelope": {
+      "data": Array<components["schemas"]["ModConfigurationAdapter"]>;
+      "ok": true;
+    };
+    "ModConfigurationField": {
+      "label": string;
+      "max"?: number;
+      "min"?: number;
+      "path": string;
+      "type": "boolean" | "integer" | "number" | "string";
+      "value": unknown;
     };
     "ModImportInspectRequest": {
       "source": string;
@@ -367,6 +533,14 @@ export interface components {
     };
     "PalDefenderTechnologyRequest": {
       "Technology": unknown;
+    };
+    "SafeLifecycleRequest": {
+      "message"?: string;
+      "waittime"?: number;
+    };
+    "SaveSourceImportRequest": {
+      "file": string;
+      "name"?: string;
     };
     "Schedule": components["schemas"]["ScheduleInput"] & {
       "created_at": string;

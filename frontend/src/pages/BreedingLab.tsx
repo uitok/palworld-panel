@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Dna, Egg, FlaskConical, GitBranch, LoaderCircle, Pause, Play, RotateCcw, Search, Sparkles, Square, Timer, Trees } from 'lucide-react';
+import { Activity, Dna, Egg, FlaskConical, GitBranch, LoaderCircle, Pause, Play, RotateCcw, Search, Sparkles, Square, Timer, Trees } from 'lucide-react';
 import { breedingApi, type BreedSessionPrincipal, type BreedingAccess, type BreedingSubmitInput } from '../api/breeding';
 import { getErrorMessage } from '../api/client';
 import { saveIndexApi } from '../api/saveIndex';
@@ -39,6 +39,7 @@ export const BreedingLab: React.FC<BreedingLabProps> = ({ access = 'admin', prin
   const customContainers = useQuery({ queryKey: ['breeding-custom-containers', access], queryFn: () => breedingApi.customContainers(access), retry: false });
   const presets = useQuery({ queryKey: ['breeding-presets', access], queryFn: () => breedingApi.presets(access), retry: false });
   const saveStatus = useQuery({ queryKey: ['save-index-status'], queryFn: saveIndexApi.getStatus, enabled: !restricted });
+  const serviceStatus = useQuery({ queryKey: ['breeding-service-status'], queryFn: breedingApi.status, enabled: !restricted, retry: false, refetchInterval: 30_000 });
   const [target, setTarget] = useState('');
   const [targetQueue, setTargetQueue] = useState<QueuedTarget[]>([]);
   const [gender, setGender] = useState('wildcard');
@@ -135,8 +136,9 @@ export const BreedingLab: React.FC<BreedingLabProps> = ({ access = 'admin', prin
 
   return (
     <div className="page-shell breeding-page">
-      <div className="page-titlebar"><div><p className="eyebrow">PalCalc v1.17.6</p><h1>配种实验室</h1><p>{restricted ? '仅使用你绑定角色名下的帕鲁进行计算，无法查看其他玩家或服务器路径。' : '直接使用当前存档中的帕鲁，寻找满足目标词条和 IV 的最优配种路线。'}</p></div><span className={`state-pill ${restricted || saveStatus.data?.state === 'ready' ? 'ok' : 'warn'}`}>{restricted ? `已绑定 ${principal?.nickname || principal?.player_uid || '-'}` : `存档 ${saveStatus.data?.state || 'unknown'}`}</span></div>
-      <section className="status-strip breeding-status"><Metric icon={<DatabaseIcon />} label={restricted ? '绑定角色' : '可用帕鲁'} value={restricted ? (principal?.nickname || '-') : (saveStatus.data?.counts.pals || 0)} /><Metric icon={<Dna size={16} />} label="数据库" value={catalog.data?.version || '-'} /><Metric icon={<Timer size={16} />} label="任务" value={job?.status || 'idle'} /><Metric icon={<Sparkles size={16} />} label={restricted ? '积分' : '结果'} value={restricted ? (principal?.balance ?? '-') : result.length} /></section>
+      <div className="page-titlebar"><div><p className="eyebrow">PalCalc {serviceStatus.data?.upstream_version || 'v1.17.6'}</p><h1>配种实验室</h1><p>{restricted ? '仅使用你绑定角色名下的帕鲁进行计算，无法查看其他玩家或服务器路径。' : '直接使用当前存档中的帕鲁，寻找满足目标词条和 IV 的最优配种路线。'}</p></div><span className={`state-pill ${restricted || (saveStatus.data?.state === 'ready' && serviceStatus.data?.available) ? 'ok' : 'warn'}`}>{restricted ? `已绑定 ${principal?.nickname || principal?.player_uid || '-'}` : serviceStatus.data?.available ? 'PalCalc 可用' : 'PalCalc 不可用'}</span></div>
+      <section className="status-strip breeding-status"><Metric icon={<DatabaseIcon />} label={restricted ? '绑定角色' : '可用帕鲁'} value={restricted ? (principal?.nickname || '-') : (saveStatus.data?.counts.pals || 0)} /><Metric icon={<Dna size={16} />} label="数据库" value={catalog.data?.version || serviceStatus.data?.database_version || '-'} /><Metric icon={<Activity size={16} />} label="求解侧车" value={restricted ? '受限会话' : serviceStatus.data?.available ? `${serviceStatus.data.latency_ms} ms` : '离线'} /><Metric icon={<Timer size={16} />} label="任务" value={job?.status || 'idle'} /><Metric icon={<Sparkles size={16} />} label={restricted ? '积分' : '结果'} value={restricted ? (principal?.balance ?? '-') : result.length} /></section>
+      {!restricted && serviceStatus.data && !serviceStatus.data.available && <div className="pp-notice warn">配种求解侧车当前不可用：{serviceStatus.data.last_error || '请检查 palcalc-bridge 服务和日志'}。服务器管理与存档浏览不受影响。</div>}
       {error && <div className="pp-notice danger">{error}</div>}
 
       <div className="breeding-workspace">
@@ -174,7 +176,7 @@ export const BreedingLab: React.FC<BreedingLabProps> = ({ access = 'admin', prin
           <NumberSetting label="巨大蛋孵化（分钟）" value={gameSettings.massive_egg_incubation_minutes} onChange={(value) => setGameSettings({ ...gameSettings, massive_egg_incubation_minutes: value })} />
           <label className="toggle-setting"><span><strong>多个配种牧场</strong><small>允许路线阶段并行配种</small></span><input type="checkbox" checked={gameSettings.multiple_breeding_farms} onChange={(event) => setGameSettings({ ...gameSettings, multiple_breeding_farms: event.target.checked })} /></label>
           <label className="toggle-setting"><span><strong>多个孵化器</strong><small>允许多枚蛋并行孵化</small></span><input type="checkbox" checked={gameSettings.multiple_incubators} onChange={(event) => setGameSettings({ ...gameSettings, multiple_incubators: event.target.checked })} /></label>
-          <button type="button" className="pp-button accent wide solve-button" disabled={(!target && !targetQueue.length) || mutation.isPending || (!restricted && saveStatus.data?.state !== 'ready')} onClick={() => mutation.mutate()}>{mutation.isPending ? <LoaderCircle className="animate-spin" size={16} /> : <Play size={16} />}开始计算{targetQueue.length > 1 ? `（${targetQueue.length} 个目标${restricted ? `，${targetQueue.length} 积分` : ''}）` : restricted ? '（1 积分）' : ''}</button>
+          <button type="button" className="pp-button accent wide solve-button" disabled={(!target && !targetQueue.length) || mutation.isPending || (!restricted && (saveStatus.data?.state !== 'ready' || serviceStatus.data?.available === false))} onClick={() => mutation.mutate()}>{mutation.isPending ? <LoaderCircle className="animate-spin" size={16} /> : <Play size={16} />}开始计算{targetQueue.length > 1 ? `（${targetQueue.length} 个目标${restricted ? `，${targetQueue.length} 积分` : ''}）` : restricted ? '（1 积分）' : ''}</button>
           {job && <div className="job-progress"><span><strong>{job.message || job.status}</strong><small>{job.progress}%</small></span><div><i style={{ width: `${job.progress}%` }} /></div>{running && <div className="job-actions"><button type="button" onClick={() => void breedingApi.pause(job.id, access)}><Pause size={14} />暂停</button><button type="button" onClick={() => void breedingApi.resume(job.id, access)}><RotateCcw size={14} />恢复</button><button type="button" onClick={() => void breedingApi.cancel(job.id, access)}><Square size={14} />取消</button></div>}</div>}
         </section>
       </div>

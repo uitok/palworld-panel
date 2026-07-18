@@ -41,6 +41,9 @@ func (s Server) registerRoutes(router *gin.Engine) {
 	integration.Use(s.astrBotSignatureAuth())
 	integration.POST("/binding-challenges", s.astrBotBindingChallenge)
 	integration.POST("/quick-solves", s.astrBotQuickSolve)
+	integration.POST("/server-status", s.astrBotServerStatus)
+	integration.POST("/server-control", s.astrBotServerControl)
+	integration.POST("/community-servers", s.astrBotCommunityServers)
 
 	api := router.Group("/api")
 	api.Use(Auth(s.cfg, s.auth), AuditMiddleware(s.store))
@@ -73,6 +76,9 @@ func (s Server) registerSystemRoutes(api *gin.RouterGroup) {
 }
 
 func (s Server) registerServerRoutes(api *gin.RouterGroup) {
+	api.GET("/community-servers", s.listCommunityServers)
+	api.GET("/community-servers/source-status", s.communityServersSourceStatus)
+	api.POST("/community-servers/refresh", Require(PermRead), s.refreshCommunityServers)
 	api.GET("/server/status", s.serverStatus)
 	api.GET("/server/prerequisites", s.serverPrerequisites)
 	api.GET("/server/host", s.serverHost)
@@ -96,6 +102,7 @@ func (s Server) registerServerRoutes(api *gin.RouterGroup) {
 	api.POST("/server/stop", Require(PermServerControl), s.serverStop)
 	api.POST("/server/restart", Require(PermServerControl), s.serverRestart)
 	api.POST("/server/safe-restart", Require(PermServerControl), s.serverSafeRestart)
+	api.POST("/server/safe-stop", Require(PermServerControl), s.serverSafeStop)
 	api.POST("/server/force-stop", Require(PermServerControl), s.serverForceStop)
 	api.GET("/server/startup", s.getStartup)
 	api.PUT("/server/startup", Require(PermConfigWrite), s.putStartup)
@@ -142,6 +149,7 @@ func (s Server) registerContentRoutes(api *gin.RouterGroup) {
 	api.POST("/mods/import", Require(PermModsWrite), s.startModImport)
 	api.POST("/mods/upload", Require(PermModsWrite), s.uploadMod)
 	api.POST("/mods/workshop", Require(PermModsWrite), s.downloadWorkshop)
+	s.registerModConfigurationRoutes(api)
 	api.POST("/mods/:id/enable", Require(PermModsWrite), s.enableMod)
 	api.POST("/mods/:id/disable", Require(PermModsWrite), s.disableMod)
 	api.DELETE("/mods/:id", Require(PermModsWrite), s.deleteMod)
@@ -219,6 +227,7 @@ func (s Server) registerWorldRoutes(api *gin.RouterGroup) {
 	api.GET("/pals/:id", s.getSavePal)
 	api.GET("/map/entities", s.listMapEntities)
 	api.GET("/breeding/catalog", s.breedingCatalog)
+	api.GET("/breeding/status", s.breedingStatus)
 	api.GET("/breeding/history", s.breedingHistory)
 	api.GET("/breeding/presets", s.listBreedingPresets)
 	api.POST("/breeding/presets", Require(PermRead), s.putBreedingPreset)
@@ -289,6 +298,13 @@ func registerFrontendFilesystem(router *gin.Engine, files fs.FS) {
 		if !available || (c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead) {
 			c.Status(http.StatusNotFound)
 			return
+		}
+		requested := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if requested != "" && fs.ValidPath(requested) {
+			if info, err := fs.Stat(files, requested); err == nil && !info.IsDir() {
+				serve(requested, "public, max-age=3600")(c)
+				return
+			}
 		}
 		serve("index.html", "no-cache")(c)
 	})

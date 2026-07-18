@@ -54,6 +54,16 @@ export interface BreedingResultResponse {
   result?: { save_fingerprint: string; results: BreedingSolveResult[] };
 }
 
+export interface BreedingServiceStatus {
+  configured: boolean;
+  available: boolean;
+  upstream_version?: string;
+  database_version?: string;
+  latency_ms: number;
+  last_error?: string;
+  checked_at?: string;
+}
+
 export interface BreedSessionSubmitResponse {
   job: Job;
   balance: number;
@@ -91,6 +101,25 @@ const mapCatalog = (raw: unknown): BreedingCatalog => {
 };
 
 export const breedingApi = {
+  status: () => handleRequest<unknown, BreedingServiceStatus>(
+    () => apiClient.get('/breeding/status'),
+    { configured: false, available: false, latency_ms: 0 },
+    {
+      fallbackOnError: false,
+      map: (raw) => {
+        const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+        return {
+          configured: Boolean(data.configured),
+          available: Boolean(data.available),
+          upstream_version: data.upstream_version ? String(data.upstream_version) : undefined,
+          database_version: data.database_version ? String(data.database_version) : undefined,
+          latency_ms: Number(data.latency_ms || 0),
+          last_error: data.last_error ? String(data.last_error) : undefined,
+          checked_at: data.checked_at ? String(data.checked_at) : undefined,
+        };
+      },
+    },
+  ),
   catalog: (access: BreedingAccess = 'admin') => handleRequest<unknown, BreedingCatalog>(() => apiClient.get(access === 'session' ? '/breed/catalog' : '/breeding/catalog'), { version: '', pals: [], passives: [], active_skills: [] }, { map: mapCatalog, fallbackOnError: false }),
   customContainers: (access: BreedingAccess = 'admin') => handleRequest<unknown, CustomPalContainerSummary[]>(
     () => apiClient.get(access === 'session' ? '/breed/custom-containers' : '/breeding/custom-containers'),

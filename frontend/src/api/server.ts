@@ -305,6 +305,13 @@ export const serverApi = {
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
+  safeStop: (waittime: number, message: string) =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post('/server/safe-stop', { waittime, message }),
+      createFallbackJob('safe_stop', undefined, ''),
+      { map: mapJob, quiet: true, fallbackOnError: false },
+    ),
+
   announce: (message: string) =>
     handleRequest<{ status: string }>(
       () => apiClient.post('/server/announce', { message }),

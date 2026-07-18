@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Activity, Archive, ClipboardList, Database, Dna, FolderArchive, LayoutDashboard,
+  Activity, Archive, ClipboardList, Database, Dna, FolderArchive, Globe2, LayoutDashboard,
   ListTodo, Map as MapIcon, Puzzle, Settings as SettingsIcon, Shield, Sparkles,
   UserCog, UserX, Users,
 } from 'lucide-react';
@@ -14,6 +14,7 @@ const BanList = lazyPage(() => import('./pages/BanList'), 'BanList');
 const Bases = lazyPage(() => import('./pages/Bases'), 'Bases');
 const BreedingLab = lazyPage(() => import('./pages/BreedingLab'), 'BreedingLab');
 const Dashboard = lazyPage(() => import('./pages/Dashboard'), 'Dashboard');
+const CommunityServers = lazyPage(() => import('./pages/CommunityServers'), 'CommunityServers');
 const Guilds = lazyPage(() => import('./pages/Guilds'), 'Guilds');
 const Mods = lazyPage(() => import('./pages/Mods'), 'Mods');
 const Monitor = lazyPage(() => import('./pages/Monitor'), 'Monitor');
@@ -45,6 +46,7 @@ export const appRoutes: AppRoute[] = [
   { id: 'setup', path: '/setup', title: '开服向导', navLabel: '开服向导', navGroup: 'setup', icon: <Sparkles size={18} />, element: <Setup /> },
   { id: 'dashboard', path: '/dashboard', title: '服务器总览', navLabel: '服务器总览', navGroup: 'workspace', icon: <LayoutDashboard size={18} />, element: <Dashboard /> },
   { id: 'monitor', path: '/monitor', title: '实时监控', navLabel: '实时监控', navGroup: 'workspace', icon: <Activity size={18} />, element: <Monitor /> },
+  { id: 'community-servers', path: '/community-servers', title: '社区服务器', navLabel: '社区服务器', navGroup: 'workspace', icon: <Globe2 size={18} />, element: <CommunityServers /> },
   { id: 'player-center', path: '/player-center', title: '玩家中心', navLabel: '玩家中心', navGroup: 'world', activePaths: ['/gm'], icon: <UserCog size={18} />, element: <PalDefenderGM /> },
   { id: 'save-sources', path: '/save-sources', title: '存档中心', navLabel: '存档中心', navGroup: 'world', icon: <FolderArchive size={18} />, element: <SaveSources /> },
   { id: 'world-archive', path: '/world', title: '世界档案', navLabel: '世界档案', navGroup: 'world', activePaths: ['/players', '/guilds', '/bases'], icon: <Database size={18} />, element: <Players /> },

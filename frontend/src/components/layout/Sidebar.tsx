@@ -25,7 +25,7 @@ interface SidebarEntry {
 
 const sidebarGroups: Array<{ id: string; title: string; entries: SidebarEntry[] }> = [
   { id: 'setup', title: '开始', entries: [{ id: 'setup', label: '开服向导', routeIDs: ['setup'] }] },
-  { id: 'workspace', title: '工作台', entries: [{ id: 'server-center', label: '服务器中心', routeIDs: ['dashboard', 'monitor'] }] },
+  { id: 'workspace', title: '工作台', entries: [{ id: 'server-center', label: '服务器中心', routeIDs: ['dashboard', 'monitor', 'community-servers'] }] },
   {
     id: 'world',
     title: '世界管理',

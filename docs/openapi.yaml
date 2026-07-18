@@ -75,6 +75,46 @@ x-ai-translation-test: &aiTranslationTest
   content:
     application/json:
       schema: {$ref: '#/components/schemas/AITranslationTestEnvelope'}
+x-community-server-result: &communityServerResult
+  description: Filtered page of discoverable Palworld community servers, possibly served from stale cache.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/CommunityServerResultEnvelope'}
+x-community-server-status: &communityServerStatus
+  description: Upstream reachability, proxy, cache freshness, and persistent-cache state.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/CommunityServerSourceStatusEnvelope'}
+x-breeding-status: &breedingStatus
+  description: PalCalc sidecar availability and bounded diagnostic status.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/BreedingStatusEnvelope'}
+x-astrbot-server-status: &astrBotServerStatus
+  description: Minimal server and online-player status for signed AstrBot commands.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/AstrBotServerStatusEnvelope'}
+x-mod-config-adapters: &modConfigAdapters
+  description: Registered typed Mod configuration adapters and their opaque files.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigurationAdapterListEnvelope'}
+x-mod-config-files: &modConfigFiles
+  description: Editable configuration files identified by opaque IDs.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigFileListEnvelope'}
+x-mod-config-document: &modConfigDocument
+  description: Revisioned UTF-8 configuration document.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigDocumentEnvelope'}
+x-mod-config-backups: &modConfigBackups
+  description: Backup timeline for a configuration file.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigBackupListEnvelope'}
 x-read-responses: &readResponses
   '200': *success
   '401': *error
@@ -111,6 +151,31 @@ x-json-request: &jsonRequest
     application/json:
       schema: {$ref: '#/components/schemas/JsonObject'}
 paths:
+  /community-servers:
+    get:
+      operationId: listCommunityServers
+      tags: [server]
+      x-palpanel-permission: read
+      parameters: &communityServerQueryParameters
+        - {name: region, in: query, schema: {type: string, enum: [cn, global], default: cn}}
+        - {name: search, in: query, schema: {type: string, maxLength: 128}}
+        - {name: min_players, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: max_players, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: password, in: query, schema: {type: boolean}}
+        - {name: version, in: query, schema: {type: string, maxLength: 64}}
+        - {name: status, in: query, schema: {type: string, enum: [online, offline, all], default: online}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+      responses: {'200': *communityServerResult, '400': *error, '401': *error, '429': *error, '502': *error, '503': *error}
+  /community-servers/source-status:
+    get: {operationId: getCommunityServerSourceStatus, tags: [server], x-palpanel-permission: read, responses: {'200': *communityServerStatus, '401': *error}}
+  /community-servers/refresh:
+    post:
+      operationId: refreshCommunityServers
+      tags: [server]
+      x-palpanel-permission: read
+      parameters: *communityServerQueryParameters
+      responses: {'200': *communityServerResult, '400': *error, '401': *error, '403': *error, '429': *error, '502': *error, '503': *error}
   /health:
     get: {operationId: getHealth, tags: [system], security: [], x-palpanel-permission: public, responses: {'200': *success}}
   /ready:
@@ -252,7 +317,19 @@ paths:
   /server/restart:
     post: {operationId: restartServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/safe-restart:
-    post: {operationId: safeRestartServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+    post:
+      operationId: safeRestartServer
+      tags: [server]
+      x-palpanel-permission: 'server:control'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SafeLifecycleRequest'}}}}
+      responses: *writeResponses
+  /server/safe-stop:
+    post:
+      operationId: safeStopServer
+      tags: [server]
+      x-palpanel-permission: 'server:control'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SafeLifecycleRequest'}}}}
+      responses: *writeResponses
   /server/force-stop:
     post: {operationId: forceStopServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/startup:
@@ -456,6 +533,72 @@ paths:
     post: {operationId: uploadMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
   /mods/workshop:
     post: {operationId: downloadWorkshopItem, tags: [content], x-palpanel-permission: 'mods:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /mods/configurations:
+    get: {operationId: listModConfigurations, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigAdapters, '401': *error}}
+  /mods/configurations/{adapter}:
+    parameters: [{name: adapter, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: getModConfiguration
+      tags: [content]
+      x-palpanel-permission: read
+      parameters: &modConfigFileQuery [{name: file, in: query, required: false, description: Opaque file ID; required when an adapter exposes multiple files., schema: {type: string}}]
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '413': *error}
+    put:
+      operationId: updateModConfiguration
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      parameters: *modConfigFileQuery
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigWriteRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
+  /mods/configurations/{adapter}/backups:
+    parameters: [{name: adapter, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: listModConfigurationBackups
+      tags: [content]
+      x-palpanel-permission: read
+      parameters: *modConfigFileQuery
+      responses: {'200': *modConfigBackups, '400': *error, '401': *error, '403': *error, '404': *error}
+  /mods/configurations/{adapter}/backups/{backup}/restore:
+    parameters:
+      - {name: adapter, in: path, required: true, schema: {type: string}}
+      - {name: backup, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: restoreModConfigurationBackup
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      parameters: *modConfigFileQuery
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigRestoreRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
+  /mods/{id}/files:
+    parameters: [*idParameter]
+    get: {operationId: listModConfigFiles, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigFiles, '401': *error, '403': *error, '404': *error}}
+  /mods/{id}/files/{file}:
+    parameters:
+      - *idParameter
+      - {name: file, in: path, required: true, schema: {type: string}}
+    get: {operationId: getModConfigFile, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '413': *error}}
+    put:
+      operationId: updateModConfigFile
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigWriteRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
+  /mods/{id}/files/{file}/backups:
+    parameters:
+      - *idParameter
+      - {name: file, in: path, required: true, schema: {type: string}}
+    get: {operationId: listModConfigFileBackups, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigBackups, '400': *error, '401': *error, '403': *error, '404': *error}}
+  /mods/{id}/files/{file}/backups/{backup}/restore:
+    parameters:
+      - *idParameter
+      - {name: file, in: path, required: true, schema: {type: string}}
+      - {name: backup, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: restoreModConfigFileBackup
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigRestoreRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
   /mods/{id}/enable:
     parameters: [*idParameter]
     post: {operationId: enableMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
@@ -649,12 +792,7 @@ paths:
         required: true
         content:
           multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file: {type: string, format: binary}
-                name: {type: string}
+            schema: {$ref: '#/components/schemas/SaveSourceImportRequest'}
       responses: *writeResponses
   /save-sources/{id}/activate:
     parameters: [*idParameter]
@@ -668,6 +806,8 @@ paths:
     delete: {operationId: deleteSaveSource, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /breeding/catalog:
     get: {operationId: getBreedingCatalog, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /breeding/status:
+    get: {operationId: getBreedingStatus, tags: [world], x-palpanel-permission: read, responses: {'200': *breedingStatus, '401': *error}}
   /breeding/history:
     get: {operationId: listBreedingHistory, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /breeding/presets:
@@ -737,6 +877,24 @@ paths:
     post: {operationId: createAstrBotBindingChallenge, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
   /integrations/astrbot/quick-solves:
     post: {operationId: runAstrBotQuickSolve, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
+  /integrations/astrbot/server-status:
+    post: {operationId: getAstrBotServerStatus, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: {'200': *astrBotServerStatus, '401': *error, '503': *error}}
+  /integrations/astrbot/server-control:
+    post:
+      operationId: controlAstrBotServer
+      tags: [integrations]
+      security: []
+      x-palpanel-permission: hmac-integration
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AstrBotControlRequest'}}}}
+      responses: *writeResponses
+  /integrations/astrbot/community-servers:
+    post:
+      operationId: listAstrBotCommunityServers
+      tags: [integrations]
+      security: []
+      x-palpanel-permission: hmac-integration
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AstrBotCommunityServerRequest'}}}}
+      responses: {'200': *communityServerResult, '400': *error, '401': *error, '429': *error, '502': *error, '503': *error}
   /players:
     get: {operationId: listSavePlayers, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /players/{id}:
@@ -891,6 +1049,184 @@ components:
         timeout_seconds: {type: integer, minimum: 1, maximum: 600}
         proxy_configured: {type: boolean}
         custom_header_names: {type: array, items: {type: string}}
+    CommunityServer:
+      type: object
+      required: [id, name, address, port, connect, players, max_players, password, country, status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        address: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        connect: {type: string, description: Copyable IP or hostname and port.}
+        players: {type: integer, minimum: 0}
+        max_players: {type: integer, minimum: 0}
+        password: {type: boolean}
+        country: {type: string}
+        version: {type: string}
+        description: {type: string}
+        status: {type: string, enum: [online, offline]}
+        updated_at: {type: string, format: date-time}
+    CommunityServerResult:
+      type: object
+      required: [servers, total, source_total, page, page_size, source, fetched_at, stale, cache_age_seconds]
+      properties:
+        servers: {type: array, items: {$ref: '#/components/schemas/CommunityServer'}}
+        total: {type: integer, minimum: 0}
+        source_total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        source: {type: string, enum: [battlemetrics]}
+        fetched_at: {type: string, format: date-time}
+        stale: {type: boolean}
+        cache_age_seconds: {type: integer, format: int64, minimum: 0}
+    CommunityServerSourceStatus:
+      type: object
+      required: [source, enabled, base_url, proxy_configured, reachable, cache_available, cache_fresh, cache_writable, cached_queries, rate_limit_per_minute]
+      properties:
+        source: {type: string, enum: [battlemetrics]}
+        enabled: {type: boolean}
+        base_url: {type: string, format: uri}
+        proxy_configured: {type: boolean}
+        reachable: {type: boolean}
+        cache_available: {type: boolean}
+        cache_fresh: {type: boolean}
+        cache_writable: {type: boolean}
+        cached_queries: {type: integer, minimum: 0}
+        last_attempt_at: {type: string, format: date-time}
+        last_success_at: {type: string, format: date-time}
+        last_error: {type: string}
+        cache_error: {type: string}
+        next_refresh_at: {type: string, format: date-time}
+        rate_limit_per_minute: {type: integer, minimum: 1, maximum: 60}
+    SafeLifecycleRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        waittime: {type: integer, minimum: 5, maximum: 300, default: 60}
+        message: {type: string, maxLength: 4096}
+    BreedingStatus:
+      type: object
+      required: [configured, available, latency_ms]
+      properties:
+        configured: {type: boolean}
+        available: {type: boolean}
+        upstream_version: {type: string}
+        database_version: {type: string}
+        latency_ms: {type: integer, format: int64, minimum: 0}
+        last_error: {type: string}
+        checked_at: {type: string, format: date-time}
+    AstrBotControlRequest:
+      type: object
+      required: [actor_qq_id, action]
+      additionalProperties: false
+      properties:
+        actor_qq_id: {type: string, minLength: 1, maxLength: 64}
+        group_id: {type: string, maxLength: 64}
+        action: {type: string, enum: [start, safe_stop, safe_restart, force_stop]}
+        waittime: {type: integer, minimum: 5, maximum: 300, default: 60}
+        message: {type: string, maxLength: 4096}
+    AstrBotCommunityServerRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        query: {type: string, maxLength: 128}
+        limit: {type: integer, minimum: 1, maximum: 10, default: 10}
+        country: {type: string, maxLength: 8, default: CN}
+    AstrBotOnlinePlayer:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        level: {type: number}
+    AstrBotServerStatus:
+      type: object
+      required: [server, online_count, online_players]
+      properties:
+        server:
+          type: object
+          required: [container, runtime_mode, pending_restart, setup_step]
+          properties:
+            container:
+              type: object
+              required: [exists, status]
+              properties:
+                exists: {type: boolean}
+                status: {type: string}
+            runtime_mode: {type: string}
+            pending_restart: {type: boolean}
+            setup_step: {type: string}
+        online_count: {type: integer, minimum: 0}
+        online_players: {type: array, items: {$ref: '#/components/schemas/AstrBotOnlinePlayer'}}
+        players_available: {type: boolean}
+        info:
+          type: object
+          properties:
+            server_name: {type: string}
+            version: {type: string}
+    ModConfigFile:
+      type: object
+      required: [id, name, path, extension, size, modified_at, revision, executable]
+      properties:
+        id: {type: string, description: Opaque file identifier; never a filesystem path.}
+        name: {type: string}
+        path: {type: string, description: Mod-relative display path.}
+        extension: {type: string, enum: [.json, .ini, .cfg, .toml, .yaml, .yml, .txt, .lua]}
+        size: {type: integer, format: int64, minimum: 0, maximum: 1048576}
+        modified_at: {type: string, format: date-time}
+        revision: {type: string}
+        executable: {type: boolean}
+        risk: {type: string}
+    ModConfigurationField:
+      type: object
+      required: [path, label, type, value]
+      properties:
+        path: {type: string}
+        label: {type: string}
+        type: {type: string, enum: [boolean, integer, number, string]}
+        value: {}
+        min: {type: integer, format: int64}
+        max: {type: integer, format: int64}
+    ModConfigDocument:
+      type: object
+      required: [file, content, format]
+      properties:
+        file: {$ref: '#/components/schemas/ModConfigFile'}
+        content: {type: string, maxLength: 1048576}
+        format: {type: string}
+        fields: {type: array, items: {$ref: '#/components/schemas/ModConfigurationField'}}
+    ModConfigWriteRequest:
+      type: object
+      required: [content, revision]
+      additionalProperties: false
+      properties:
+        content: {type: string, maxLength: 1048576}
+        revision: {type: string, minLength: 1}
+        confirm_executable: {type: boolean, default: false}
+    ModConfigRestoreRequest:
+      type: object
+      required: [revision]
+      additionalProperties: false
+      properties:
+        revision: {type: string, minLength: 1}
+    ModConfigBackup:
+      type: object
+      required: [id, revision, size, created_at]
+      properties:
+        id: {type: string}
+        revision: {type: string}
+        size: {type: integer, format: int64, minimum: 0, maximum: 1048576}
+        created_at: {type: string, format: date-time}
+    ModConfigurationAdapter:
+      type: object
+      required: [id, name, description, available, reload_behavior, files]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        description: {type: string}
+        workshop_id: {type: string}
+        available: {type: boolean}
+        reload_behavior: {type: string, enum: [online_reload, restart_required]}
+        files: {type: array, items: {$ref: '#/components/schemas/ModConfigFile'}}
     ModImportInspectRequest:
       type: object
       required: [source]
@@ -901,6 +1237,17 @@ components:
       required: [file]
       properties:
         file: {type: string, format: binary}
+    SaveSourceImportRequest:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: Palworld world save archive in .zip, .tar, .tar.gz, or .tgz format.
+        name:
+          type: string
+          description: Optional display name for the imported save source.
     ModImportSelectRequest:
       type: object
       required: [candidate_id]
@@ -1307,6 +1654,54 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/AITranslationTestResult'}
+    CommunityServerResultEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/CommunityServerResult'}
+    CommunityServerSourceStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/CommunityServerSourceStatus'}
+    BreedingStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/BreedingStatus'}
+    AstrBotServerStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/AstrBotServerStatus'}
+    ModConfigurationAdapterListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ModConfigurationAdapter'}}
+    ModConfigFileListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ModConfigFile'}}
+    ModConfigDocumentEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/ModConfigDocument'}
+    ModConfigBackupListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ModConfigBackup'}}
     JsonObject:
       type: object
       additionalProperties: true

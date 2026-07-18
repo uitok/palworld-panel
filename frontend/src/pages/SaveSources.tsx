@@ -13,8 +13,8 @@ export const SaveSources: React.FC = () => {
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['save-sources'] });
   const importMutation = useMutation({
     mutationFn: () => {
-      if (!file) throw new Error('请选择包含 Level.sav 的 ZIP 文件');
-      return saveSourcesApi.importZip(file, name);
+      if (!file) throw new Error('请选择包含 Level.sav 的 ZIP 或 TAR 文件');
+      return saveSourcesApi.importArchive(file, name);
     },
     onSuccess: () => { setFile(null); setName(''); setNotice('存档已导入，可激活后建立索引。'); void refresh(); },
     onError: (error) => setNotice(getErrorMessage(error)),
@@ -55,7 +55,7 @@ export const SaveSources: React.FC = () => {
             {(sources.data?.items || []).map((source) => (
               <article key={source.id} className={`source-row ${source.active ? 'active' : ''}`}>
                 <span className="source-icon">{source.kind === 'server' ? <Server size={18} /> : <FileArchive size={18} />}</span>
-                <div className="source-copy"><strong>{source.name}</strong><span>{source.kind === 'server' ? '当前服务器' : 'ZIP 导入'} · {source.active ? '正在使用' : '未激活'}</span></div>
+                <div className="source-copy"><strong>{source.name}</strong><span>{source.kind === 'server' ? '当前服务器' : '本地归档导入'} · {source.active ? '正在使用' : '未激活'}</span></div>
                 <div className="source-actions">
                   <button type="button" className="pp-button" onClick={() => { const next = window.prompt('新的存档名称', source.name); if (next?.trim() && next.trim() !== source.name) action.mutate({ type: 'rename', id: source.id, value: next.trim() }); }}><Pencil size={14} />重命名</button>
                   {!source.active && <button type="button" className="pp-button accent" onClick={() => action.mutate({ type: 'activate', id: source.id })}><CheckCircle2 size={14} />激活</button>}
@@ -68,9 +68,9 @@ export const SaveSources: React.FC = () => {
         </section>
 
         <section className="pp-card upload-card">
-          <div className="pp-card-head"><div><h2>导入本地存档</h2><p>上传标准 Steam 或服务端世界 ZIP。</p></div><ArchiveRestore size={18} /></div>
+          <div className="pp-card-head"><div><h2>导入本地存档</h2><p>上传标准 Steam 或服务端世界 ZIP/TAR。</p></div><ArchiveRestore size={18} /></div>
           <label className="field-label">显示名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：单人世界 2026-07-16" /></label>
-          <label className="file-drop"><Upload size={24} /><strong>{file?.name || '选择 ZIP 存档'}</strong><span>压缩包中必须包含 Level.sav</span><input type="file" accept=".zip,application/zip" onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>
+          <label className="file-drop"><Upload size={24} /><strong>{file?.name || '选择 ZIP 或 TAR 存档'}</strong><span>支持 .zip、.tar、.tar.gz、.tgz，归档中必须包含 Level.sav</span><input type="file" accept=".zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip" onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>
           <button type="button" disabled={!file || importMutation.isPending} className="pp-button accent wide" onClick={() => importMutation.mutate()}>{importMutation.isPending ? <RefreshCw className="animate-spin" size={15} /> : <Upload size={15} />}导入存档</button>
         </section>
       </div>

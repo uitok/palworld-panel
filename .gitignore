@@ -1,7 +1,7 @@
 # Runtime data
 /data/
 /dev-runtime/
-/dist/packages/
+/dist/
 /.playwright-cli/
 /output/
 /*.log
