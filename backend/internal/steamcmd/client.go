@@ -19,6 +19,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/id"
+	"palpanel/internal/networkproxy"
 )
 
 const (
@@ -43,6 +44,7 @@ type Client struct {
 	interactiveLauncher interactiveLauncher
 	sessionVerifier     sessionVerifier
 	now                 func() time.Time
+	network             *networkproxy.Service
 	loginMu             sync.Mutex
 	login               loginState
 }
@@ -63,6 +65,7 @@ func New(cfg appconfig.Config) *Client {
 		credentialHardener:  hardenCredentialTree,
 		interactiveLauncher: launchInteractiveSteamCMD,
 		now:                 time.Now,
+		network:             networkproxy.New(cfg),
 	}
 	client.sessionVerifier = client.verifyCachedSession
 	return client
@@ -274,7 +277,7 @@ func (c *Client) DownloadWorkshopTo(ctx context.Context, appID, itemID, destinat
 	args := []string{"+@sSteamCmdForcePlatformType", "windows", "+force_install_dir", stageRoot}
 	args = append(args, loginArgs...)
 	args = append(args, "+workshop_download_item", appID, itemID, "validate", "+quit")
-	out, runErr := c.runCommand(commandCtx, c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, args...)
+	out, runErr := c.runConfiguredCommand(commandCtx, args...)
 	if runErr != nil {
 		if loginFailureOutput(out) {
 			c.invalidateLogin()
@@ -335,7 +338,7 @@ func (c *Client) executeValidatedRedacted(ctx context.Context, validate func() e
 	}
 	commandCtx, cancel := c.commandContext(ctx)
 	defer cancel()
-	out, runErr := c.runCommand(commandCtx, c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, args...)
+	out, runErr := c.runConfiguredCommand(commandCtx, args...)
 	if runErr != nil {
 		return out, c.commandError(commandCtx, runErr, out, secrets...)
 	}
@@ -351,6 +354,23 @@ func (c *Client) commandContext(ctx context.Context) (context.Context, context.C
 		timeout = defaultCommandTimeout
 	}
 	return context.WithTimeout(ctx, timeout)
+}
+
+func (c *Client) runConfiguredCommand(ctx context.Context, args ...string) ([]byte, error) {
+	run := func() ([]byte, error) {
+		return c.runCommand(ctx, c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, args...)
+	}
+	if c.network == nil {
+		return run()
+	}
+	rawProxy, err := c.network.InstallProxyURL()
+	if err != nil {
+		return nil, err
+	}
+	if rawProxy == "" {
+		return run()
+	}
+	return withSteamCMDProxy(ctx, rawProxy, c.cfg.SteamCMDProxyRestorePath(), run)
 }
 
 func (c *Client) commandError(ctx context.Context, runErr error, output []byte, secrets ...string) error {
@@ -522,6 +542,18 @@ func (c *Client) download(ctx context.Context, destination string) error {
 	client := c.httpClient
 	if client == nil {
 		client = &http.Client{Timeout: defaultDownloadTimeout}
+	}
+	if c.network != nil {
+		rawProxy, err := c.network.InstallProxyURL()
+		if err != nil {
+			return err
+		}
+		if rawProxy != "" {
+			client, err = networkproxy.HTTPClient(client, rawProxy, defaultDownloadTimeout)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	response, err := client.Do(req)
 	if err != nil {

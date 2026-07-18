@@ -75,6 +75,16 @@ x-ai-translation-test: &aiTranslationTest
   content:
     application/json:
       schema: {$ref: '#/components/schemas/AITranslationTestEnvelope'}
+x-network-proxy-config: &networkProxyConfig
+  description: Public installation and community-server proxy settings. Credentials are never returned.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/NetworkProxyConfigEnvelope'}
+x-network-proxy-test: &networkProxyTest
+  description: Bounded connectivity test for one saved proxy scope.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/NetworkProxyTestEnvelope'}
 x-community-server-result: &communityServerResult
   description: Filtered page of discoverable Palworld community servers, possibly served from stale cache.
   content:
@@ -240,6 +250,29 @@ paths:
   /system/debug:
     get: {operationId: getDebugLogging, tags: [system], x-palpanel-permission: read, responses: *readResponses}
     put: {operationId: updateDebugLogging, tags: [system], x-palpanel-permission: 'config:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /settings/network-proxy:
+    get: {operationId: getNetworkProxyConfig, tags: [system], x-palpanel-permission: read, responses: {'200': *networkProxyConfig, '401': *error, '500': *error}}
+    put:
+      operationId: updateNetworkProxyConfig
+      tags: [system]
+      x-palpanel-permission: 'config:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NetworkProxyConfigUpdate'}
+      responses: {'200': *networkProxyConfig, '400': *error, '401': *error, '403': *error, '500': *error}
+  /settings/network-proxy/test:
+    post:
+      operationId: testNetworkProxy
+      tags: [system]
+      x-palpanel-permission: 'config:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NetworkProxyTestRequest'}
+      responses: {'200': *networkProxyTest, '400': *error, '401': *error, '403': *error, '502': *error}
   /alerts:
     get: {operationId: listAlerts, tags: [system], x-palpanel-permission: read, responses: *readResponses}
   /alerts/{id}/ack:
@@ -1049,6 +1082,52 @@ components:
         timeout_seconds: {type: integer, minimum: 1, maximum: 600}
         proxy_configured: {type: boolean}
         custom_header_names: {type: array, items: {type: string}}
+    NetworkProxyEndpoint:
+      type: object
+      required: [enabled, configured, url, authentication_configured, source, requires_restart, effective_for_next_task]
+      properties:
+        enabled: {type: boolean}
+        configured: {type: boolean}
+        url: {type: string, description: Proxy URL with all user information removed.}
+        scheme: {type: string, enum: [http, https, socks5, socks5h]}
+        authentication_configured: {type: boolean}
+        source: {type: string, enum: [managed, environment]}
+        requires_restart: {type: boolean, const: false}
+        effective_for_next_task: {type: boolean, const: true}
+    NetworkProxyConfig:
+      type: object
+      required: [install, community]
+      properties:
+        install: {$ref: '#/components/schemas/NetworkProxyEndpoint'}
+        community: {$ref: '#/components/schemas/NetworkProxyEndpoint'}
+    NetworkProxyConfigUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        install_enabled: {type: boolean}
+        install_proxy_url: {type: string, writeOnly: true}
+        clear_install_proxy: {type: boolean}
+        community_enabled: {type: boolean}
+        community_proxy_url: {type: string, writeOnly: true}
+        clear_community_proxy: {type: boolean}
+    NetworkProxyTestRequest:
+      type: object
+      additionalProperties: false
+      required: [scope]
+      properties:
+        scope: {type: string, enum: [install, community]}
+    NetworkProxyTestResult:
+      type: object
+      required: [ok, scope, target, latency_ms, http_status, proxy_scheme, proxy_enabled, message]
+      properties:
+        ok: {type: boolean}
+        scope: {type: string, enum: [install, community]}
+        target: {type: string}
+        latency_ms: {type: integer, minimum: 0}
+        http_status: {type: integer, minimum: 0, maximum: 599}
+        proxy_scheme: {type: string, enum: [http, https, socks5, socks5h]}
+        proxy_enabled: {type: boolean}
+        message: {type: string}
     CommunityServer:
       type: object
       required: [id, name, address, port, connect, players, max_players, password, country, status]
@@ -1654,6 +1733,18 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/AITranslationTestResult'}
+    NetworkProxyConfigEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/NetworkProxyConfig'}
+    NetworkProxyTestEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/NetworkProxyTestResult'}
     CommunityServerResultEnvelope:
       type: object
       required: [ok, data]

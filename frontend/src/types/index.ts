@@ -463,6 +463,11 @@ export interface AITranslation {
 export type AITranslationConfig = components['schemas']['AITranslationConfig'];
 export type AITranslationConfigUpdate = components['schemas']['AITranslationConfigUpdate'];
 export type AITranslationTestResult = components['schemas']['AITranslationTestResult'];
+export type NetworkProxyConfig = components['schemas']['NetworkProxyConfig'];
+export type NetworkProxyConfigUpdate = components['schemas']['NetworkProxyConfigUpdate'];
+export type NetworkProxyEndpoint = components['schemas']['NetworkProxyEndpoint'];
+export type NetworkProxyTestRequest = components['schemas']['NetworkProxyTestRequest'];
+export type NetworkProxyTestResult = components['schemas']['NetworkProxyTestResult'];
 
 export interface WorkshopSearchResponse {
   items: WorkshopItem[];

@@ -3,6 +3,9 @@ package steamcmd
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,7 +16,38 @@ import (
 	"time"
 
 	"palpanel/internal/appconfig"
+	"palpanel/internal/networkproxy"
 )
+
+func TestDownloadUsesManagedInstallProxyWithoutLeakingCredentials(t *testing.T) {
+	client, cfg := newTestClient(t)
+	var authorization string
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Proxy-Authorization")
+		_, _ = w.Write([]byte("steamcmd-fixture"))
+	}))
+	defer proxyServer.Close()
+	parsed, _ := url.Parse(proxyServer.URL)
+	parsed.User = url.UserPassword("proxy-user", "proxy-secret")
+	rawProxy := parsed.String()
+	enabled := true
+	if _, err := networkproxy.New(cfg).Update(networkproxy.ConfigUpdate{InstallEnabled: &enabled, InstallProxyURL: &rawProxy}); err != nil {
+		t.Fatal(err)
+	}
+	client.network = networkproxy.New(cfg)
+	client.cfg.SteamCMDDownloadURL = "http://unresolvable.invalid/steamcmd.zip"
+	destination := filepath.Join(cfg.ToolsDir, "download.zip")
+	if err := client.download(t.Context(), destination); err != nil {
+		t.Fatal(err)
+	}
+	if authorization == "" {
+		t.Fatal("proxy authentication was not sent")
+	}
+	body, err := os.ReadFile(destination)
+	if err != nil || string(body) != "steamcmd-fixture" {
+		t.Fatalf("download = %q, %v", body, err)
+	}
+}
 
 func TestDownloadWorkshopToActivatesOnlyVerifiedResult(t *testing.T) {
 	client, cfg := newTestClient(t)

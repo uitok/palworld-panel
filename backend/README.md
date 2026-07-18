@@ -84,7 +84,9 @@ Native Windows Workshop access uses SteamCMD's own cached login session. PalPane
 
 `GET /api/community-servers` exposes discoverable Palworld community servers through a backend-only BattleMetrics client. China and online servers are the defaults. Results are cached for 60 seconds; the most recent successful response can be served as stale data for up to 24 hours. Browsers and AstrBot never call BattleMetrics directly.
 
-Use `PALPANEL_COMMUNITY_SERVERS_PROXY_URL` for an HTTP, HTTPS, SOCKS5, or SOCKS5H proxy, or point `PALPANEL_COMMUNITY_SERVERS_API_BASE_URL` at a self-hosted compatible mirror. Source status, cache freshness, persistent-cache failures, and the last sanitized upstream error are available from `GET /api/community-servers/source-status`.
+Admins can configure separate HTTP, HTTPS, SOCKS5, or SOCKS5H proxies from Settings for server installation/update and community-server discovery. Managed proxy secrets are stored in `data/secrets/network-proxy.json`, are never returned with user information, and take effect on the next task or query. `PALPANEL_STEAMCMD_PROXY_URL` and `PALPANEL_COMMUNITY_SERVERS_PROXY_URL` remain startup fallbacks when no managed file exists. A self-hosted compatible community source can still be selected with `PALPANEL_COMMUNITY_SERVERS_API_BASE_URL`. Source status, cache freshness, persistent-cache failures, and the last sanitized upstream error are available from `GET /api/community-servers/source-status`.
+
+Native Windows SteamCMD does not reliably consume application-scoped proxy environment variables. PalPanel therefore starts a loopback-only HTTP bridge for each proxied SteamCMD command, temporarily points the current-user Internet proxy at that bridge, and restores the exact prior values afterward. A mode-0600 restoration marker under `data/secrets/steamcmd-proxy-restore.json` allows the next PalPanel startup to recover settings after an interrupted process. Docker/Wine install and Workshop commands receive proxy variables by environment name so credentials are not embedded in Docker command arguments or job errors.
 
 ## Mod Configuration Center
 
@@ -204,5 +206,6 @@ Metrics retain the existing frontend fields and additionally map `basecampnum` t
 - PalDefender config after first server start: `data/server/Pal/Binaries/Win64/PalDefender/Config.json`
 - Persistent PalServer log: `data/logs/palserver.log` (plus `.1` through `.5`)
 - AI translation API key: `data/secrets/ai-translation.key`
+- Network proxy credentials: `data/secrets/network-proxy.json`
 
 Server files, Wine prefix, tools, mods, saves, backups, logs, PalDefender files, and SQLite data are kept outside the backend source tree.

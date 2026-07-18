@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"palpanel/internal/appconfig"
+	"palpanel/internal/networkproxy"
 )
 
 func TestPalServerPortUsesStartupArg(t *testing.T) {
@@ -272,6 +273,48 @@ func TestWorkshopCredentialsAreNotPlacedInDockerArguments(t *testing.T) {
 	}
 	if strings.Contains(string(body), "never-log-this-password") || strings.Contains(string(body), "STEAM_PASSWORD=") {
 		t.Fatalf("Docker arguments exposed the Workshop password:\n%s", string(body))
+	}
+}
+
+func TestManagedInstallProxyIsPassedByEnvironmentNameWithoutCredentialArguments(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	environmentLog := filepath.Join(root, "environment.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
+		"if [ -n \"${HTTP_PROXY:-}\" ]; then printf 'configured' > " + shellQuote(environmentLog) + "; fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", ServerDir: filepath.Join(root, "server"), WinePrefixDir: filepath.Join(root, "wine")}
+	enabled := true
+	proxyURL := "http://proxy-user:never-log-proxy-password@127.0.0.1:7890"
+	if _, err := networkproxy.New(cfg).Update(networkproxy.ConfigUpdate{InstallEnabled: &enabled, InstallProxyURL: &proxyURL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRunner(cfg).InstallOrUpdate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(body)), "\n")
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"} {
+		if !containsAdjacent(args, "-e", name) {
+			t.Fatalf("Docker arguments do not pass %s by environment name:\n%s", name, body)
+		}
+	}
+	if strings.Contains(string(body), "never-log-proxy-password") || strings.Contains(string(body), "proxy-user") {
+		t.Fatalf("Docker arguments exposed proxy credentials:\n%s", body)
+	}
+	if _, err := os.Stat(environmentLog); err != nil {
+		t.Fatalf("managed proxy was not present in Docker command environment: %v", err)
 	}
 }
 

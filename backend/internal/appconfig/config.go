@@ -543,6 +543,14 @@ func (c Config) AITranslationKeyPath() string {
 	return filepath.Join(c.DataDir, "secrets", "ai-translation.key")
 }
 
+func (c Config) NetworkProxyConfigPath() string {
+	return filepath.Join(c.DataDir, "secrets", "network-proxy.json")
+}
+
+func (c Config) SteamCMDProxyRestorePath() string {
+	return filepath.Join(c.DataDir, "secrets", "steamcmd-proxy-restore.json")
+}
+
 func (c Config) EffectiveSteamWebAPIKey() string {
 	if key := strings.TrimSpace(c.SteamWebAPIKey); key != "" {
 		return key

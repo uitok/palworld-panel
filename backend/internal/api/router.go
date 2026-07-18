@@ -31,6 +31,7 @@ import (
 	"palpanel/internal/id"
 	"palpanel/internal/mods"
 	"palpanel/internal/monitor"
+	"palpanel/internal/networkproxy"
 	"palpanel/internal/palconfig"
 	"palpanel/internal/paldefender"
 	"palpanel/internal/palrest"
@@ -55,6 +56,7 @@ type Server struct {
 	communityAPI  *CommunityServersHandler
 	astrbot       *astrbotclient.Client
 	ai            *aitranslation.Service
+	networkProxy  *networkproxy.Service
 	auth          *panelauth.Service
 	authLimiter   *authRateLimiter
 	cache         *ttlCache
@@ -67,15 +69,18 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 	webFiles, _ := webui.Load(cfg.FrontendDist)
 	saveManager := saveindex.NewManager(cfg)
 	initializeSaveSources(cfg, store, saveManager)
+	networkProxyService := networkproxy.New(cfg)
 	var communityService *communityservers.Service
 	var communityAPI *CommunityServersHandler
 	if cfg.CommunityServersEnabled {
 		service, err := communityservers.New(communityservers.Options{
-			BaseURL: cfg.CommunityServersAPIBaseURL, ProxyURL: cfg.CommunityServersProxyURL,
-			CachePath: filepath.Join(cfg.DataDir, "cache", "community-servers.json"),
-			FreshTTL:  time.Duration(cfg.CommunityServersCacheTTL) * time.Second,
-			StaleTTL:  time.Duration(cfg.CommunityServersStaleTTL) * time.Second,
-			RateLimit: cfg.CommunityServersRateLimit,
+			BaseURL:         cfg.CommunityServersAPIBaseURL,
+			Fetcher:         communityProxyFetcher{baseURL: cfg.CommunityServersAPIBaseURL, proxy: networkProxyService},
+			ProxyConfigured: networkProxyService.CommunityProxyConfigured,
+			CachePath:       filepath.Join(cfg.DataDir, "cache", "community-servers.json"),
+			FreshTTL:        time.Duration(cfg.CommunityServersCacheTTL) * time.Second,
+			StaleTTL:        time.Duration(cfg.CommunityServersStaleTTL) * time.Second,
+			RateLimit:       cfg.CommunityServersRateLimit,
 		})
 		if err != nil {
 			log.Printf("community server discovery disabled: %v", err)
@@ -84,7 +89,7 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 			communityAPI = NewCommunityServersHandler(service)
 		}
 	}
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), networkProxy: networkProxyService, auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))

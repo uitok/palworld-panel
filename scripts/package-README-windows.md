@@ -43,6 +43,14 @@ PalPanel also retains compatibility with the older `PalServer-Win64-Test-Cmd.exe
 name. Because current builds may not emit stdout, PalPanel records its own bounded
 lifecycle log and uses component-native logs for dependency load status.
 
+If SteamCMD reports `Steam needs to be online to update`, open System Settings >
+Network & proxy and configure the Server installation & updates proxy. HTTP,
+HTTPS, SOCKS5, and SOCKS5H URLs are accepted. Credentials are stored under
+`data\secrets\network-proxy.json` and are never returned by the API or written to
+task output. PalPanel temporarily applies a loopback bridge to the current-user
+Windows proxy only while SteamCMD is running, restores the previous values when
+the task ends, and performs startup recovery after an interrupted process.
+
 ## LAN access
 
 The safe default is `127.0.0.1:8080`. To listen on every IPv4 interface, stop

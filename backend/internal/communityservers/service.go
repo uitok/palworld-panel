@@ -18,32 +18,34 @@ import (
 var ErrRateLimited = errors.New("community server source refresh rate limit reached")
 
 type Options struct {
-	BaseURL   string
-	ProxyURL  string
-	CachePath string
-	FreshTTL  time.Duration
-	StaleTTL  time.Duration
-	RateLimit int
-	Fetcher   Fetcher
-	Now       func() time.Time
+	BaseURL         string
+	ProxyURL        string
+	CachePath       string
+	FreshTTL        time.Duration
+	StaleTTL        time.Duration
+	RateLimit       int
+	Fetcher         Fetcher
+	Now             func() time.Time
+	ProxyConfigured func() bool
 }
 
 type Service struct {
-	mu            sync.Mutex
-	fetcher       Fetcher
-	baseURL       string
-	proxy         bool
-	cachePath     string
-	freshTTL      time.Duration
-	staleTTL      time.Duration
-	rateLimit     int
-	now           func() time.Time
-	cache         map[string]cacheEntry
-	attempts      []time.Time
-	inflight      map[string]*fetchCall
-	status        sourceRuntimeStatus
-	cacheWritable bool
-	cacheError    string
+	mu              sync.Mutex
+	fetcher         Fetcher
+	baseURL         string
+	proxy           bool
+	cachePath       string
+	freshTTL        time.Duration
+	staleTTL        time.Duration
+	rateLimit       int
+	now             func() time.Time
+	cache           map[string]cacheEntry
+	attempts        []time.Time
+	inflight        map[string]*fetchCall
+	status          sourceRuntimeStatus
+	cacheWritable   bool
+	cacheError      string
+	proxyConfigured func() bool
 }
 
 type cacheEntry struct {
@@ -106,7 +108,8 @@ func New(options Options) (*Service, error) {
 		fetcher: fetcher, baseURL: publicURL(baseURL), proxy: strings.TrimSpace(options.ProxyURL) != "",
 		cachePath: strings.TrimSpace(options.CachePath), freshTTL: freshTTL, staleTTL: staleTTL,
 		rateLimit: rateLimit, now: now, cache: map[string]cacheEntry{}, inflight: map[string]*fetchCall{},
-		cacheWritable: strings.TrimSpace(options.CachePath) != "",
+		cacheWritable:   strings.TrimSpace(options.CachePath) != "",
+		proxyConfigured: options.ProxyConfigured,
 	}
 	service.loadCache()
 	return service, nil
@@ -199,8 +202,12 @@ func (s *Service) Status() SourceStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(now)
+	proxyConfigured := s.proxy
+	if s.proxyConfigured != nil {
+		proxyConfigured = s.proxyConfigured()
+	}
 	status := SourceStatus{
-		Source: DefaultCacheSource, Enabled: true, BaseURL: s.baseURL, ProxyConfigured: s.proxy,
+		Source: DefaultCacheSource, Enabled: true, BaseURL: s.baseURL, ProxyConfigured: proxyConfigured,
 		Reachable:     !s.status.lastSuccess.IsZero() && (s.status.lastAttempt.IsZero() || !s.status.lastSuccess.Before(s.status.lastAttempt)),
 		CacheWritable: s.cacheWritable, CachedQueries: len(s.cache), RateLimit: s.rateLimit,
 		LastError: s.status.lastError, CacheError: s.cacheError,

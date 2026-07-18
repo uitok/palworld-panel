@@ -399,6 +399,7 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 		}
 	}
 	assertRequestSchema("/ai/translation/test", "application/json", "AITranslationConfigUpdate")
+	assertRequestSchema("/settings/network-proxy/test", "application/json", "NetworkProxyTestRequest")
 	assertRequestSchema("/server/safe-stop", "application/json", "SafeLifecycleRequest")
 	assertRequestSchema("/server/safe-restart", "application/json", "SafeLifecycleRequest")
 	assertRequestSchema("/integrations/astrbot/server-control", "application/json", "AstrBotControlRequest")
@@ -413,6 +414,14 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	}
 	if got := spec.Paths["/ai/translation/config"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/AITranslationConfigUpdate" {
 		t.Errorf("PUT /ai/translation/config request schema = %q", got)
+	}
+	if got := spec.Paths["/settings/network-proxy"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/NetworkProxyConfigUpdate" {
+		t.Errorf("PUT /settings/network-proxy request schema = %q", got)
+	}
+	for _, property := range []string{"install_proxy_url", "community_proxy_url"} {
+		if !spec.Components.Schemas["NetworkProxyConfigUpdate"].Properties[property].WriteOnly {
+			t.Errorf("NetworkProxyConfigUpdate.%s must be writeOnly", property)
+		}
 	}
 	for _, property := range []string{"api_key", "proxy_url", "custom_headers"} {
 		if !spec.Components.Schemas["AITranslationConfigUpdate"].Properties[property].WriteOnly {

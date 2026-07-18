@@ -98,6 +98,13 @@ The API never returns these values. The Docker CLI receives only the variable
 names, so the password is not embedded in command arguments or job errors.
 Native Windows uses the separate local interactive SteamCMD login instead.
 
+Server installation/update and community-server discovery proxies can be managed
+independently from System Settings > Network & proxy. The managed configuration is
+stored with the rest of PalPanel state under `data/secrets/network-proxy.json` in
+portable mode or `/var/lib/palpanel/secrets/network-proxy.json` under systemd.
+Docker/Wine receives proxy values through its environment; credentials are not
+embedded in Docker arguments or job messages.
+
 ## Security defaults
 
 - Authentication is enabled.

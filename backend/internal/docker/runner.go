@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"palpanel/internal/appconfig"
+	"palpanel/internal/networkproxy"
 )
 
 type Runner struct {
@@ -57,10 +58,8 @@ func (r Runner) BuildImage(ctx context.Context) error {
 
 func (r Runner) buildImageWithBase(ctx context.Context, baseImage string) error {
 	args := []string{"build", "-t", r.cfg.DockerImage, "-f", filepath.Join(r.cfg.RunnerDir, "Dockerfile")}
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
-		if v := os.Getenv(key); v != "" {
-			args = append(args, "--build-arg", key+"="+proxyForContainer(v))
-		}
+	for _, key := range configuredProxyNames(r.commandEnvironment()) {
+		args = append(args, "--build-arg", key)
 	}
 	args = append(args, "--build-arg", wineBaseImageBuildArg+"="+baseImage)
 	args = append(args, r.cfg.RunnerDir)
@@ -188,7 +187,7 @@ func (r Runner) InstallOrUpdate(ctx context.Context) error {
 		"-v", volume(r.cfg.ServerDirectory(), "/data/server"),
 		"-v", volume(r.cfg.WinePrefixDir, "/data/wineprefix"),
 	}
-	args = append(args, containerProxyEnvArgs()...)
+	args = append(args, r.containerProxyEnvArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "install")
 	_, err := r.run(ctx, args...)
@@ -219,7 +218,7 @@ func (r Runner) AppInfo(ctx context.Context) (string, error) {
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
 	}
-	args = append(args, containerProxyEnvArgs()...)
+	args = append(args, r.containerProxyEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "appinfo")
 	out, err := r.run(ctx, args...)
 	if err != nil {
@@ -244,7 +243,7 @@ func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot 
 		// secret values in process arguments, job errors, or support logs.
 		args = append(args, "-e", "STEAM_USERNAME", "-e", "STEAM_PASSWORD")
 	}
-	args = append(args, containerProxyEnvArgs()...)
+	args = append(args, r.containerProxyEnvArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "workshop", itemID)
 	_, err := r.run(ctx, args...)
@@ -349,17 +348,21 @@ func (r Runner) Status(ctx context.Context) (ContainerStatus, error) {
 }
 
 func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
-	return RunCommand(ctx, r.cfg.DockerBinary, args...)
+	return runCommandWithEnvironment(ctx, r.cfg.DockerBinary, r.commandEnvironment(), args...)
 }
 
 func RunCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
+	return runCommandWithEnvironment(ctx, binary, os.Environ(), args...)
+}
+
+func runCommandWithEnvironment(ctx context.Context, binary string, environment []string, args ...string) ([]byte, error) {
 	binary = dockerBinary(binary)
-	out, err := runDockerCommand(ctx, binary, args, false)
+	out, err := runDockerCommand(ctx, binary, args, false, environment)
 	if err == nil {
 		return out, nil
 	}
 	if dockerPermissionDenied(err, out) && canUseDockerGroupShell() {
-		sgOut, sgErr := runDockerCommand(ctx, binary, args, true)
+		sgOut, sgErr := runDockerCommand(ctx, binary, args, true, environment)
 		if sgErr == nil {
 			return sgOut, nil
 		}
@@ -368,7 +371,7 @@ func RunCommand(ctx context.Context, binary string, args ...string) ([]byte, err
 	return out, fmt.Errorf("docker %s failed: %w: %s", strings.Join(args, " "), err, compactDockerError(strings.TrimSpace(string(out))))
 }
 
-func runDockerCommand(ctx context.Context, binary string, args []string, useDockerGroup bool) ([]byte, error) {
+func runDockerCommand(ctx context.Context, binary string, args []string, useDockerGroup bool, environment []string) ([]byte, error) {
 	command := binary
 	commandArgs := args
 	if useDockerGroup {
@@ -376,7 +379,7 @@ func runDockerCommand(ctx context.Context, binary string, args []string, useDock
 		commandArgs = []string{"docker", "-c", dockerShellCommand(binary, args)}
 	}
 	cmd := exec.CommandContext(ctx, command, commandArgs...)
-	cmd.Env = dockerEnv(os.Environ())
+	cmd.Env = dockerEnv(environment)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -489,10 +492,64 @@ func containerProxyEnvArgs() []string {
 	var args []string
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
 		if v := os.Getenv(key); v != "" {
-			args = append(args, "-e", key+"="+proxyForContainer(v))
+			args = append(args, "-e", key)
 		}
 	}
 	return args
+}
+
+func (r Runner) containerProxyEnvArgs() []string {
+	var args []string
+	for _, key := range configuredProxyNames(r.commandEnvironment()) {
+		args = append(args, "-e", key)
+	}
+	return args
+}
+
+func (r Runner) commandEnvironment() []string {
+	environment := append([]string(nil), os.Environ()...)
+	rawProxy, err := networkproxy.New(r.cfg).InstallProxyURL()
+	if err != nil || rawProxy == "" {
+		return environment
+	}
+	proxyValue := proxyForContainer(rawProxy)
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		environment = setEnvironmentValue(environment, key, proxyValue)
+	}
+	return environment
+}
+
+func configuredProxyNames(environment []string) []string {
+	values := environmentMap(environment)
+	var names []string
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		if values[key] != "" {
+			names = append(names, key)
+		}
+	}
+	return names
+}
+
+func environmentMap(environment []string) map[string]string {
+	values := make(map[string]string, len(environment))
+	for _, item := range environment {
+		name, value, ok := strings.Cut(item, "=")
+		if ok {
+			values[name] = value
+		}
+	}
+	return values
+}
+
+func setEnvironmentValue(environment []string, name, value string) []string {
+	prefix := name + "="
+	for index, item := range environment {
+		if strings.HasPrefix(item, prefix) {
+			environment[index] = prefix + value
+			return environment
+		}
+	}
+	return append(environment, prefix+value)
 }
 
 func hostOwnerEnvArgs() []string {
@@ -536,7 +593,7 @@ func proxyForContainer(raw string) string {
 		port = u.Port()
 	}
 	if host == "127.0.0.1" || host == "localhost" || host == "::1" {
-		if u.Scheme == "socks5" {
+		if u.Scheme == "socks5" || u.Scheme == "socks5h" {
 			u.Scheme = "socks5h"
 		}
 		if port != "" {

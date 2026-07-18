@@ -27,10 +27,14 @@ func (s Server) refreshCommunityServers(c *gin.Context) {
 
 func (s Server) communityServersSourceStatus(c *gin.Context) {
 	if s.communityAPI == nil {
+		proxyConfigured := strings.TrimSpace(s.cfg.CommunityServersProxyURL) != ""
+		if s.networkProxy != nil {
+			proxyConfigured = s.networkProxy.CommunityProxyConfigured()
+		}
 		ok(c, gin.H{
 			"source": "battlemetrics", "enabled": false,
 			"base_url":         s.cfg.CommunityServersAPIBaseURL,
-			"proxy_configured": strings.TrimSpace(s.cfg.CommunityServersProxyURL) != "",
+			"proxy_configured": proxyConfigured,
 			"reachable":        false, "cache_available": false, "cache_fresh": false,
 			"cache_writable": false, "cached_queries": 0,
 			"rate_limit_per_minute": s.cfg.CommunityServersRateLimit,

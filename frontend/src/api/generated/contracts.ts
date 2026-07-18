@@ -371,6 +371,49 @@ export interface components {
       "version"?: string;
       "workshop_id"?: string;
     };
+    "NetworkProxyConfig": {
+      "community": components["schemas"]["NetworkProxyEndpoint"];
+      "install": components["schemas"]["NetworkProxyEndpoint"];
+    };
+    "NetworkProxyConfigEnvelope": {
+      "data": components["schemas"]["NetworkProxyConfig"];
+      "ok": true;
+    };
+    "NetworkProxyConfigUpdate": {
+      "clear_community_proxy"?: boolean;
+      "clear_install_proxy"?: boolean;
+      "community_enabled"?: boolean;
+      "community_proxy_url"?: string;
+      "install_enabled"?: boolean;
+      "install_proxy_url"?: string;
+    };
+    "NetworkProxyEndpoint": {
+      "authentication_configured": boolean;
+      "configured": boolean;
+      "effective_for_next_task": true;
+      "enabled": boolean;
+      "requires_restart": false;
+      "scheme"?: "http" | "https" | "socks5" | "socks5h";
+      "source": "managed" | "environment";
+      "url": string;
+    };
+    "NetworkProxyTestEnvelope": {
+      "data": components["schemas"]["NetworkProxyTestResult"];
+      "ok": true;
+    };
+    "NetworkProxyTestRequest": {
+      "scope": "install" | "community";
+    };
+    "NetworkProxyTestResult": {
+      "http_status": number;
+      "latency_ms": number;
+      "message": string;
+      "ok": boolean;
+      "proxy_enabled": boolean;
+      "proxy_scheme": "http" | "https" | "socks5" | "socks5h";
+      "scope": "install" | "community";
+      "target": string;
+    };
     "PalDefenderAccessSettingsUpdate": {
       "admin_auto_login": boolean;
       "admin_ips": Array<string>;

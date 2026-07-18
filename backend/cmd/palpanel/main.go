@@ -32,6 +32,7 @@ import (
 	"palpanel/internal/palrest"
 	"palpanel/internal/scheduler"
 	"palpanel/internal/server"
+	"palpanel/internal/steamcmd"
 )
 
 func main() {
@@ -151,6 +152,9 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 	defer log.SetOutput(previousLogOutput)
 	cfg.DebugLogger = debugLogger
 	debugLogger.Printf("startup version=%s data_dir=%s listen=%s", buildinfo.Current().Version, cfg.DataDir, cfg.ListenAddr)
+	if err := steamcmd.RecoverProxyOverride(cfg); err != nil {
+		return fmt.Errorf("recover SteamCMD proxy settings: %w", err)
+	}
 	if err := server.RestoreImportedServerDirectory(context.Background(), cfg, store); err != nil {
 		return fmt.Errorf("restore imported server directory: %w", err)
 	}
