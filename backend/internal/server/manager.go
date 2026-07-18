@@ -50,22 +50,23 @@ type windowsProcessInfo struct {
 }
 
 type Manager struct {
-	cfg                 appconfig.Config
-	store               *db.Store
-	runner              docker.Runner
-	remoteBuildIDFunc   func(context.Context) (string, string, error)
-	installOrUpdateFunc func(context.Context, string) error
-	jobs                *jobs.Executor
-	operationMu         *sync.Mutex
-	inspectProcess      func(int) (windowsProcessInfo, error)
-	terminateProcess    func(context.Context, int) error
-	downloadClient      *http.Client
-	worldResetTimeout   time.Duration
-	worldResetPoll      time.Duration
-	gracefulStopTimeout time.Duration
-	gracefulStopPoll    time.Duration
-	lifecycleWait       func(context.Context, time.Duration) error
-	goos                string
+	cfg                  appconfig.Config
+	store                *db.Store
+	runner               docker.Runner
+	remoteBuildIDFunc    func(context.Context) (string, string, error)
+	installOrUpdateFunc  func(context.Context, string) error
+	jobs                 *jobs.Executor
+	operationMu          *sync.Mutex
+	inspectProcess       func(int) (windowsProcessInfo, error)
+	terminateProcess     func(context.Context, int) error
+	downloadClient       *http.Client
+	worldResetTimeout    time.Duration
+	worldResetPoll       time.Duration
+	gracefulStopTimeout  time.Duration
+	gracefulStopPoll     time.Duration
+	lifecycleWait        func(context.Context, time.Duration) error
+	jobHeartbeatInterval time.Duration
+	goos                 string
 }
 
 type Status struct {
@@ -145,17 +146,18 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, exe
 	}
 	return Manager{
 		cfg: cfg, store: store, runner: runner,
-		jobs:                executor,
-		operationMu:         &sync.Mutex{},
-		inspectProcess:      inspectWindowsProcess,
-		terminateProcess:    terminateWindowsProcessTree,
-		downloadClient:      &http.Client{Timeout: 5 * time.Minute},
-		worldResetTimeout:   180 * time.Second,
-		worldResetPoll:      time.Second,
-		gracefulStopTimeout: 15 * time.Second,
-		gracefulStopPoll:    time.Second,
-		lifecycleWait:       waitForLifecycleDuration,
-		goos:                runtime.GOOS,
+		jobs:                 executor,
+		operationMu:          &sync.Mutex{},
+		inspectProcess:       inspectWindowsProcess,
+		terminateProcess:     terminateWindowsProcessTree,
+		downloadClient:       &http.Client{Timeout: 5 * time.Minute},
+		worldResetTimeout:    180 * time.Second,
+		worldResetPoll:       time.Second,
+		gracefulStopTimeout:  15 * time.Second,
+		gracefulStopPoll:     time.Second,
+		lifecycleWait:        waitForLifecycleDuration,
+		jobHeartbeatInterval: 15 * time.Second,
+		goos:                 runtime.GOOS,
 	}
 }
 
@@ -344,11 +346,6 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 				return false
 			}
 		}
-		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.installOrUpdateRuntime(ctx, mode); err != nil {
-			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
-			return false
-		}
 	} else {
 		m.update(jobID, "running", 20, "building wine runner image", "")
 		if m.installOrUpdateFunc == nil {
@@ -357,11 +354,14 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 				return false
 			}
 		}
-		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.installOrUpdateRuntime(ctx, mode); err != nil {
-			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
-			return false
-		}
+	}
+	stageMessage := action + "ing Palworld Windows dedicated server"
+	m.update(jobID, "running", 60, stageMessage, "")
+	if err := m.runJobStageWithHeartbeat(ctx, jobID, 60, stageMessage, func() error {
+		return m.installOrUpdateRuntime(ctx, mode)
+	}); err != nil {
+		m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
+		return false
 	}
 	if mode == RuntimeWindowsSteamCMD {
 		if err := m.validateWindowsServerInstall(); err != nil {
@@ -941,6 +941,35 @@ func (m Manager) startLifecycleJob(ctx context.Context, typ, message string, fn 
 		defer m.operationMu.Unlock()
 		fn(jobCtx, jobID)
 	})
+}
+
+func (m Manager) runJobStageWithHeartbeat(ctx context.Context, jobID string, progress int, message string, run func() error) error {
+	interval := m.jobHeartbeatInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	done := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	started := time.Now()
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.update(jobID, "running", progress, fmt.Sprintf("%s (still running; elapsed %s)", message, time.Since(started).Round(time.Second)), "")
+			}
+		}
+	}()
+	err := run()
+	close(done)
+	<-heartbeatDone
+	return err
 }
 
 func (m Manager) update(jobID, status string, progress int, message, errText string) {

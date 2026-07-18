@@ -30,6 +30,7 @@ import { serverApi } from '../api/server';
 import { tasksApi } from '../api/tasks';
 import type { ImportInspection, Job, LocalModAction, LocalModFinding, LocalScanResult, ModItem, PalDefenderStatus, SteamWorkshopAuthStatus, WorkshopItem } from '../types';
 import { DataTable } from '../components/ui/DataTable';
+import { ModalPortal } from '../components/ui/ModalPortal';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { ModConfigWorkspace } from '../components/mods/ModConfigWorkspace';
 import { useServerStore } from '../store/useServerStore';
@@ -889,7 +890,7 @@ const WorkshopAuthGate: React.FC<{
       </p>
       {(error || status?.message) && (
         <div role="alert" className="mt-4 max-w-xl rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-left text-xs font-semibold leading-5 text-amber-800">
-          {error || status?.message}
+          {localizeSteamAuthMessage(error || status?.message)}
         </div>
       )}
       {!canAuthenticate && (
@@ -911,6 +912,23 @@ const WorkshopAuthGate: React.FC<{
   );
 };
 
+const localizeSteamAuthMessage = (message?: string | null) => {
+  if (!message) return '';
+  if (message === 'Enter the Steam account name used for the local SteamCMD session.') {
+    return '请输入本机 SteamCMD 会话使用的 Steam 账户名。';
+  }
+  if (message.startsWith('Steam login is required')) {
+    return '需要先打开 SteamCMD 登录窗口并验证本机登录缓存，才能下载 Workshop Mod。';
+  }
+  if (message === 'Steam login operations are available only from the server host') {
+    return 'Steam 登录操作只能在 PalPanel 所在的服务器主机上执行。';
+  }
+  if (message === 'Steam login operation was cancelled') return 'Steam 登录操作已取消。';
+  if (message === 'Steam login verification timed out') return 'Steam 登录验证超时，请重新尝试。';
+  if (message === 'Steam login operation failed') return 'Steam 登录操作失败，请检查 SteamCMD 窗口。';
+  return message;
+};
+
 const WorkshopLoginDialog: React.FC<{
   status: SteamWorkshopAuthStatus | null;
   initialError: string | null;
@@ -921,8 +939,8 @@ const WorkshopLoginDialog: React.FC<{
 }> = ({ status, initialError, canAuthenticate, onClose, onStatusChange, onVerified }) => {
   const [accountName, setAccountName] = useState(status?.account_name || '');
   const [busy, setBusy] = useState<'start' | 'verify' | null>(null);
-  const [error, setError] = useState(initialError || '');
-  const [notice, setNotice] = useState(initialError ? '' : status?.message || '');
+  const [error, setError] = useState(localizeSteamAuthMessage(initialError));
+  const [notice, setNotice] = useState(initialError ? '' : localizeSteamAuthMessage(status?.message));
   const accountAvailable = Boolean(accountName.trim() || status?.account_name);
   const canUseSteamCMD = Boolean(status?.supported && status.steamcmd_installed && canAuthenticate);
 
@@ -945,7 +963,7 @@ const WorkshopLoginDialog: React.FC<{
         await onVerified(next);
         return;
       }
-      setNotice(next.message || 'SteamCMD 登录窗口已打开。请在该窗口输入密码和 Steam Guard 验证码。');
+      setNotice(localizeSteamAuthMessage(next.message) || 'SteamCMD 登录窗口已打开。请在该窗口输入密码和 Steam Guard 验证码。');
     } catch (startError) {
       setError(getErrorMessage(startError));
     } finally {
@@ -964,7 +982,7 @@ const WorkshopLoginDialog: React.FC<{
       const next = await modsApi.verifyWorkshopAuth(accountName.trim() || undefined);
       onStatusChange(next);
       if (!next.logged_in) {
-        setError(next.message || '尚未检测到有效的 Steam 登录缓存，请完成 SteamCMD 登录后重试。');
+        setError(localizeSteamAuthMessage(next.message) || '尚未检测到有效的 Steam 登录缓存，请完成 SteamCMD 登录后重试。');
         return;
       }
       await onVerified(next);
@@ -976,6 +994,7 @@ const WorkshopLoginDialog: React.FC<{
   };
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/45 p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="steam-login-title">
       <div className="flex max-h-[min(720px,95dvh)] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-white shadow-xl">
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
@@ -1059,6 +1078,7 @@ const WorkshopLoginDialog: React.FC<{
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 };
 
@@ -1131,6 +1151,7 @@ const ImportDialog: React.FC<{
 	};
 
 	return (
+		<ModalPortal>
 		<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="mod-import-title">
 			<div className="flex max-h-[min(760px,95dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
 				<div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
@@ -1228,6 +1249,7 @@ const ImportDialog: React.FC<{
 				</div>
 			</div>
 		</div>
+		</ModalPortal>
 	);
 };
 
@@ -1544,6 +1566,7 @@ const WorkshopDrawer: React.FC<{
   }, [item.translation]);
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
     <aside className="flex h-full w-full max-w-xl flex-col overflow-y-auto bg-white shadow-xl">
       <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
@@ -1627,6 +1650,7 @@ const WorkshopDrawer: React.FC<{
       </div>
     </aside>
   </div>
+  </ModalPortal>
   );
 };
 

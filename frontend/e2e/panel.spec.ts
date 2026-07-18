@@ -101,6 +101,12 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
       case '/api/community-servers/source-status':
         data = { source: 'battlemetrics', enabled: true, base_url: 'https://api.battlemetrics.com', proxy_configured: true, reachable: false, cache_available: true, cache_fresh: false, cache_writable: true, cached_queries: 1, rate_limit_per_minute: 30 };
         break;
+      case '/api/mods':
+        data = [];
+        break;
+      case '/api/mods/workshop/auth/status':
+        data = { supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false, logged_in: false, verification_required: true, message: 'Enter the Steam account name used for the local SteamCMD session.' };
+        break;
     }
     if (!authenticated && path !== '/api/auth/status' && path !== '/api/auth/login') {
       status = 401;
@@ -152,6 +158,24 @@ test('pages remain renderable while the backend temporarily returns 502', async 
     await expect(page.getByText('页面加载失败')).toHaveCount(0);
   }
   expect(pageErrors).toEqual([]);
+});
+
+test('Workshop login dialog uses the full viewport instead of the transformed page container', async ({ page }) => {
+  await installFakeBackend(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/mods');
+
+  const dialog = page.getByRole('dialog', { name: '登录 Steam 以使用 Workshop' });
+  await expect(dialog).toBeVisible();
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box?.x).toBe(0);
+  expect(box?.y).toBe(0);
+  expect(box?.width).toBe(1280);
+  expect(box?.height).toBe(720);
+  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
+  await expect(dialog.getByText('请输入本机 SteamCMD 会话使用的 Steam 账户名。')).toBeVisible();
+  await expect(dialog.getByText('Enter the Steam account name used for the local SteamCMD session.')).toHaveCount(0);
 });
 
 test('renders task and schedule data from the API contract', async ({ page }) => {

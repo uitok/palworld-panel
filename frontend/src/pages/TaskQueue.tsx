@@ -220,6 +220,7 @@ export const TaskQueue: React.FC = () => {
     { key: 'progress', label: '进度' },
     { key: 'message', label: '消息' },
     { key: 'created_at', label: '创建时间' },
+    { key: 'updated_at', label: '最后活动' },
   ];
 
   const scheduleHeaders = [
@@ -322,9 +323,17 @@ export const TaskQueue: React.FC = () => {
                     <Progress job={job} />
                   </td>
                   <td className="max-w-[320px] px-6 py-4 text-xs font-medium text-slate-500">
-                    {job.error || job.message || '-'}
+                    <p>{job.error || job.message || '-'}</p>
+                    {isSteamCMDInstallStage(job) && (
+                      <p className="mt-1.5 text-[10px] font-semibold leading-4 text-sky-700">
+                        SteamCMD 下载、解压和校验都处于 60% 阶段；最后活动时间持续更新即表示任务仍正常运行，请勿重启 PalPanel。
+                      </p>
+                    )}
                   </td>
-                  <td className="px-6 py-4 text-xs font-medium text-slate-400">{job.created_at}</td>
+                  <td className="px-6 py-4 text-xs font-medium text-slate-400">{formatJobTime(job.created_at)}</td>
+                  <td className="px-6 py-4 text-xs font-medium text-slate-400" title={job.updated_at || job.created_at}>
+                    {jobActivityText(job.updated_at || job.created_at)}
+                  </td>
                 </tr>
               )}
             />
@@ -599,10 +608,33 @@ const AlertCard: React.FC<{ alert: Alert; onAck: () => void }> = ({ alert, onAck
 );
 
 const progressText = (status: Job['status']) => {
-  if (status === 'running') return '执行中';
-  if (status === 'success') return '完成';
-  if (status === 'failed') return '失败';
-  return '等待';
+  if (status === 'running') return '阶段进度';
+  if (status === 'success') return '已完成';
+  if (status === 'failed') return '中断于';
+  return '等待中';
+};
+
+const isSteamCMDInstallStage = (job: Job) => (
+  job.status === 'running'
+  && job.progress === 60
+  && ['bootstrap', 'install', 'update', 'smart_update'].includes(job.type)
+);
+
+const formatJobTime = (value?: string) => {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString('zh-CN', { hour12: false });
+};
+
+const jobActivityText = (value?: string) => {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const seconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+  if (seconds < 60) return `${seconds} 秒前`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  return formatJobTime(value);
 };
 
 const Progress: React.FC<{ job: Job }> = ({ job }) => (
@@ -635,6 +667,9 @@ const JobCard: React.FC<{ job: Job }> = ({ job }) => (
       <Progress job={job} />
     </div>
     <p className="mt-3 text-[11px] font-medium text-slate-500">{job.error || job.message || '无消息'}</p>
-    <p className="mt-2 text-[10px] text-slate-400">{job.updated_at || job.created_at}</p>
+    {isSteamCMDInstallStage(job) && (
+      <p className="mt-2 text-[10px] font-semibold leading-4 text-sky-700">60% 是 SteamCMD 下载、解压和校验阶段；最后活动时间持续更新即正常，请勿重启 PalPanel。</p>
+    )}
+    <p className="mt-2 text-[10px] text-slate-400">最后活动：{jobActivityText(job.updated_at || job.created_at)}</p>
   </div>
 );
