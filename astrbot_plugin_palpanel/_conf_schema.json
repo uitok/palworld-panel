@@ -11,5 +11,9 @@
   "solve_cost": {"type": "int", "description": "每次成功配种计算费用", "default": 1},
   "timezone": {"type": "string", "description": "签到时区", "default": "Asia/Shanghai"},
   "ticket_ttl_seconds": {"type": "int", "description": "面板登录票据有效期", "default": 300},
-  "quick_solve_timeout_seconds": {"type": "int", "description": "QQ 快捷配种等待超时", "default": 300}
+  "quick_solve_timeout_seconds": {"type": "int", "description": "QQ 快捷配种等待超时", "default": 300},
+  "query_cooldown_seconds": {"type": "int", "description": "状态、在线和房间查询的用户冷却秒数", "default": 5},
+  "control_cooldown_seconds": {"type": "int", "description": "开服、关服和重启操作的用户冷却秒数", "default": 15},
+  "max_room_results": {"type": "int", "description": "房间命令最多返回的社区服务器数量（上限 10）", "default": 10},
+  "output_max_chars": {"type": "int", "description": "查询命令输出的最大字符数", "default": 1800}
 }

@@ -62,6 +62,9 @@ type Manager struct {
 	downloadClient      *http.Client
 	worldResetTimeout   time.Duration
 	worldResetPoll      time.Duration
+	gracefulStopTimeout time.Duration
+	gracefulStopPoll    time.Duration
+	lifecycleWait       func(context.Context, time.Duration) error
 	goos                string
 }
 
@@ -142,14 +145,17 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, exe
 	}
 	return Manager{
 		cfg: cfg, store: store, runner: runner,
-		jobs:              executor,
-		operationMu:       &sync.Mutex{},
-		inspectProcess:    inspectWindowsProcess,
-		terminateProcess:  terminateWindowsProcessTree,
-		downloadClient:    &http.Client{Timeout: 5 * time.Minute},
-		worldResetTimeout: 180 * time.Second,
-		worldResetPoll:    time.Second,
-		goos:              runtime.GOOS,
+		jobs:                executor,
+		operationMu:         &sync.Mutex{},
+		inspectProcess:      inspectWindowsProcess,
+		terminateProcess:    terminateWindowsProcessTree,
+		downloadClient:      &http.Client{Timeout: 5 * time.Minute},
+		worldResetTimeout:   180 * time.Second,
+		worldResetPoll:      time.Second,
+		gracefulStopTimeout: 15 * time.Second,
+		gracefulStopPoll:    time.Second,
+		lifecycleWait:       waitForLifecycleDuration,
+		goos:                runtime.GOOS,
 	}
 }
 
@@ -583,6 +589,85 @@ func (m Manager) SafeRestart(ctx context.Context, waitSeconds int, message strin
 		}
 		m.update(jobID, "completed", 100, "safe restart completed", "")
 	})
+}
+
+// SafeStop asks Palworld to save and shut down gracefully, then verifies that
+// the managed process exited. If the official REST shutdown path is
+// unavailable or the process remains alive after the grace period, PalPanel
+// falls back to its normal managed stop operation.
+func (m Manager) SafeStop(ctx context.Context, waitSeconds int, message string, notify RestartNotifier) (db.Job, error) {
+	if waitSeconds < 5 || waitSeconds > 300 {
+		return db.Job{}, fmt.Errorf("waittime must be between 5 and 300 seconds")
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "Server is shutting down"
+	}
+	return m.startLifecycleJob(ctx, "safe_stop", "queued safe stop", func(jobCtx context.Context, jobID string) {
+		if status, err := m.Status(jobCtx); err == nil && !serverStatusRunning(status) {
+			m.update(jobID, "completed", 100, "server is already stopped", "")
+			return
+		}
+
+		m.update(jobID, "running", 10, "saving world and notifying players", "")
+		if notify != nil {
+			if err := notify(jobCtx, waitSeconds, message); err != nil {
+				m.update(jobID, "running", 20, "graceful shutdown request failed; managed stop fallback remains armed", err.Error())
+			}
+		}
+
+		m.update(jobID, "running", 35, "waiting for player countdown", "")
+		wait := m.lifecycleWait
+		if wait == nil {
+			wait = waitForLifecycleDuration
+		}
+		if err := wait(jobCtx, time.Duration(waitSeconds)*time.Second); err != nil {
+			m.update(jobID, "failed", 35, "safe stop interrupted", err.Error())
+			return
+		}
+
+		m.update(jobID, "running", 60, "waiting for graceful server exit", "")
+		deadline := time.Now().Add(m.gracefulStopTimeout)
+		for {
+			status, err := m.Status(jobCtx)
+			if err == nil && !serverStatusRunning(status) {
+				m.update(jobID, "completed", 100, "safe stop completed", "")
+				return
+			}
+			if !time.Now().Before(deadline) {
+				break
+			}
+			if err := wait(jobCtx, m.gracefulStopPoll); err != nil {
+				m.update(jobID, "failed", 60, "safe stop interrupted", err.Error())
+				return
+			}
+		}
+
+		m.update(jobID, "running", 85, "graceful shutdown timed out; applying managed stop", "")
+		if err := m.stopUnlocked(jobCtx); err != nil {
+			m.update(jobID, "failed", 85, "managed stop fallback failed", err.Error())
+			return
+		}
+		m.update(jobID, "completed", 100, "safe stop completed with managed stop fallback", "")
+	})
+}
+
+func waitForLifecycleDuration(ctx context.Context, duration time.Duration) error {
+	if duration <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func serverStatusRunning(status Status) bool {
+	state := strings.ToLower(strings.TrimSpace(status.Container.Status))
+	return status.Container.Exists && (state == "running" || state == "restarting" || state == "created")
 }
 
 func (m Manager) Logs(ctx context.Context, query LogQuery) (LogResult, error) {
