@@ -31,14 +31,16 @@ import { tasksApi } from '../api/tasks';
 import type { ImportInspection, Job, LocalModAction, LocalModFinding, LocalScanResult, ModItem, PalDefenderStatus, SteamWorkshopAuthStatus, WorkshopItem } from '../types';
 import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { ModConfigWorkspace } from '../components/mods/ModConfigWorkspace';
 import { useServerStore } from '../store/useServerStore';
 
-type ModsTab = 'store' | 'installed' | 'local';
+type ModsTab = 'store' | 'installed' | 'local' | 'config';
 
 const tabs: Array<{ id: ModsTab; label: string }> = [
   { id: 'store', label: 'Mod 商店' },
   { id: 'installed', label: '已安装' },
   { id: 'local', label: '本地检测' },
+  { id: 'config', label: '配置中心' },
 ];
 
 const sortOptions = [
@@ -231,7 +233,7 @@ export const Mods: React.FC = () => {
   }, [loadInstalled, loadStore, loadWorkshopAuthStatus]);
 
   useEffect(() => {
-    if (activeTab !== 'local' || localScanRequestedRef.current) return;
+    if ((activeTab !== 'local' && activeTab !== 'config') || localScanRequestedRef.current) return;
     localScanRequestedRef.current = true;
     void runLocalScan();
   }, [activeTab, runLocalScan]);
@@ -734,6 +736,15 @@ export const Mods: React.FC = () => {
             />
           )}
         </section>
+      )}
+
+      {activeTab === 'config' && (
+        <ModConfigWorkspace
+          mods={mods}
+          localFindings={localScan?.findings || []}
+          canWrite={Boolean(session?.permissions.includes('mods:write'))}
+          canReloadPalDefender={Boolean(session?.permissions.includes('security:write'))}
+        />
       )}
 
 	  {importOpen && (

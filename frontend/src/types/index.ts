@@ -380,6 +380,51 @@ export interface ModItem {
   updated_at?: string;
 }
 
+export interface ModConfigFile {
+  id: string;
+  name: string;
+  path: string;
+  extension: string;
+  size: number;
+  modified_at: string;
+  revision: string;
+  executable: boolean;
+  risk?: string;
+}
+
+export interface ModConfigurationField {
+  path: string;
+  label: string;
+  type: 'boolean' | 'integer' | 'number' | 'string';
+  value: unknown;
+  min?: number;
+  max?: number;
+}
+
+export interface ModConfigDocument {
+  file: ModConfigFile;
+  content: string;
+  format: string;
+  fields?: ModConfigurationField[];
+}
+
+export interface ModConfigurationAdapter {
+  id: string;
+  name: string;
+  description: string;
+  workshop_id?: string;
+  available: boolean;
+  reload_behavior: 'online_reload' | 'restart_required' | string;
+  files: ModConfigFile[];
+}
+
+export interface ModConfigBackup {
+  id: string;
+  revision: string;
+  size: number;
+  created_at: string;
+}
+
 export type ImportCandidate = components['schemas']['ImportCandidate'];
 export type ImportInspection = components['schemas']['ImportInspection'];
 export type ModImportRequest = components['schemas']['ModImportRequest'];
