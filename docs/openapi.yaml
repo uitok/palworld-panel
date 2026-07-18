@@ -649,12 +649,7 @@ paths:
         required: true
         content:
           multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file: {type: string, format: binary}
-                name: {type: string}
+            schema: {$ref: '#/components/schemas/SaveSourceImportRequest'}
       responses: *writeResponses
   /save-sources/{id}/activate:
     parameters: [*idParameter]
@@ -901,6 +896,17 @@ components:
       required: [file]
       properties:
         file: {type: string, format: binary}
+    SaveSourceImportRequest:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: Palworld world save archive in .zip, .tar, .tar.gz, or .tgz format.
+        name:
+          type: string
+          description: Optional display name for the imported save source.
     ModImportSelectRequest:
       type: object
       required: [candidate_id]

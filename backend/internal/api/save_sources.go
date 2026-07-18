@@ -1,12 +1,10 @@
 package api
 
 import (
-	"archive/zip"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -53,12 +51,13 @@ func (s Server) listSaveSources(c *gin.Context) {
 func (s Server) importSaveSource(c *gin.Context) {
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		fail(c, http.StatusBadRequest, "save_archive_required", "a ZIP archive is required")
+		fail(c, http.StatusBadRequest, "save_archive_required", "a ZIP or TAR archive is required")
 		return
 	}
 	defer file.Close()
-	if !strings.EqualFold(filepath.Ext(header.Filename), ".zip") {
-		fail(c, http.StatusBadRequest, "save_archive_invalid", "only ZIP archives are supported")
+	format, err := saveArchiveFormatForName(header.Filename)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "save_archive_invalid", err.Error())
 		return
 	}
 
@@ -70,7 +69,7 @@ func (s Server) importSaveSource(c *gin.Context) {
 		return
 	}
 	defer os.RemoveAll(staging)
-	temporary, err := os.CreateTemp(staging, "upload-*.zip")
+	temporary, err := os.CreateTemp(staging, "upload-*.archive")
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "save_import_prepare_failed", err.Error())
 		return
@@ -89,7 +88,7 @@ func (s Server) importSaveSource(c *gin.Context) {
 	}
 
 	extracted := filepath.Join(staging, "files")
-	if err := extractSaveArchive(temporaryPath, extracted, s.cfg.MaxUploadBytes); err != nil {
+	if err := extractSaveArchive(temporaryPath, extracted, s.cfg.MaxUploadBytes, format); err != nil {
 		fail(c, http.StatusBadRequest, "save_archive_invalid", err.Error())
 		return
 	}
@@ -110,7 +109,7 @@ func (s Server) importSaveSource(c *gin.Context) {
 	storedWorld := filepath.Join(root, relativeWorld)
 	name := strings.TrimSpace(c.PostForm("name"))
 	if name == "" {
-		name = strings.TrimSuffix(filepath.Base(header.Filename), filepath.Ext(header.Filename))
+		name = defaultSaveSourceName(header.Filename)
 	}
 	source := db.SaveSource{ID: sourceID, Name: name, Kind: "import", Path: storedWorld}
 	if err := s.store.UpsertSaveSource(c.Request.Context(), source); err != nil {
@@ -306,90 +305,6 @@ func breedingSubject(principal Principal) string {
 		return "user:" + principal.UserID
 	}
 	return "role:" + string(principal.Role) + ":" + principal.Name
-}
-
-func extractSaveArchive(archivePath, destination string, maxBytes int64) error {
-	reader, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-	if len(reader.File) == 0 || len(reader.File) > 4096 {
-		return errors.New("archive file count is invalid")
-	}
-	var total int64
-	for _, entry := range reader.File {
-		clean := filepath.Clean(filepath.FromSlash(entry.Name))
-		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe archive path: %s", entry.Name)
-		}
-		if entry.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symbolic links are not allowed: %s", entry.Name)
-		}
-		total += int64(entry.UncompressedSize64)
-		if total > maxBytes {
-			return errors.New("uncompressed save archive exceeds limit")
-		}
-		target := filepath.Join(destination, clean)
-		if !pathWithin(destination, target) {
-			return fmt.Errorf("unsafe archive target: %s", entry.Name)
-		}
-		if entry.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o700); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return err
-		}
-		source, err := entry.Open()
-		if err != nil {
-			return err
-		}
-		destinationFile, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-		if err != nil {
-			source.Close()
-			return err
-		}
-		_, copyErr := io.Copy(destinationFile, io.LimitReader(source, int64(entry.UncompressedSize64)+1))
-		closeErr := destinationFile.Close()
-		source.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-	}
-	return nil
-}
-
-func findImportedWorld(root string) (string, error) {
-	var candidates []string
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			name := strings.ToLower(entry.Name())
-			if name == "backup" || name == "backups" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.EqualFold(entry.Name(), "Level.sav") {
-			candidates = append(candidates, filepath.Dir(path))
-		}
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	if len(candidates) == 0 {
-		return "", errors.New("Level.sav was not found in the archive")
-	}
-	return candidates[0], nil
 }
 
 func pathWithin(root, target string) bool {

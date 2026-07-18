@@ -290,6 +290,13 @@ func registerFrontendFilesystem(router *gin.Engine, files fs.FS) {
 			c.Status(http.StatusNotFound)
 			return
 		}
+		requested := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if requested != "" && fs.ValidPath(requested) {
+			if info, err := fs.Stat(files, requested); err == nil && !info.IsDir() {
+				serve(requested, "public, max-age=3600")(c)
+				return
+			}
+		}
 		serve("index.html", "no-cache")(c)
 	})
 }

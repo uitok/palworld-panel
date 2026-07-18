@@ -187,6 +187,7 @@ func TestFrontendFilesystemRoutes(t *testing.T) {
 		"index.html":              &fstest.MapFile{Data: []byte("<html>index</html>")},
 		"assets/index.js":         &fstest.MapFile{Data: []byte("console.log('asset')")},
 		"assets/items/money.webp": &fstest.MapFile{Data: []byte("webp-item")},
+		"brand/palpanel-mark.svg": &fstest.MapFile{Data: []byte("<svg>brand</svg>")},
 		"favicon.ico":             &fstest.MapFile{Data: []byte("icon")},
 	}
 	router := gin.New()
@@ -205,6 +206,7 @@ func TestFrontendFilesystemRoutes(t *testing.T) {
 		// host MIME registry; both are valid JavaScript media types.
 		{http.MethodGet, "/assets/index.js", http.StatusOK, "public, max-age=31536000, immutable", "asset", "javascript"},
 		{http.MethodGet, "/assets/items/money.webp", http.StatusOK, "public, max-age=31536000, immutable", "webp-item", "image/webp"},
+		{http.MethodGet, "/brand/palpanel-mark.svg", http.StatusOK, "public, max-age=3600", "brand", "image/svg+xml"},
 		{http.MethodGet, "/favicon.ico", http.StatusOK, "public, max-age=3600", "icon", "image/"},
 		{http.MethodGet, "/api/missing", http.StatusNotFound, "", `"code":"not_found"`, "application/json"},
 		{http.MethodPost, "/settings", http.StatusNotFound, "", "", ""},

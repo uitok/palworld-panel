@@ -332,6 +332,7 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	assertRequestSchema("/mods/import/inspect", "multipart/form-data", "ModImportUploadRequest")
 	assertRequestSchema("/mods/import/inspect/{id}/select", "application/json", "ModImportSelectRequest")
 	assertRequestSchema("/mods/import", "application/json", "ModImportRequest")
+	assertRequestSchema("/save-sources/import", "multipart/form-data", "SaveSourceImportRequest")
 	assertRequestSchema("/security/paldefender/gm/players/{id}/items", "application/json", "PalDefenderGiveItemsRequest")
 	assertRequestSchema("/security/paldefender/gm/players/{id}/message", "application/json", "PalDefenderMessageRequest")
 	assertRequestSchema("/security/paldefender/gm/broadcast", "application/json", "PalDefenderBroadcastRequest")

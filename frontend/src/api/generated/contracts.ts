@@ -368,6 +368,10 @@ export interface components {
     "PalDefenderTechnologyRequest": {
       "Technology": unknown;
     };
+    "SaveSourceImportRequest": {
+      "file": string;
+      "name"?: string;
+    };
     "Schedule": components["schemas"]["ScheduleInput"] & {
       "created_at": string;
       "enabled": boolean;

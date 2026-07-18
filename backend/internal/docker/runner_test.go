@@ -309,6 +309,20 @@ func TestWineDLLOverridesPreferNativePalDefenderLoader(t *testing.T) {
 	}
 }
 
+func TestWineRunnerEntrypointUsesUnixLineEndings(t *testing.T) {
+	entrypoint, err := filepath.Abs(filepath.Join("..", "..", "deployments", "wine-runner", "entrypoint.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(entrypoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "\r\n") {
+		t.Fatal("Wine runner entrypoint contains CRLF line endings")
+	}
+}
+
 func containsExact(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

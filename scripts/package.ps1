@@ -90,7 +90,7 @@ function Invoke-GoTestsWithWindowsLockRetry {
     }
 
     $outputText = ($output | Out-String)
-    $isTransientWindowsLock = $outputText -match '(?i)process cannot access the file because it is being used by another process'
+    $isTransientWindowsLock = $outputText -match '(?i)process cannot access the file because it is being used by another process|TempDir RemoveAll cleanup|directory is not empty|unlinkat'
     if (-not $isTransientWindowsLock -or $attempt -eq $MaxAttempts) {
       throw "go test -p=1 ./... failed with exit code $exitCode"
     }

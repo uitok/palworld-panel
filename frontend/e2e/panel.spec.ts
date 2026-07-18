@@ -132,3 +132,18 @@ test('loads schema-backed server settings', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
   await expect(page.getByLabel('服务器名称')).toHaveValue('E2E Server');
 });
+
+test('mobile navigation stays in view and closes from the backdrop', async ({ page }) => {
+  await installFakeBackend(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/dashboard');
+
+  await page.locator('.pp-topbar button').first().click();
+  const drawer = page.locator('.pp-rail.is-mobile');
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveCSS('transform', 'none');
+  expect((await drawer.boundingBox())?.x).toBe(0);
+
+  await page.mouse.click(370, 400);
+  await expect(drawer).toHaveCount(0);
+});
