@@ -1,10 +1,12 @@
 import unittest
 
 from astrbot_plugin_palpanel.operations import (
+    admin_allowed,
     CooldownGuard,
     format_online_players,
     format_rooms,
     format_server_status,
+    group_allowed,
     parse_wait_seconds,
 )
 
@@ -30,7 +32,7 @@ class OperationsTests(unittest.TestCase):
     def test_status_and_online_formatting(self):
         payload = {"data": {
             "server": {"container": {"exists": True, "status": "running"}},
-            "info": {"servername": "测试服", "version": "1.0"},
+            "info": {"server_name": "测试服", "version": "1.0"},
             "online_count": 2,
             "online_players": [{"name": "甲", "level": 10}, {"name": "乙"}],
         }}
@@ -41,6 +43,17 @@ class OperationsTests(unittest.TestCase):
         online = format_online_players(payload)
         self.assertIn("甲（Lv.10）", online)
         self.assertIn("乙", online)
+        self.assertEqual(
+            format_online_players({"data": {"online_players": [], "players_available": False}}),
+            "暂时无法查询在线玩家，请稍后重试。",
+        )
+
+    def test_group_and_admin_command_boundaries(self):
+        self.assertTrue(group_allowed("20002", "20002"))
+        self.assertFalse(group_allowed("20002", "30003"))
+        self.assertFalse(group_allowed("", None))
+        self.assertTrue(admin_allowed("10001, 10002", "10002"))
+        self.assertFalse(admin_allowed("10001,10002", "10003"))
 
     def test_room_output_limits_results_and_characters(self):
         rooms = [{

@@ -42,15 +42,18 @@ export interface CommunityServerResult {
 
 export interface CommunityServerSourceStatus {
   source: string;
+  enabled: boolean;
   base_url: string;
   proxy_configured: boolean;
   reachable: boolean;
   cache_available: boolean;
   cache_fresh: boolean;
+  cache_writable: boolean;
   cached_queries: number;
   last_attempt_at?: string;
   last_success_at?: string;
   last_error?: string;
+  cache_error?: string;
   next_refresh_at?: string;
   rate_limit_per_minute: number;
 }
@@ -123,8 +126,8 @@ export const communityServersApi = {
   sourceStatus: () => handleRequest<unknown, CommunityServerSourceStatus>(
     () => apiClient.get('/community-servers/source-status'),
     {
-      source: 'battlemetrics', base_url: '', proxy_configured: false, reachable: false,
-      cache_available: false, cache_fresh: false, cached_queries: 0, rate_limit_per_minute: 30,
+      source: 'battlemetrics', enabled: false, base_url: '', proxy_configured: false, reachable: false,
+      cache_available: false, cache_fresh: false, cache_writable: false, cached_queries: 0, rate_limit_per_minute: 30,
     },
     { quiet: true, fallbackOnError: false },
   ),

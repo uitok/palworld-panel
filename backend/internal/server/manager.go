@@ -667,7 +667,15 @@ func waitForLifecycleDuration(ctx context.Context, duration time.Duration) error
 
 func serverStatusRunning(status Status) bool {
 	state := strings.ToLower(strings.TrimSpace(status.Container.Status))
-	return status.Container.Exists && (state == "running" || state == "restarting" || state == "created")
+	if !status.Container.Exists {
+		return false
+	}
+	switch state {
+	case "exited", "dead", "missing", "stopped":
+		return false
+	default:
+		return true
+	}
 }
 
 func (m Manager) Logs(ctx context.Context, query LogQuery) (LogResult, error) {

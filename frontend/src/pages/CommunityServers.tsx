@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Globe2, KeyRound, RefreshCw, Search, Server as ServerIcon, Users } from 'lucide-react';
 import { communityServersApi } from '../api/communityServers';
 import type { CommunityServer, CommunityServerQuery, CommunityServerResult, CommunityServerSourceStatus } from '../api/communityServers';
@@ -34,24 +34,34 @@ export const CommunityServers: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   const load = async (nextQuery: CommunityServerQuery, force = false) => {
+	const requestID = ++requestSequence.current;
     if (force) setRefreshing(true);
-    else setLoading(true);
+	else {
+		setLoading(true);
+		setResult(null);
+		setSourceStatus(null);
+	}
     setError(null);
     setNotice(null);
     try {
-      const [nextResult, nextStatus] = await Promise.all([
-        force ? communityServersApi.refresh(nextQuery) : communityServersApi.list(nextQuery),
-        communityServersApi.sourceStatus().catch(() => null),
-      ]);
+	  const nextResult = await (force ? communityServersApi.refresh(nextQuery) : communityServersApi.list(nextQuery));
+	  const nextStatus = await communityServersApi.sourceStatus().catch(() => null);
+	  if (requestID !== requestSequence.current) return;
       setResult(nextResult);
       setSourceStatus(nextStatus);
     } catch (loadError) {
+	  const failedStatus = await communityServersApi.sourceStatus().catch(() => null);
+	  if (requestID !== requestSequence.current) return;
+	  setSourceStatus(failedStatus);
       setError(getErrorMessage(loadError));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+	  if (requestID === requestSequence.current) {
+		setLoading(false);
+		setRefreshing(false);
+	  }
     }
   };
 
@@ -86,15 +96,15 @@ export const CommunityServers: React.FC = () => {
             <p className="mt-2 text-sm leading-6 text-slate-300">查询 BattleMetrics 可发现的 Palworld 社区服务器。公开目录可能存在延迟，也不会包含未公开或无法发现的房间。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
-            <span className={`rounded-full px-3 py-1.5 font-semibold ${sourceStatus?.reachable ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-400/15 text-amber-200'}`}>{sourceStatus?.reachable ? '数据源在线' : '缓存/数据源待确认'}</span>
+			<span className={`rounded-full px-3 py-1.5 font-semibold ${sourceStatus?.reachable ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-400/15 text-amber-200'}`}>{sourceStatus?.enabled === false ? '功能已禁用' : sourceStatus?.reachable ? '数据源在线' : '缓存/数据源待确认'}</span>
             {sourceStatus?.proxy_configured && <span className="rounded-full bg-sky-400/15 px-3 py-1.5 font-semibold text-sky-200">已配置国内代理</span>}
           </div>
         </div>
       </section>
 
-      {(error || notice || result?.stale) && <div role="status" className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm ${error ? 'border-rose-200 bg-rose-50 text-rose-800' : notice ? 'border-sky-200 bg-sky-50 text-sky-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+	  {(error || notice || result?.stale || sourceStatus?.cache_error) && <div role="status" className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm ${error ? 'border-rose-200 bg-rose-50 text-rose-800' : notice ? 'border-sky-200 bg-sky-50 text-sky-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
         {error || (!notice && result?.stale) ? <AlertTriangle className="mt-0.5 shrink-0" size={16} /> : <Clipboard className="mt-0.5 shrink-0" size={16} />}
-        <span>{error || notice || (result?.stale ? `境外数据源暂不可用，正在显示 ${result.cache_age_seconds} 秒前的缓存。` : '')}</span>
+		<span>{error || notice || (result?.stale ? `境外数据源暂不可用，正在显示 ${result.cache_age_seconds} 秒前的缓存。` : sourceStatus?.cache_error ? '当前结果可用，但持久缓存写入失败；重启后可能无法使用陈旧缓存。' : '')}</span>
       </div>}
 
       <form onSubmit={submitFilters} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-6">

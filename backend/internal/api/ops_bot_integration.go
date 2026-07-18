@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -48,16 +49,22 @@ func (s Server) astrBotServerStatus(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "server_status_unavailable", err.Error())
 		return
 	}
-	result := gin.H{"server": status, "online_count": 0, "online_players": []gin.H{}}
+	result := gin.H{
+		"server": gin.H{
+			"container":    gin.H{"exists": status.Container.Exists, "status": status.Container.Status},
+			"runtime_mode": status.RuntimeMode, "pending_restart": status.PendingRestart, "setup_step": status.SetupStep,
+		},
+		"online_count": 0, "online_players": []gin.H{},
+	}
 	if response, restErr := s.palworldREST().Do(c.Request.Context(), http.MethodGet, "players", nil); restErr == nil {
 		players := normalizeAstrBotPlayers(response.Body)
 		result["online_count"] = len(players)
 		result["online_players"] = players
 	} else {
-		result["players_error"] = restErr.Error()
+		result["players_available"] = false
 	}
 	if response, restErr := s.palworldREST().Do(c.Request.Context(), http.MethodGet, "info", nil); restErr == nil {
-		result["info"] = response.Body
+		result["info"] = normalizeAstrBotInfo(response.Body)
 	}
 	ok(c, result)
 }
@@ -93,8 +100,8 @@ func (s Server) astrBotServerControl(c *gin.Context) {
 		return
 	}
 	if actionErr != nil {
-		s.auditAstrBotControl(req, c.ClientIP(), "failed", actionErr.Error())
-		fail(c, http.StatusBadRequest, "astrbot_control_failed", actionErr.Error())
+		s.auditAstrBotControl(req, c.ClientIP(), "failed", "operation_failed")
+		fail(c, http.StatusBadRequest, "astrbot_control_failed", "server control operation failed")
 		return
 	}
 	s.invalidateServerCaches()
@@ -106,15 +113,27 @@ func (s Server) astrBotServerControl(c *gin.Context) {
 	ok(c, payload)
 }
 
+func normalizeAstrBotInfo(body any) gin.H {
+	root, ok := body.(map[string]any)
+	if !ok {
+		return gin.H{}
+	}
+	return gin.H{
+		"server_name": firstAstrBotString(root, "servername", "server_name", "name"),
+		"version":     firstAstrBotString(root, "version"),
+	}
+}
+
 func (s Server) requestPalworldShutdown(ctx context.Context, wait int, message string) error {
 	client := s.palworldREST()
+	var failures []error
 	if _, err := client.Do(ctx, http.MethodPost, "save", nil); err != nil {
-		return fmt.Errorf("save world: %w", err)
+		failures = append(failures, fmt.Errorf("save world: %w", err))
 	}
 	if _, err := client.Do(ctx, http.MethodPost, "shutdown", gin.H{"waittime": wait, "message": message}); err != nil {
-		return fmt.Errorf("request shutdown: %w", err)
+		failures = append(failures, fmt.Errorf("request shutdown: %w", err))
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (s Server) auditAstrBotControl(req astrBotControlRequest, ip, status, message string) {
@@ -146,10 +165,8 @@ func normalizeAstrBotPlayers(body any) []gin.H {
 			continue
 		}
 		players = append(players, gin.H{
-			"name":      firstAstrBotString(player, "name", "nickname"),
-			"player_id": firstAstrBotString(player, "playerId", "player_id"),
-			"user_id":   firstAstrBotString(player, "userId", "user_id"),
-			"level":     player["level"],
+			"name":  firstAstrBotString(player, "name", "nickname"),
+			"level": player["level"],
 		})
 	}
 	return players

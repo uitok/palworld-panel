@@ -3,6 +3,7 @@ package communityservers
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,26 @@ func TestClientValidatesBaseAndProxyWithoutLeakingCredentials(t *testing.T) {
 		if strings.Contains(err.Error(), "secret-user") || strings.Contains(err.Error(), "secret-password") {
 			t.Fatalf("credentials leaked in error: %v", err)
 		}
+	}
+}
+
+func TestClientRoutesRequestsThroughHTTPProxy(t *testing.T) {
+	var proxied *url.URL
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied = r.URL
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"proxy","attributes":{"name":"Proxy","ip":"203.0.113.10","port":8211,"players":1,"maxPlayers":32,"status":"online","country":"CN"}}],"meta":{"total":1}}`))
+	}))
+	defer proxyServer.Close()
+	client, err := NewClient("http://battlemetrics.invalid", proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, _, err := client.Fetch(t.Context(), Query{Region: "cn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxied == nil || proxied.Host != "battlemetrics.invalid" || proxied.Path != "/servers" || len(servers) != 1 {
+		t.Fatalf("proxied=%v servers=%#v", proxied, servers)
 	}
 }

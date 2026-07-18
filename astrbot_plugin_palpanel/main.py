@@ -17,10 +17,12 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from .security import body_bytes, signed_headers, verify_headers
 from .storage import PalPanelStore
 from .operations import (
+    admin_allowed,
     CooldownGuard,
     format_online_players,
     format_rooms,
     format_server_status,
+    group_allowed,
     parse_wait_seconds,
 )
 
@@ -63,11 +65,10 @@ class Main(Star):
             await self.http.close()
 
     def _allowed(self, event: AstrMessageEvent) -> bool:
-        allowed = str(self.config.get("allowed_group_id", "")).strip()
-        return bool(event.get_group_id()) and (not allowed or event.get_group_id() == allowed)
+        return group_allowed(self.config.get("allowed_group_id", ""), event.get_group_id())
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
-        return event.get_sender_id() in self._admin_ids()
+        return admin_allowed(self.config.get("admin_qq_ids", ""), event.get_sender_id())
 
     def _admin_ids(self) -> set[str]:
         return {item.strip() for item in str(self.config.get("admin_qq_ids", "")).split(",") if item.strip()}

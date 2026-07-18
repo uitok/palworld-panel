@@ -130,7 +130,7 @@ export const Dashboard: React.FC = () => {
       action === 'start'
         ? '启动服务器？'
         : action === 'forceStop'
-          ? '通过官方 REST 强制停止服务器？REST 不可达时会返回失败。'
+          ? '立即强制停止托管服务器进程？这不会等待保存世界，仅用于正常关服失败时。'
           : '安全停止服务器？面板会先保存世界、广播 60 秒倒计时，再停止服务。';
     if (!window.confirm(text)) return;
     try {

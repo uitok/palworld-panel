@@ -84,6 +84,15 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
       case '/api/ai/translation/config':
         data = { enabled: false, base_url: '', model: '', api_key_configured: false };
         break;
+      case '/api/community-servers':
+        data = {
+          servers: [{ id: 'cn-e2e', name: '国内社区服', address: '203.0.113.8', port: 8211, connect: '203.0.113.8:8211', players: 18, max_players: 32, password: false, country: 'CN', version: '1.0', status: 'online' }],
+          total: 1, source_total: 1, page: 1, page_size: 30, source: 'battlemetrics', fetched_at: '2026-07-18T08:00:00Z', stale: true, cache_age_seconds: 90,
+        };
+        break;
+      case '/api/community-servers/source-status':
+        data = { source: 'battlemetrics', enabled: true, base_url: 'https://api.battlemetrics.com', proxy_configured: true, reachable: false, cache_available: true, cache_fresh: false, cache_writable: true, cached_queries: 1, rate_limit_per_minute: 30 };
+        break;
     }
     if (!authenticated && path !== '/api/auth/status' && path !== '/api/auth/login') {
       status = 401;
@@ -146,4 +155,17 @@ test('mobile navigation stays in view and closes from the backdrop', async ({ pa
 
   await page.mouse.click(370, 400);
   await expect(drawer).toHaveCount(0);
+});
+
+test('community server discovery remains usable on a mobile viewport with stale data', async ({ page }) => {
+  await installFakeBackend(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/community-servers');
+
+  await expect(page.getByRole('heading', { name: '社区服务器' })).toBeVisible();
+  await expect(page.getByText('国内社区服')).toBeVisible();
+  await expect(page.getByText(/正在显示 90 秒前的缓存/)).toBeVisible();
+  await page.getByRole('button', { name: /国内社区服/ }).click();
+  await expect(page.getByRole('button', { name: /复制 203.0.113.8:8211/ })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

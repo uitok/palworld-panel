@@ -29,19 +29,21 @@ type Options struct {
 }
 
 type Service struct {
-	mu        sync.Mutex
-	fetcher   Fetcher
-	baseURL   string
-	proxy     bool
-	cachePath string
-	freshTTL  time.Duration
-	staleTTL  time.Duration
-	rateLimit int
-	now       func() time.Time
-	cache     map[string]cacheEntry
-	attempts  []time.Time
-	inflight  map[string]*fetchCall
-	status    sourceRuntimeStatus
+	mu            sync.Mutex
+	fetcher       Fetcher
+	baseURL       string
+	proxy         bool
+	cachePath     string
+	freshTTL      time.Duration
+	staleTTL      time.Duration
+	rateLimit     int
+	now           func() time.Time
+	cache         map[string]cacheEntry
+	attempts      []time.Time
+	inflight      map[string]*fetchCall
+	status        sourceRuntimeStatus
+	cacheWritable bool
+	cacheError    string
 }
 
 type cacheEntry struct {
@@ -104,6 +106,7 @@ func New(options Options) (*Service, error) {
 		fetcher: fetcher, baseURL: publicURL(baseURL), proxy: strings.TrimSpace(options.ProxyURL) != "",
 		cachePath: strings.TrimSpace(options.CachePath), freshTTL: freshTTL, staleTTL: staleTTL,
 		rateLimit: rateLimit, now: now, cache: map[string]cacheEntry{}, inflight: map[string]*fetchCall{},
+		cacheWritable: strings.TrimSpace(options.CachePath) != "",
 	}
 	service.loadCache()
 	return service, nil
@@ -163,7 +166,13 @@ func (s *Service) list(ctx context.Context, query Query, force bool) (Result, er
 		s.status.lastError = ""
 		call.entry = entry
 		s.pruneLocked(fetchedAt)
-		_ = s.persistLocked()
+		if persistErr := s.persistLocked(); persistErr != nil {
+			s.cacheWritable = false
+			s.cacheError = sanitizeError(persistErr.Error())
+		} else {
+			s.cacheWritable = s.cachePath != ""
+			s.cacheError = ""
+		}
 	} else {
 		s.status.lastError = sanitizeError(err.Error())
 	}
@@ -191,9 +200,10 @@ func (s *Service) Status() SourceStatus {
 	defer s.mu.Unlock()
 	s.pruneLocked(now)
 	status := SourceStatus{
-		Source: DefaultCacheSource, BaseURL: s.baseURL, ProxyConfigured: s.proxy,
+		Source: DefaultCacheSource, Enabled: true, BaseURL: s.baseURL, ProxyConfigured: s.proxy,
 		Reachable:     !s.status.lastSuccess.IsZero() && (s.status.lastAttempt.IsZero() || !s.status.lastSuccess.Before(s.status.lastAttempt)),
-		CachedQueries: len(s.cache), RateLimit: s.rateLimit, LastError: s.status.lastError,
+		CacheWritable: s.cacheWritable, CachedQueries: len(s.cache), RateLimit: s.rateLimit,
+		LastError: s.status.lastError, CacheError: s.cacheError,
 	}
 	var newest time.Time
 	for _, entry := range s.cache {

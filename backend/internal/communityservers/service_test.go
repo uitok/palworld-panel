@@ -3,6 +3,8 @@ package communityservers
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -104,6 +106,28 @@ func TestServicePersistsCacheAcrossRestart(t *testing.T) {
 	result, err := second.List(t.Context(), query)
 	if err != nil || !result.Stale || len(result.Servers) != 1 || result.Servers[0].ID != "persisted" {
 		t.Fatalf("persisted result = %#v, %v", result, err)
+	}
+}
+
+func TestServiceReportsPersistentCacheWriteFailure(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "community-cache.json")
+	if err := os.MkdirAll(filepath.Join(cachePath, "blocker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(Options{
+		Fetcher:   &fakeFetcher{total: 1, items: []Server{{ID: "one"}}},
+		CachePath: cachePath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.List(t.Context(), Query{Region: "cn"}); err != nil {
+		t.Fatal(err)
+	}
+	status := service.Status()
+	if status.CacheWritable || status.CacheError == "" || !status.CacheAvailable {
+		t.Fatalf("status = %#v", status)
 	}
 }
 

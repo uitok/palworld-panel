@@ -150,17 +150,28 @@ func TestLoadUsesProductionNetworkAndProviderDefaults(t *testing.T) {
 	if cfg.MonitorRetentionDays != DefaultMonitorRetentionDays {
 		t.Fatalf("MonitorRetentionDays = %d", cfg.MonitorRetentionDays)
 	}
+	if !cfg.CommunityServersEnabled || cfg.CommunityServersAPIBaseURL != DefaultCommunityServersAPIBaseURL {
+		t.Fatalf("community server defaults = enabled %v, base %q", cfg.CommunityServersEnabled, cfg.CommunityServersAPIBaseURL)
+	}
+	if cfg.CommunityServersCacheTTL != 60 || cfg.CommunityServersStaleTTL != 86400 || cfg.CommunityServersRateLimit != 30 {
+		t.Fatalf("community server cache defaults = %d, %d, %d", cfg.CommunityServersCacheTTL, cfg.CommunityServersStaleTTL, cfg.CommunityServersRateLimit)
+	}
 }
 
 func TestLoadRejectsInvalidScalarConfiguration(t *testing.T) {
 	tests := map[string]string{
-		"PALPANEL_REQUIRE_AUTH":                   "sometimes",
-		"PALPANEL_STEAM_API_TIMEOUT_SECONDS":      "soon",
-		"PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS": "0",
-		"PALPANEL_RCON_PORT":                      "70000",
-		"PALPANEL_LISTEN_ADDR":                    "127.0.0.1:not-a-port",
-		"PALPANEL_MONITOR_RETENTION_DAYS":         "-1",
-		"PALPANEL_RCON_HOST":                      "bad host:25575",
+		"PALPANEL_REQUIRE_AUTH":                        "sometimes",
+		"PALPANEL_STEAM_API_TIMEOUT_SECONDS":           "soon",
+		"PALPANEL_AI_TRANSLATION_TIMEOUT_SECONDS":      "0",
+		"PALPANEL_RCON_PORT":                           "70000",
+		"PALPANEL_LISTEN_ADDR":                         "127.0.0.1:not-a-port",
+		"PALPANEL_MONITOR_RETENTION_DAYS":              "-1",
+		"PALPANEL_RCON_HOST":                           "bad host:25575",
+		"PALPANEL_COMMUNITY_SERVERS_ENABLED":           "sometimes",
+		"PALPANEL_COMMUNITY_SERVERS_CACHE_TTL_SECONDS": "0",
+		"PALPANEL_COMMUNITY_SERVERS_STALE_TTL_SECONDS": "1",
+		"PALPANEL_COMMUNITY_SERVERS_RATE_LIMIT":        "61",
+		"PALPANEL_COMMUNITY_SERVERS_PROXY_URL":         "ftp://proxy.example",
 	}
 	for name, value := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -170,5 +181,17 @@ func TestLoadRejectsInvalidScalarConfiguration(t *testing.T) {
 				t.Fatalf("expected %s=%q to fail", name, value)
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsCommunityServerSOCKS5HProxy(t *testing.T) {
+	t.Setenv("PALPANEL_REQUIRE_AUTH", "false")
+	t.Setenv("PALPANEL_COMMUNITY_SERVERS_PROXY_URL", "socks5h://127.0.0.1:10808")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CommunityServersProxyURL != "socks5h://127.0.0.1:10808" {
+		t.Fatalf("proxy URL = %q", cfg.CommunityServersProxyURL)
 	}
 }

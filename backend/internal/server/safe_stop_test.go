@@ -60,4 +60,10 @@ func TestServerStatusRunning(t *testing.T) {
 	if !serverStatusRunning(Status{Container: docker.ContainerStatus{Exists: true, Status: "running"}}) {
 		t.Fatal("running process was not recognized")
 	}
+	if !serverStatusRunning(Status{Container: docker.ContainerStatus{Exists: true, Status: "paused"}}) {
+		t.Fatal("paused process must remain managed as running")
+	}
+	if serverStatusRunning(Status{Container: docker.ContainerStatus{Exists: true, Status: "exited"}}) {
+		t.Fatal("exited process must not be running")
+	}
 }

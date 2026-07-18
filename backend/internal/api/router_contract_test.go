@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -251,14 +252,13 @@ func assertOpenAPIContract(t *testing.T, router *gin.Engine) {
 		}
 	}
 	actual := map[string]bool{}
+	ginParameter := regexp.MustCompile(`:([A-Za-z_][A-Za-z0-9_]*)`)
 	for _, route := range router.Routes() {
 		if !strings.HasPrefix(route.Path, "/api/") {
 			continue
 		}
 		path := route.Path
-		for _, parameter := range []string{"id", "name", "steam_id"} {
-			path = strings.ReplaceAll(path, ":"+parameter, "{"+parameter+"}")
-		}
+		path = ginParameter.ReplaceAllString(path, `{$1}`)
 		actual[route.Method+" "+path] = true
 	}
 	for key := range actual {
@@ -293,6 +293,7 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	}
 	var spec struct {
 		Paths map[string]struct {
+			Get  operation `yaml:"get"`
 			Post operation `yaml:"post"`
 			Put  operation `yaml:"put"`
 		} `yaml:"paths"`
@@ -316,6 +317,48 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	}
 	if err := yaml.Unmarshal(body, &spec); err != nil {
 		t.Fatal(err)
+	}
+
+	community := spec.Paths["/community-servers"].Get
+	communityParameters := map[string]bool{}
+	for _, parameter := range community.Parameters {
+		communityParameters[parameter.Name] = true
+	}
+	for _, name := range []string{"region", "search", "min_players", "max_players", "password", "version", "status", "page", "page_size"} {
+		if !communityParameters[name] {
+			t.Errorf("GET /community-servers is missing query parameter %s", name)
+		}
+	}
+	for _, response := range []string{"200", "400", "401", "429", "502", "503"} {
+		if _, ok := community.Responses[response]; !ok {
+			t.Errorf("GET /community-servers is missing response %s", response)
+		}
+	}
+	for _, schema := range []string{"CommunityServer", "CommunityServerResult", "CommunityServerSourceStatus", "CommunityServerResultEnvelope", "CommunityServerSourceStatusEnvelope"} {
+		if _, ok := spec.Components.Schemas[schema]; !ok {
+			t.Errorf("OpenAPI is missing schema %s", schema)
+		}
+	}
+	for _, schema := range []string{"SafeLifecycleRequest", "BreedingStatus", "AstrBotControlRequest", "AstrBotCommunityServerRequest", "AstrBotServerStatus", "ModConfigFile", "ModConfigDocument", "ModConfigWriteRequest", "ModConfigRestoreRequest", "ModConfigBackup", "ModConfigurationAdapter"} {
+		if _, ok := spec.Components.Schemas[schema]; !ok {
+			t.Errorf("OpenAPI is missing schema %s", schema)
+		}
+	}
+	for _, operation := range []operation{
+		spec.Paths["/mods/configurations/{adapter}"].Get,
+		spec.Paths["/mods/configurations/{adapter}"].Put,
+		spec.Paths["/mods/configurations/{adapter}/backups"].Get,
+		spec.Paths["/mods/configurations/{adapter}/backups/{backup}/restore"].Post,
+	} {
+		var hasFile bool
+		for _, parameter := range operation.Parameters {
+			if parameter.Name == "file" && parameter.In == "query" {
+				hasFile = true
+			}
+		}
+		if !hasFile {
+			t.Error("Mod adapter operation is missing the opaque file query parameter")
+		}
 	}
 
 	assertRequestSchema := func(path, mediaType, want string) {
@@ -356,6 +399,18 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 		}
 	}
 	assertRequestSchema("/ai/translation/test", "application/json", "AITranslationConfigUpdate")
+	assertRequestSchema("/server/safe-stop", "application/json", "SafeLifecycleRequest")
+	assertRequestSchema("/server/safe-restart", "application/json", "SafeLifecycleRequest")
+	assertRequestSchema("/integrations/astrbot/server-control", "application/json", "AstrBotControlRequest")
+	assertRequestSchema("/integrations/astrbot/community-servers", "application/json", "AstrBotCommunityServerRequest")
+	assertRequestSchema("/mods/configurations/{adapter}/backups/{backup}/restore", "application/json", "ModConfigRestoreRequest")
+	assertRequestSchema("/mods/{id}/files/{file}/backups/{backup}/restore", "application/json", "ModConfigRestoreRequest")
+	if got := spec.Paths["/mods/configurations/{adapter}"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/ModConfigWriteRequest" {
+		t.Errorf("PUT /mods/configurations/{adapter} request schema = %q", got)
+	}
+	if got := spec.Paths["/mods/{id}/files/{file}"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/ModConfigWriteRequest" {
+		t.Errorf("PUT /mods/{id}/files/{file} request schema = %q", got)
+	}
 	if got := spec.Paths["/ai/translation/config"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/AITranslationConfigUpdate" {
 		t.Errorf("PUT /ai/translation/config request schema = %q", got)
 	}

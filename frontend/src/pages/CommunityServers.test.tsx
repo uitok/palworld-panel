@@ -26,8 +26,8 @@ describe('CommunityServers', () => {
     mocks.list.mockResolvedValue(result);
     mocks.refresh.mockResolvedValue({ ...result, stale: false, cache_age_seconds: 0 });
     mocks.sourceStatus.mockResolvedValue({
-      source: 'battlemetrics', base_url: 'https://api.battlemetrics.com', proxy_configured: true,
-      reachable: false, cache_available: true, cache_fresh: false, cached_queries: 1, rate_limit_per_minute: 30,
+      source: 'battlemetrics', enabled: true, base_url: 'https://api.battlemetrics.com', proxy_configured: true,
+      reachable: false, cache_available: true, cache_fresh: false, cache_writable: true, cached_queries: 1, rate_limit_per_minute: 30,
     });
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
@@ -58,6 +58,30 @@ describe('CommunityServers', () => {
     await screen.findByText('中文生存服');
     fireEvent.click(screen.getByRole('button', { name: '刷新数据源' }));
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledWith(expect.objectContaining({ region: 'cn', status: 'online' })));
+  });
+
+  it('does not keep old China results when a new global query fails', async () => {
+	render(<CommunityServers />);
+	await screen.findByText('中文生存服');
+	mocks.list.mockRejectedValueOnce(new Error('global unavailable'));
+	fireEvent.change(screen.getByLabelText('范围'), { target: { value: 'global' } });
+	fireEvent.click(screen.getByRole('button', { name: '查询' }));
+	expect(await screen.findByText('global unavailable')).toBeInTheDocument();
+	expect(screen.queryByText('中文生存服')).not.toBeInTheDocument();
+  });
+
+  it('ignores a slower response from an older filter request', async () => {
+	let resolveChina: (value: typeof result) => void = () => undefined;
+	mocks.list
+	  .mockImplementationOnce(() => new Promise<typeof result>((resolve) => { resolveChina = resolve; }))
+	  .mockResolvedValueOnce({ ...result, servers: [{ ...result.servers[0], id: 'global-1', name: 'Global Server', country: 'US' }] });
+	render(<CommunityServers />);
+	await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(1));
+	fireEvent.change(screen.getByLabelText('范围'), { target: { value: 'global' } });
+	fireEvent.click(screen.getByRole('button', { name: '查询' }));
+	expect(await screen.findByText('Global Server')).toBeInTheDocument();
+	resolveChina(result);
+	await waitFor(() => expect(screen.queryByText('中文生存服')).not.toBeInTheDocument());
   });
 });
 

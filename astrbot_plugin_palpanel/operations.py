@@ -18,6 +18,20 @@ def parse_wait_seconds(value: str | int | None, default: int = 60) -> int:
     return wait
 
 
+def group_allowed(configured_group_id: str | int | None, event_group_id: str | int | None) -> bool:
+    event_group = str(event_group_id or "").strip()
+    configured = str(configured_group_id or "").strip()
+    return bool(event_group) and (not configured or event_group == configured)
+
+
+def admin_allowed(admin_qq_ids: str | list[str] | tuple[str, ...] | set[str] | None, sender_id: str | int | None) -> bool:
+    if isinstance(admin_qq_ids, str):
+        admins = {item.strip() for item in admin_qq_ids.split(",") if item.strip()}
+    else:
+        admins = {str(item).strip() for item in (admin_qq_ids or []) if str(item).strip()}
+    return str(sender_id or "").strip() in admins
+
+
 @dataclass
 class CooldownGuard:
     query_seconds: float = 5
@@ -53,7 +67,7 @@ def format_server_status(payload: dict[str, Any]) -> str:
     info = data.get("info", {}) if isinstance(data, dict) else {}
     if not isinstance(info, dict):
         info = {}
-    name = info.get("servername") or info.get("serverName") or "Palworld 服务器"
+    name = info.get("server_name") or info.get("servername") or info.get("serverName") or "Palworld 服务器"
     online = int(data.get("online_count", 0) or 0) if isinstance(data, dict) else 0
     version = info.get("version") or "未知"
     return f"{name}\n状态：{'运行中' if running else '已停止'}（{state}）\n在线：{online} 人\n版本：{version}"
@@ -63,8 +77,8 @@ def format_online_players(payload: dict[str, Any], max_chars: int = 1800) -> str
     data = unwrap(payload)
     players = data.get("online_players", []) if isinstance(data, dict) else []
     if not players:
-        error = data.get("players_error") if isinstance(data, dict) else None
-        return "当前没有在线玩家。" if not error else "暂时无法查询在线玩家，请稍后重试。"
+        available = data.get("players_available", True) if isinstance(data, dict) else True
+        return "当前没有在线玩家。" if available else "暂时无法查询在线玩家，请稍后重试。"
     lines = [f"当前在线 {len(players)} 人："]
     for index, player in enumerate(players, 1):
         name = str(player.get("name") or player.get("player_id") or "未知玩家")

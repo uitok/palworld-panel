@@ -54,15 +54,18 @@ type Result struct {
 
 type SourceStatus struct {
 	Source          string     `json:"source"`
+	Enabled         bool       `json:"enabled"`
 	BaseURL         string     `json:"base_url"`
 	ProxyConfigured bool       `json:"proxy_configured"`
 	Reachable       bool       `json:"reachable"`
 	CacheAvailable  bool       `json:"cache_available"`
 	CacheFresh      bool       `json:"cache_fresh"`
+	CacheWritable   bool       `json:"cache_writable"`
 	CachedQueries   int        `json:"cached_queries"`
 	LastAttemptAt   *time.Time `json:"last_attempt_at,omitempty"`
 	LastSuccessAt   *time.Time `json:"last_success_at,omitempty"`
 	LastError       string     `json:"last_error,omitempty"`
+	CacheError      string     `json:"cache_error,omitempty"`
 	NextRefreshAt   *time.Time `json:"next_refresh_at,omitempty"`
 	RateLimit       int        `json:"rate_limit_per_minute"`
 }
