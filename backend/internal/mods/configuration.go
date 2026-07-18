@@ -119,6 +119,7 @@ func adapterRegistry() []adapterDefinition {
 		{ID: "ue4ss", Name: "UE4SS Experimental", Description: "UE4SS 运行参数和模块启停列表", WorkshopID: "3625223587", ReloadBehavior: "restart_required", resolve: resolveUE4SSAdapter},
 		{ID: "palschema", Name: "PalSchema", Description: "PalSchema 运行设置与模块 JSON 配置", WorkshopID: "3625280368", ReloadBehavior: "restart_required", resolve: resolvePalSchemaAdapter},
 		{ID: "extended-base-range", Name: "Extended Base Range", Description: "基地范围 Lua 数值参数", WorkshopID: "3625907101", ReloadBehavior: "restart_required", resolve: resolveExtendedBaseRangeAdapter},
+		{ID: "quality-of-life", Name: "QualityOfLife", Description: "多人服务器专用 JSON 文件（字段随 Mod 版本）", WorkshopID: "3761921027", ReloadBehavior: "restart_required", resolve: resolveQualityOfLifeAdapter},
 	}
 }
 
@@ -880,6 +881,24 @@ func resolveExtendedBaseRangeAdapter(m Manager, ctx context.Context) ([]configTa
 		return nil
 	})
 	return targets, nil
+}
+
+func resolveQualityOfLifeAdapter(m Manager, ctx context.Context) ([]configTarget, error) {
+	root, err := m.findKnownModRoot(ctx, "3761921027", "qualityoflife")
+	if err != nil {
+		return nil, err
+	}
+	targets, err := m.scanConfigTargets(configTarget{scope: "adapter:quality-of-life", root: root, path: root})
+	if err != nil {
+		return nil, err
+	}
+	matched := targets[:0]
+	for _, target := range targets {
+		if strings.EqualFold(filepath.Base(target.path), "QualityOfLifeConfig.json") {
+			matched = append(matched, target)
+		}
+	}
+	return matched, nil
 }
 
 func (m Manager) findKnownModRoot(ctx context.Context, workshopID, name string) (string, error) {

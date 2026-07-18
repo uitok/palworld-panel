@@ -11,8 +11,11 @@ import { appConfig } from './config/defaults';
 import { authApi } from './api/auth';
 import { getErrorMessage } from './api/client';
 import { BreedPortal, breedSessionStorageKey } from './pages/BreedPortal';
+import { useI18n } from './i18n';
+import { LanguageSwitcher } from './components/ui/LanguageSwitcher';
 
 export const AppContent: React.FC = () => {
+  const { t } = useI18n();
   const location = useLocation();
   const { authState, completeAuthentication, refreshAuthentication } = useServerStore();
   const breedTicket = new URLSearchParams(location.search).has('ticket');
@@ -28,8 +31,8 @@ export const AppContent: React.FC = () => {
         <div className="pp-login-card pp-row">
           <span className="pp-login__logo mb-0"><LoaderCircle className="animate-spin" size={20} /></span>
           <span>
-            <strong className="block text-sm text-slate-900">正在连接 {appConfig.brand}</strong>
-            <span className="mt-1 block text-xs text-slate-500">正在检查服务与登录状态...</span>
+            <strong className="block text-sm text-slate-900">{t('auth.connectingTitle', { brand: appConfig.brand })}</strong>
+            <span className="mt-1 block text-xs text-slate-500">{t('auth.connectingDescription')}</span>
           </span>
         </div>
       </div>
@@ -52,7 +55,7 @@ export const AppContent: React.FC = () => {
             fallback={
               <div className="flex h-full items-center justify-center p-12 text-sm font-semibold text-slate-500">
                 <LoaderCircle className="mr-2 animate-spin text-sky-500" size={17} />
-                正在加载页面...
+                {t('auth.loadingPage')}
               </div>
             }
           >
@@ -74,6 +77,7 @@ const AccountGate: React.FC<{
   mode: 'register' | 'login';
   onAuthenticated: (session: Awaited<ReturnType<typeof authApi.login>>) => void;
 }> = ({ mode, onAuthenticated }) => {
+  const { t } = useI18n();
   const [username, setUsername] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [confirmation, setConfirmation] = React.useState('');
@@ -83,7 +87,7 @@ const AccountGate: React.FC<{
 
   const submit = async () => {
     if (registering && password !== confirmation) {
-      setError('两次输入的密码不一致');
+      setError(t('auth.passwordMismatch'));
       return;
     }
     setBusy(true);
@@ -109,22 +113,23 @@ const AccountGate: React.FC<{
           if (username.trim() && password) void submit();
         }}
       >
+        <LanguageSwitcher compact className="mb-4 w-full justify-end" />
         <span className="pp-login__logo"><img src="/brand/palpanel-mark.svg" alt="" width="44" height="44" /></span>
-        <div className="pp-topbar__eyebrow">{registering ? 'FIRST RUN' : 'WELCOME BACK'}</div>
-        <h1 className="pp-login__title">{registering ? '创建管理员账号' : '管理员登录'}</h1>
-        <p className="pp-login__sub">{registering ? '为当前面板创建首个本地管理员。' : '登录后继续管理服务器。'}</p>
+        <div className="pp-topbar__eyebrow">{registering ? t('auth.firstRun') : t('auth.welcomeBack')}</div>
+        <h1 className="pp-login__title">{registering ? t('auth.registerTitle') : t('auth.loginTitle')}</h1>
+        <p className="pp-login__sub">{registering ? t('auth.registerDescription') : t('auth.loginDescription')}</p>
 
         {error && <div role="alert" className="pp-note pp-note--danger mb-4">{error}</div>}
 
         <div className="pp-login__form">
           <label className="pp-field">
-            <span className="pp-field__label">用户名</span>
+            <span className="pp-field__label">{t('auth.username')}</span>
             <span className="relative">
               <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
               <input
                 className="pp-input w-full pl-9"
                 type="text"
-                aria-label="用户名"
+                aria-label={t('auth.username')}
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
                 autoComplete="username"
@@ -137,13 +142,13 @@ const AccountGate: React.FC<{
           </label>
 
           <label className="pp-field">
-            <span className="pp-field__label">密码</span>
+            <span className="pp-field__label">{t('auth.password')}</span>
             <span className="relative">
               <LockKeyhole className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
               <input
                 className="pp-input w-full pl-9"
                 type="password"
-                aria-label="密码"
+                aria-label={t('auth.password')}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 autoComplete={registering ? 'new-password' : 'current-password'}
@@ -152,16 +157,16 @@ const AccountGate: React.FC<{
                 required
               />
             </span>
-            {registering && <span className="pp-field__help">至少 12 位，建议使用独立密码。</span>}
+            {registering && <span className="pp-field__help">{t('auth.passwordHelp')}</span>}
           </label>
 
           {registering && (
             <label className="pp-field">
-              <span className="pp-field__label">确认密码</span>
+              <span className="pp-field__label">{t('auth.confirmPassword')}</span>
               <input
                 className="pp-input"
                 type="password"
-                aria-label="确认密码"
+                aria-label={t('auth.confirmPassword')}
                 value={confirmation}
                 onChange={(event) => setConfirmation(event.target.value)}
                 autoComplete="new-password"
@@ -174,12 +179,12 @@ const AccountGate: React.FC<{
 
           <button type="submit" disabled={busy} className="pp-btn pp-btn--primary pp-btn--wide mt-2">
             {busy && <LoaderCircle className="animate-spin" size={15} />}
-            {registering ? '完成注册' : '登录'}
+            {registering ? t('auth.register') : t('auth.login')}
           </button>
         </div>
 
         <div className="pp-login__foot">
-          <span className="pp-row"><ShieldCheck size={13} />本地安全会话</span>
+          <span className="pp-row"><ShieldCheck size={13} />{t('auth.localSession')}</span>
           <span>{appConfig.brand}</span>
         </div>
       </form>
@@ -187,19 +192,21 @@ const AccountGate: React.FC<{
   );
 };
 
-const UnavailableGate: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
-  <div className="pp-login">
+const UnavailableGate: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
+  const { t } = useI18n();
+  return <div className="pp-login">
     <section className="pp-login-card text-center">
+      <LanguageSwitcher compact className="mb-4 w-full justify-end text-left" />
       <span className="pp-login__logo mx-auto"><img src="/brand/palpanel-mark.svg" alt="" width="44" height="44" /></span>
       <div className="pp-topbar__eyebrow">{appConfig.brand}</div>
-      <h1 className="pp-login__title mt-1">无法连接面板服务</h1>
-      <p className="pp-login__sub">请确认后端服务正在运行，然后重新尝试连接。</p>
+      <h1 className="pp-login__title mt-1">{t('auth.unavailableTitle')}</h1>
+      <p className="pp-login__sub">{t('auth.unavailableDescription')}</p>
       <button type="button" onClick={onRetry} className="pp-btn pp-btn--primary mx-auto">
-        <RefreshCw size={15} />重新连接
+        <RefreshCw size={15} />{t('auth.retry')}
       </button>
     </section>
-  </div>
-);
+  </div>;
+};
 
 function App() {
   return (

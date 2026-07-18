@@ -10,7 +10,8 @@
 
 - 已进入首批专用适配器：UE4SS Experimental、PalSchema、Extended Base Range。
 - PalDefender 不在 Steam Workshop 榜单中，但其配置契约稳定且已有服务端集成，因此同样提供专用面板。
-- `QualityOfLife` 和 `PalSync` 保留为下一轮重点候选：前者公开了 JSON 配置，但 2026-07 仍在进行结构迁移；后者需要继续验证当前服务端配置契约和升级兼容性。
+- `QualityOfLife` 已新增专用配置文件适配器：作者明确了专服安装方式、`QualityOfLifeConfig.json` 文件名与完整重启语义。由于字段仍随 Mod 版本变化，面板只锁定目标 JSON 文件并复用安全结构化编辑，不声明固定字段边界。
+- `PalSync` 继续保留为候选：作者尚未公开稳定的配置文件与字段契约，因此仍使用受限原始文件编辑器。
 - 其余条目本轮不建立专用适配器。发现到允许的文本配置时仍可使用受限原始编辑器。
 
 ## 热门前 30 快照
@@ -26,7 +27,7 @@
 | 7 | [Map Unlocker](https://steamcommunity.com/sharedfiles/filedetails/?id=3625982992) | `3625982992` | 客户端功能，无稳定配置契约 |
 | 8 | [MapCollectablesMod (Chinese Version)](https://steamcommunity.com/sharedfiles/filedetails/?id=3626444067) | `3626444067` | 客户端地图 UI |
 | 9 | [Pals Drop Dog Coins](https://steamcommunity.com/sharedfiles/filedetails/?id=3626214974) | `3626214974` | 未验证可配置字段 |
-| 10 | [QualityOfLife](https://steamcommunity.com/sharedfiles/filedetails/?id=3761921027) | `3761921027` | 下一轮候选；等待 JSON 结构稳定 |
+| 10 | [QualityOfLife](https://steamcommunity.com/sharedfiles/filedetails/?id=3761921027) | `3761921027` | 专用 JSON 文件适配器；字段随 Mod 版本变化 |
 | 11 | [Smaller Plantations](https://steamcommunity.com/sharedfiles/filedetails/?id=3645372157) | `3645372157` | 作者未承诺服务端支持 |
 | 12 | [Remote Fast Travel](https://steamcommunity.com/sharedfiles/filedetails/?id=3762839811) | `3762839811` | 客户端功能 |
 | 13 | [Hermans Slot RNG buff](https://steamcommunity.com/sharedfiles/filedetails/?id=3625834903) | `3625834903` | 数据资产修改，无稳定配置契约 |

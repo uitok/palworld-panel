@@ -7,6 +7,8 @@ import { serverApi } from '../api/server';
 import { settingsApi } from '../api/settings';
 import { useServerStore } from '../store/useServerStore';
 import type { AITranslationConfig, AITranslationConfigUpdate, DevelopmentKey, FieldSchema, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
+import { useI18n } from '../i18n';
+import { LanguageSwitcher } from '../components/ui/LanguageSwitcher';
 
 const groupLabels: Record<string, string> = {
   server_management: '服务器管理',
@@ -31,6 +33,7 @@ const coerceInitialValue = (field: FieldSchema, value: unknown) => {
 };
 
 export const Settings: React.FC = () => {
+  const { t } = useI18n();
   const { triggerRefresh, session } = useServerStore();
   const [fields, setFields] = useState<FieldSchema[]>([]);
   const [draft, setDraft] = useState<PalworldSettings>({});
@@ -290,6 +293,14 @@ export const Settings: React.FC = () => {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <section className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-sm font-bold text-slate-800">{t('settings.languageTitle')}</h2>
+          <p className="mt-1 text-xs font-medium text-slate-400">{t('settings.languageDescription')}</p>
+        </div>
+        <LanguageSwitcher buttons />
+      </section>
+
       {message && (
         <div className="flex items-center gap-2.5 rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3.5 text-xs font-semibold text-sky-700">
           <Info size={16} />
