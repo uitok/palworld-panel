@@ -111,8 +111,12 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
 test('logs in with a server session cookie and sends no legacy bearer auth', async ({ page }) => {
   const backend = await installFakeBackend(page, 'admin', false);
   await page.goto('/dashboard');
-  await page.getByLabel('用户名').fill('admin');
-  await page.getByLabel('密码').fill('strong-password-123');
+  const username = page.getByLabel('用户名');
+  const password = page.getByLabel('密码');
+  await expect(username).toHaveCSS('padding-left', '36px');
+  await expect(password).toHaveCSS('padding-left', '36px');
+  await username.fill('admin');
+  await password.fill('strong-password-123');
   await page.getByRole('button', { name: '登录' }).click();
   await expect(page.getByRole('heading', { name: '服务器总览' })).toBeVisible();
   expect(backend.loginBody()).toEqual({ username: 'admin', password: 'strong-password-123' });

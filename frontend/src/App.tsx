@@ -127,7 +127,7 @@ const AccountGate: React.FC<{
             <span className="relative">
               <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
               <input
-                className="pp-input w-full pl-9"
+                className="pp-input pp-input--icon"
                 type="text"
                 aria-label={t('auth.username')}
                 value={username}
@@ -146,7 +146,7 @@ const AccountGate: React.FC<{
             <span className="relative">
               <LockKeyhole className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
               <input
-                className="pp-input w-full pl-9"
+                className="pp-input pp-input--icon"
                 type="password"
                 aria-label={t('auth.password')}
                 value={password}

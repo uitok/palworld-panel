@@ -201,6 +201,7 @@
   border-color: var(--pp-brand);
   box-shadow: 0 0 0 3px var(--pp-brand-ring);
 }
+.pp-input.pp-input--icon { padding-left: 36px; }
 .pp-input--mono { font-family: var(--pp-font-mono); font-size: 13px; }
 
 .pp-formgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px; }
