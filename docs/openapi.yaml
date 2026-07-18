@@ -253,6 +253,8 @@ paths:
     post: {operationId: restartServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/safe-restart:
     post: {operationId: safeRestartServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+  /server/safe-stop:
+    post: {operationId: safeStopServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
   /server/force-stop:
     post: {operationId: forceStopServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/startup:
@@ -734,6 +736,10 @@ paths:
     post: {operationId: createAstrBotBindingChallenge, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
   /integrations/astrbot/quick-solves:
     post: {operationId: runAstrBotQuickSolve, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
+  /integrations/astrbot/server-status:
+    post: {operationId: getAstrBotServerStatus, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
+  /integrations/astrbot/server-control:
+    post: {operationId: controlAstrBotServer, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
   /players:
     get: {operationId: listSavePlayers, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /players/{id}:

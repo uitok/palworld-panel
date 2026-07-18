@@ -41,6 +41,8 @@ func (s Server) registerRoutes(router *gin.Engine) {
 	integration.Use(s.astrBotSignatureAuth())
 	integration.POST("/binding-challenges", s.astrBotBindingChallenge)
 	integration.POST("/quick-solves", s.astrBotQuickSolve)
+	integration.POST("/server-status", s.astrBotServerStatus)
+	integration.POST("/server-control", s.astrBotServerControl)
 
 	api := router.Group("/api")
 	api.Use(Auth(s.cfg, s.auth), AuditMiddleware(s.store))
@@ -96,6 +98,7 @@ func (s Server) registerServerRoutes(api *gin.RouterGroup) {
 	api.POST("/server/stop", Require(PermServerControl), s.serverStop)
 	api.POST("/server/restart", Require(PermServerControl), s.serverRestart)
 	api.POST("/server/safe-restart", Require(PermServerControl), s.serverSafeRestart)
+	api.POST("/server/safe-stop", Require(PermServerControl), s.serverSafeStop)
 	api.POST("/server/force-stop", Require(PermServerControl), s.serverForceStop)
 	api.GET("/server/startup", s.getStartup)
 	api.PUT("/server/startup", Require(PermConfigWrite), s.putStartup)

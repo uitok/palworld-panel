@@ -49,6 +49,8 @@ const jobTypeLabel = (type: string) => {
       return '关闭服务器';
     case 'safe_restart':
       return '安全重启';
+    case 'safe_stop':
+      return '安全关服';
     case 'restore':
       return '备份恢复';
     default:

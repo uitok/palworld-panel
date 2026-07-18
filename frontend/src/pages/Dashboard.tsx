@@ -131,13 +131,13 @@ export const Dashboard: React.FC = () => {
         ? '启动服务器？'
         : action === 'forceStop'
           ? '通过官方 REST 强制停止服务器？REST 不可达时会返回失败。'
-          : '停止服务器？请确认在线玩家已经收到通知。';
+          : '安全停止服务器？面板会先保存世界、广播 60 秒倒计时，再停止服务。';
     if (!window.confirm(text)) return;
     try {
       if (action === 'start') await serverApi.start();
-      if (action === 'stop') await serverApi.stop();
+      if (action === 'stop') await serverApi.safeStop(60, '服务器将在 60 秒后安全关闭');
       if (action === 'forceStop') await serverApi.forceStop();
-      setNotice(action === 'start' ? '启动请求已发送' : action === 'forceStop' ? '强制停止请求已发送' : '停止请求已发送');
+      setNotice(action === 'start' ? '启动请求已发送' : action === 'forceStop' ? '强制停止请求已发送' : '安全关服任务已提交，可在任务队列查看进度');
       triggerRefresh();
     } catch (error) {
       setNotice(getErrorMessage(error));
