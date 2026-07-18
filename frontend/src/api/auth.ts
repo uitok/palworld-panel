@@ -57,6 +57,15 @@ export const authApi = {
       { logged_out: true },
       { quiet: true, fallbackOnError: false },
     ),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    handleRequest(
+      () => apiClient.put('/auth/password', {
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+      { password_changed: false, sessions_revoked: false, api_keys_revoked: false },
+      { quiet: true, fallbackOnError: false },
+    ),
   me: () =>
     handleRequest<unknown, SessionInfo>(
       () => apiClient.get('/auth/me'),

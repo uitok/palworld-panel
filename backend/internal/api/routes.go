@@ -58,6 +58,7 @@ func (s Server) registerRoutes(router *gin.Engine) {
 func (s Server) registerSystemRoutes(api *gin.RouterGroup) {
 	api.GET("/auth/me", s.authMe)
 	api.POST("/auth/logout", s.logout)
+	api.PUT("/auth/password", s.changePassword)
 	api.GET("/auth/api-keys", s.listAPIKeys)
 	api.POST("/auth/api-keys", Require(PermSecurityWrite), s.createAPIKey)
 	api.DELETE("/auth/api-keys/:id", Require(PermSecurityWrite), s.revokeAPIKey)

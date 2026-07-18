@@ -148,8 +148,8 @@ func TestUpdateFailsWhenInstalledBuildDoesNotMatchPublicBranch(t *testing.T) {
 func TestWithGameVersionReportsCompatibility(t *testing.T) {
 	m, cleanup := newVersionTestManager(t, "100")
 	defer cleanup()
-	info := m.WithGameVersion(context.Background(), VersionInfo{CompatibilityTarget: CompatibilityTarget}, "v1.0.0.81201")
-	if info.GameVersion != "v1.0.0.81201" || info.Compatible == nil || !*info.Compatible {
+	info := m.WithGameVersion(context.Background(), VersionInfo{CompatibilityTarget: CompatibilityTarget}, "v1.0.1.81201")
+	if info.GameVersion != "v1.0.1.81201" || info.Compatible == nil || !*info.Compatible {
 		t.Fatalf("expected compatible semantic version, got %#v", info)
 	}
 	info = m.WithGameVersion(context.Background(), info, "v1.1.0")

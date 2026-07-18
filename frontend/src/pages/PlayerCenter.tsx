@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle, BookOpen, Boxes, CheckCircle2, Database, Gamepad2, LoaderCircle, MessageSquareText,
@@ -9,6 +9,7 @@ import { getErrorMessage } from '../api/client';
 import { palDefenderGMApi } from '../api/paldefenderGM';
 import { palsApi } from '../api/pals';
 import { playersApi } from '../api/players';
+import { saveIndexApi } from '../api/saveIndex';
 import { useServerStore } from '../store/useServerStore';
 import type { Pal, PalDefenderGMPlayer, PalDefenderMessageRequest, PalDefenderTeleportRequest, Player } from '../types';
 import { StatusBadge } from '../components/ui/StatusBadge';
@@ -22,30 +23,13 @@ import { PlayerOverview, type PlayerOverviewModel } from '../components/gm/Playe
 import { ProgressionWorkspace } from '../components/gm/ProgressionWorkspace';
 import { SaveInventoryPanel } from '../components/gm/SaveInventoryPanel';
 import { TeleportDialog } from '../components/gm/TeleportDialog';
+import { mergePlayers } from './playerCenterMerge';
 
 type WorkspaceTab = 'profile' | 'items' | 'progression' | 'pals' | 'message' | 'access';
 type PlayerFilter = 'all' | 'online' | 'offline';
 
-interface UnifiedPlayer {
-  key: string;
-  name: string;
-  identifier: string;
-  playerUID: string;
-  platform: string;
-  online: boolean;
-  guildName: string;
-  level: number;
-  x: number;
-  y: number;
-  z: number;
-  lastOnline: string;
-  save?: Player;
-  gm?: PalDefenderGMPlayer;
-}
-
 const emptyGMPlayers: PalDefenderGMPlayer[] = [];
 const emptySavePlayers: Player[] = [];
-const identifierForGM = (player: PalDefenderGMPlayer) => player.UserId || player.PlayerUID;
 const gmOnline = (player?: PalDefenderGMPlayer) => player?.Status.toLowerCase() === 'online';
 
 export const PlayerCenter: React.FC = () => {
@@ -53,6 +37,7 @@ export const PlayerCenter: React.FC = () => {
   const { session } = useServerStore();
   const canWrite = Boolean(session?.permissions.includes('players:write'));
   const canSecurityWrite = Boolean(session?.permissions.includes('security:write'));
+  const canRebuildSaveIndex = Boolean(session?.permissions.includes('server:control'));
   const [search, setSearch] = useState('');
   const [playerFilter, setPlayerFilter] = useState<PlayerFilter>('all');
   const [selectedKey, setSelectedKey] = useState('');
@@ -152,6 +137,15 @@ export const PlayerCenter: React.FC = () => {
     queryKey: ['paldefender-gm', 'techs', gmIdentifier],
     queryFn: () => palDefenderGMApi.techs(gmIdentifier),
     enabled: Boolean(liveReady && activeTab === 'progression'),
+  });
+  const rebuildSaveIndex = useMutation({
+    mutationFn: saveIndexApi.rebuild,
+    onSuccess: async () => {
+      setNotice('存档索引已构建');
+      setActionError('');
+      await queryClient.invalidateQueries({ queryKey: ['player-center'] });
+    },
+    onError: (error) => setActionError(getErrorMessage(error)),
   });
   const localTechnologyCatalogQuery = useQuery({
     queryKey: ['paldefender-gm', 'catalog', 'technologies'],
@@ -292,7 +286,7 @@ export const PlayerCenter: React.FC = () => {
           <p className="mt-2 max-w-3xl text-xs font-semibold leading-5 text-slate-500">存档索引负责离线档案、帕鲁和背包快照；PalDefender 负责在线读取、发放与管理。先在左侧选玩家，再在右侧执行所有操作。</p>
           <div className="mt-3 flex flex-wrap items-center gap-2"><StatusBadge status={status?.available ? 'Online' : 'Offline'} customText={status?.available ? 'PalDefender REST 已连接' : readinessText} />{savePlayersQuery.data?.status && <span className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${savePlayersQuery.data.status.state === 'ready' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>存档索引：{savePlayersQuery.data.status.state}</span>}<span className="text-[10px] font-bold text-slate-400">{unifiedPlayers.filter((player) => player.online).length} / {unifiedPlayers.length} 在线</span></div>
         </div>
-        <div className="flex flex-wrap gap-2"><button type="button" onClick={() => { void statusQuery.refetch(); void savePlayersQuery.refetch(); if (status?.available) void gmPlayersQuery.refetch(); }} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50"><RefreshCw size={14} className={statusQuery.isFetching || savePlayersQuery.isFetching || gmPlayersQuery.isFetching ? 'animate-spin' : ''} />刷新玩家数据</button><Link to="/security" className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white"><ShieldAlert size={14} />安全设置</Link></div>
+        <div className="flex flex-wrap gap-2">{savePlayersQuery.data?.status?.state === 'not_indexed' && canRebuildSaveIndex && <button type="button" onClick={() => rebuildSaveIndex.mutate()} disabled={rebuildSaveIndex.isPending} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-40"><Database size={14} className={rebuildSaveIndex.isPending ? 'animate-pulse' : ''} />{rebuildSaveIndex.isPending ? '正在构建索引...' : '构建存档索引'}</button>}<button type="button" onClick={() => { void statusQuery.refetch(); void savePlayersQuery.refetch(); if (status?.available) void gmPlayersQuery.refetch(); }} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50"><RefreshCw size={14} className={statusQuery.isFetching || savePlayersQuery.isFetching || gmPlayersQuery.isFetching ? 'animate-spin' : ''} />刷新玩家数据</button><Link to="/security" className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white"><ShieldAlert size={14} />安全设置</Link></div>
       </header>
 
       {notice && <div role="status" className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-800"><CheckCircle2 size={15} />{notice}</div>}
@@ -332,45 +326,6 @@ export const PlayerCenter: React.FC = () => {
       <TeleportDialog open={teleportOpen} playerName={selectedName} options={teleportOptions} pending={pending === 'teleport'} onClose={() => setTeleportOpen(false)} onSubmit={teleportPlayer} />
     </div>
   );
-};
-
-const mergePlayers = (savePlayers: Player[], gmPlayers: PalDefenderGMPlayer[]): UnifiedPlayer[] => {
-  const result: UnifiedPlayer[] = savePlayers.map((save) => ({
-    key: save.player_uid || save.steam_id,
-    name: save.nickname,
-    identifier: save.steam_id || save.player_uid || '',
-    playerUID: save.player_uid || '',
-    platform: (save.steam_id || '').split('_')[0] || '',
-    online: save.is_online,
-    guildName: save.guild_name,
-    level: save.level,
-    x: save.x,
-    y: save.y,
-    z: save.z,
-    lastOnline: save.last_online_time,
-    save,
-  }));
-  for (const gm of gmPlayers) {
-    const aliases = [gm.UserId, gm.PlayerUID].filter(Boolean).map((value) => value.toLowerCase());
-    const existing = result.find((player) => [player.identifier, player.playerUID, player.save?.steam_id || '', player.save?.player_uid || ''].some((value) => aliases.includes(value.toLowerCase())));
-    if (existing) {
-      existing.gm = gm;
-      existing.identifier = identifierForGM(gm) || existing.identifier;
-      existing.playerUID = gm.PlayerUID || existing.playerUID;
-      existing.name = gm.Name || existing.name;
-      existing.online = gmOnline(gm);
-      existing.guildName = gm.GuildName || existing.guildName;
-      existing.platform = (gm.UserId || existing.identifier).split('_')[0] || existing.platform;
-      if (existing.online) {
-        existing.x = gm.MapLocation.x;
-        existing.y = gm.MapLocation.y;
-        existing.z = gm.MapLocation.z;
-      }
-      continue;
-    }
-    result.push({ key: identifierForGM(gm), name: gm.Name, identifier: identifierForGM(gm), playerUID: gm.PlayerUID, platform: gm.UserId.split('_')[0] || '', online: gmOnline(gm), guildName: gm.GuildName, level: 0, x: gm.MapLocation.x, y: gm.MapLocation.y, z: gm.MapLocation.z, lastOnline: '', gm });
-  }
-  return result.sort((left, right) => Number(right.online) - Number(left.online) || left.name.localeCompare(right.name, 'zh-CN'));
 };
 
 const palDefenderReadiness = (status: Awaited<ReturnType<typeof palDefenderGMApi.status>> | undefined) => {

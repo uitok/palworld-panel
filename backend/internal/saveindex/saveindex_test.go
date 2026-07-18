@@ -61,7 +61,42 @@ func TestRebuildWritesCacheAndCurrentReadsIt(t *testing.T) {
 	}
 }
 
-func TestCurrentDoesNotRebuildWhenCacheMissing(t *testing.T) {
+func TestRebuildRetriesWhenSaveChangesDuringIndexing(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	calls := 0
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			writeWorld(t, root, "level-two")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"version": 1, "generated_at": "2026-07-18T00:00:00Z", "parser": "test", "warnings": []string{},
+				"players": []map[string]any{}, "guilds": []map[string]any{}, "bases": []map[string]any{},
+				"pals": []map[string]any{}, "containers": []map[string]any{}, "map_entities": []map[string]any{},
+			},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+
+	m := NewManager(cfg)
+	_, status, err := m.Rebuild(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || status.State != "ready" || status.Stale {
+		t.Fatalf("rebuild did not settle after retry: calls=%d status=%#v", calls, status)
+	}
+	_, currentStatus, err := m.Current(t.Context())
+	if err != nil || currentStatus.State != "ready" {
+		t.Fatalf("settled cache is not current: %#v, %v", currentStatus, err)
+	}
+}
+
+func TestCurrentBeforeFirstIndexIsNotAnError(t *testing.T) {
 	root, cfg := testConfig(t)
 	writeWorld(t, root, "level-one")
 	sidecarCalled := false
@@ -74,11 +109,15 @@ func TestCurrentDoesNotRebuildWhenCacheMissing(t *testing.T) {
 
 	m := NewManager(cfg)
 	index, status, err := m.Current(t.Context())
-	if err == nil {
-		t.Fatal("expected Current to report missing cache")
+	if err != nil {
+		t.Fatalf("Current returned an error before the first index: %v", err)
 	}
-	if status.State != "not_indexed" || len(index.Players) != 0 {
+	if status.State != "not_indexed" || status.Error != "" || len(index.Players) != 0 {
 		t.Fatalf("unexpected current result: status=%#v index=%#v", status, index)
+	}
+	status = m.Status(t.Context())
+	if status.State != "not_indexed" || status.Error != "" {
+		t.Fatalf("unexpected status before the first index: %#v", status)
 	}
 	if sidecarCalled {
 		t.Fatal("Current should not call the sidecar indexer on cache miss")
@@ -110,6 +149,26 @@ func TestFingerprintUsesMetadataOnly(t *testing.T) {
 	}
 	if before != after {
 		t.Fatalf("metadata-only fingerprint changed after same-size same-mtime content edit: before=%s after=%s", before, after)
+	}
+}
+
+func TestFingerprintIgnoresUnusedLevelMetaChanges(t *testing.T) {
+	root, _ := testConfig(t)
+	writeWorld(t, root, "level")
+	world := filepath.Join(root, "server", "Pal", "Saved", "SaveGames", "0", "world")
+	before, err := fingerprintWorld(world)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(world, "LevelMeta.sav"), []byte("updated metadata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := fingerprintWorld(world)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("unused LevelMeta.sav changed the index fingerprint: %s -> %s", before, after)
 	}
 }
 

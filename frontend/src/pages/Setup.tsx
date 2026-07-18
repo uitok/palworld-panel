@@ -526,7 +526,7 @@ export const Setup: React.FC = () => {
           <StatusItem label="当前 Build" value={versionInfo.current_build_id || '未知'} ok={Boolean(versionInfo.current_build_id)} />
           <StatusItem label="最新 Build" value={versionInfo.latest_build_id || '未检查'} ok={Boolean(versionInfo.latest_build_id)} />
           <StatusItem
-            label={`兼容目标 ${versionInfo.compatibility_target || '1.0.0'}`}
+            label={`兼容目标 ${versionInfo.compatibility_target || '1.0.1'}`}
             value={versionInfo.compatible === true ? '兼容' : versionInfo.compatible === false ? '不匹配' : '待运行确认'}
             ok={versionInfo.compatible === true}
           />
@@ -1236,7 +1236,7 @@ const AdvancedSetupPanel: React.FC<{
               <StatusItem label="当前 Build" value={versionInfo?.current_build_id || '未知'} ok={Boolean(versionInfo?.current_build_id)} />
               <StatusItem label="最新 Build" value={versionInfo?.latest_build_id || '未检查'} ok={Boolean(versionInfo?.latest_build_id)} />
               <StatusItem
-                label={`兼容目标 ${versionInfo?.compatibility_target || '1.0.0'}`}
+                label={`兼容目标 ${versionInfo?.compatibility_target || '1.0.1'}`}
                 value={versionInfo?.compatible === true ? '兼容' : versionInfo?.compatible === false ? '不匹配' : '待运行确认'}
                 ok={versionInfo?.compatible === true}
               />

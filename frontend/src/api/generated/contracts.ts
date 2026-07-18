@@ -608,6 +608,10 @@ export interface components {
       "Technology": unknown;
     };
     "PalDefenderTeleportRequest": unknown;
+    "PasswordChangeRequest": {
+      "current_password": string;
+      "new_password": string;
+    };
     "SafeLifecycleRequest": {
       "message"?: string;
       "waittime"?: number;

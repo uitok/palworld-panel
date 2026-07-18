@@ -21,6 +21,7 @@ func Normalize(file *gvas.File, sourcePath string) Index {
 
 	memberGuild := normalizeGuilds(&index, world)
 	normalizeCharacters(&index, world, memberGuild)
+	deduplicatePlayers(&index)
 	normalizeContainers(&index, world)
 	normalizeBases(&index, world)
 	applyGuildNames(&index)
@@ -28,6 +29,84 @@ func Normalize(file *gvas.File, sourcePath string) Index {
 	normalizeMapObjects(&index, world)
 	index.Finalize()
 	return index
+}
+
+func deduplicatePlayers(index *Index) {
+	if len(index.Players) < 2 {
+		return
+	}
+	players := make([]Player, 0, len(index.Players))
+	aliases := map[string]int{}
+	for _, player := range index.Players {
+		keys := playerIdentityKeys(player)
+		position := -1
+		for _, key := range keys {
+			if existing, ok := aliases[key]; ok {
+				position = existing
+				break
+			}
+		}
+		if position < 0 {
+			position = len(players)
+			players = append(players, player)
+		} else {
+			players[position] = mergePlayerRecords(players[position], player)
+		}
+		for _, key := range playerIdentityKeys(players[position]) {
+			aliases[key] = position
+		}
+	}
+	index.Players = players
+}
+
+func playerIdentityKeys(player Player) []string {
+	keys := make([]string, 0, 2)
+	for _, value := range []string{player.PlayerUID, player.SteamID} {
+		var builder strings.Builder
+		for _, character := range strings.ToLower(strings.TrimSpace(value)) {
+			if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+				builder.WriteRune(character)
+			}
+		}
+		key := builder.String()
+		if strings.HasPrefix(key, "steam") {
+			key = strings.TrimPrefix(key, "steam")
+		}
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func mergePlayerRecords(current, candidate Player) Player {
+	if current.PlayerUID == "" {
+		current.PlayerUID = candidate.PlayerUID
+	}
+	if current.SteamID == "" {
+		current.SteamID = candidate.SteamID
+	}
+	if current.Nickname == "" || current.Nickname == current.PlayerUID {
+		current.Nickname = candidate.Nickname
+	}
+	if candidate.Level > current.Level {
+		current.Level = candidate.Level
+		current.Location = candidate.Location
+	}
+	if current.GuildID == "" {
+		current.GuildID = candidate.GuildID
+	}
+	if current.GuildName == "" {
+		current.GuildName = candidate.GuildName
+	}
+	if current.LastOnlineTime == "" {
+		current.LastOnlineTime = candidate.LastOnlineTime
+	}
+	if len(current.InventorySummary) == 0 && len(candidate.InventorySummary) > 0 {
+		current.InventorySummary = candidate.InventorySummary
+	}
+	current.IsOnline = current.IsOnline || candidate.IsOnline
+	return current
 }
 
 func normalizeGuilds(index *Index, world map[string]any) map[string]Guild {

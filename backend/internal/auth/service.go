@@ -26,12 +26,13 @@ const (
 )
 
 var (
-	usernamePattern    = regexp.MustCompile(`^[A-Za-z0-9._-]{3,32}$`)
-	ErrInvalidLogin    = errors.New("invalid username or password")
-	ErrUserDisabled    = errors.New("user is disabled")
-	ErrInvalidUsername = errors.New("username must be 3-32 letters, numbers, dots, underscores, or hyphens")
-	ErrInvalidPassword = errors.New("password must be between 12 and 128 characters")
-	ErrInvalidKeyName  = errors.New("development key name must be between 1 and 64 characters")
+	usernamePattern           = regexp.MustCompile(`^[A-Za-z0-9._-]{3,32}$`)
+	ErrInvalidLogin           = errors.New("invalid username or password")
+	ErrInvalidCurrentPassword = errors.New("current password is incorrect")
+	ErrUserDisabled           = errors.New("user is disabled")
+	ErrInvalidUsername        = errors.New("username must be 3-32 letters, numbers, dots, underscores, or hyphens")
+	ErrInvalidPassword        = errors.New("password must be between 12 and 128 characters")
+	ErrInvalidKeyName         = errors.New("development key name must be between 1 and 64 characters")
 )
 
 type Credential string
@@ -180,6 +181,25 @@ func (s *Service) ResetPassword(ctx context.Context, username, password string) 
 		return err
 	}
 	return s.store.ResetUserPassword(ctx, strings.TrimSpace(username), hash)
+}
+
+func (s *Service) ChangePassword(ctx context.Context, username, currentPassword, newPassword string) error {
+	username = strings.TrimSpace(username)
+	user, err := s.store.GetUserByUsername(ctx, username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidCurrentPassword
+	}
+	if err != nil {
+		return err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)) != nil {
+		return ErrInvalidCurrentPassword
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	return s.store.ResetUserPassword(ctx, username, hash)
 }
 
 func ValidateUsername(username string) error {

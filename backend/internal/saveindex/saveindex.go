@@ -243,7 +243,12 @@ func (m *Manager) Status(ctx context.Context) Status {
 	}
 	cached, err := m.loadCache()
 	if err != nil {
-		return Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Error: err.Error(), Warnings: []string{}, CachePath: m.cachePath()}
+		status := Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Warnings: []string{}, CachePath: m.cachePath()}
+		if errors.Is(err, os.ErrNotExist) {
+			return status
+		}
+		status.Error = err.Error()
+		return status
 	}
 	status := cached.Status
 	status.Enabled = true
@@ -269,7 +274,11 @@ func (m *Manager) Current(ctx context.Context) (Index, Status, error) {
 	cached, err := m.loadCache()
 	if err != nil {
 		index := EmptyIndex()
-		status := Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Error: err.Error(), Warnings: []string{}, CachePath: m.cachePath()}
+		status := Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Warnings: []string{}, CachePath: m.cachePath()}
+		if errors.Is(err, os.ErrNotExist) {
+			return index, status, nil
+		}
+		status.Error = err.Error()
 		return index, status, err
 	}
 	status := cached.Status
@@ -311,8 +320,30 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 		}
 		return EmptyIndex(), status, err
 	}
+	unsettled := false
+	if latestFingerprint, fingerprintErr := fingerprintWorld(worldDir); fingerprintErr == nil && latestFingerprint != fp {
+		// An autosave can land while the sidecar is parsing its snapshot. Retry
+		// once against the newer files so a manual rebuild does not immediately
+		// return as stale.
+		retryStart := latestFingerprint
+		if retryIndex, retryErr := m.callIndexer(ctx, worldDir); retryErr == nil {
+			index = retryIndex
+			if retryEnd, retryFingerprintErr := fingerprintWorld(worldDir); retryFingerprintErr == nil && retryEnd == retryStart {
+				fp = retryEnd
+			} else {
+				fp = retryStart
+				unsettled = true
+			}
+		} else {
+			unsettled = true
+			index.Warnings = appendUnique(index.Warnings, "save files changed during indexing and the automatic retry failed")
+		}
+	}
 	index.SourcePath = worldDir
 	index.Counts = countsFor(index)
+	if unsettled {
+		index.Warnings = appendUnique(index.Warnings, "save files are still changing; pause writes briefly and rebuild again for a current snapshot")
+	}
 	status := Status{
 		Enabled:    true,
 		State:      "ready",
@@ -323,6 +354,10 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 		Counts:     index.Counts,
 		Parser:     index.Parser,
 		CachePath:  m.cachePath(),
+	}
+	if unsettled {
+		status.State = "stale"
+		status.Stale = true
 	}
 	if err := m.saveCache(fp, index, status); err != nil {
 		status.State = "error"
@@ -542,7 +577,10 @@ func findWorldDir(root string) (string, error) {
 
 func fingerprintWorld(worldDir string) (string, error) {
 	var files []string
-	for _, name := range []string{"Level.sav", "LevelMeta.sav"} {
+	// LevelMeta.sav is not consumed by the indexer and is rewritten by the
+	// server independently, so including it makes an otherwise current cache
+	// appear stale. Only fingerprint files that affect indexed entities.
+	for _, name := range []string{"Level.sav"} {
 		path := filepath.Join(worldDir, name)
 		if _, err := os.Stat(path); err == nil {
 			files = append(files, path)

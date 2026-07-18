@@ -1,7 +1,9 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -144,6 +146,68 @@ func TestSessionCookieSecurityAndAuthRateLimit(t *testing.T) {
 	limiter.clear("login:127.0.0.1")
 	if !limiter.allow("login:127.0.0.1") {
 		t.Fatal("successful authentication should clear the rate limit")
+	}
+}
+
+func TestPasswordChangeRequiresSessionAndRevokesCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, err := db.Open(filepath.Join(t.TempDir(), "password-change.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := panelauth.New(store)
+	s := Server{cfg: appconfig.Config{RequireAuth: true}, store: store, auth: service, authLimiter: newAuthRateLimiter()}
+	router := gin.New()
+	protected := router.Group("/api")
+	protected.Use(Auth(s.cfg, service))
+	protected.PUT("/auth/password", s.changePassword)
+
+	user, sessionToken, err := service.Register(t.Context(), "admin", "strong-password-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionCookie := &http.Cookie{Name: panelauth.SessionCookieName, Value: sessionToken}
+	key, err := service.CreateAPIKey(t.Context(), user.ID, "before-password-change")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	apiKeyRequest := httptest.NewRequest(http.MethodPut, "/api/auth/password", strings.NewReader(`{"current_password":"strong-password-123","new_password":"replacement-password-123"}`))
+	apiKeyRequest.Header.Set("Authorization", "Bearer "+key.Token)
+	apiKeyRequest.Header.Set("Content-Type", "application/json")
+	apiKeyRecorder := httptest.NewRecorder()
+	router.ServeHTTP(apiKeyRecorder, apiKeyRequest)
+	if apiKeyRecorder.Code != http.StatusForbidden || !strings.Contains(apiKeyRecorder.Body.String(), `"code":"password_change_session_required"`) {
+		t.Fatalf("development key password change = %d: %s", apiKeyRecorder.Code, apiKeyRecorder.Body.String())
+	}
+
+	wrong := authRequest(router, http.MethodPut, "/api/auth/password", `{"current_password":"wrong-password","new_password":"replacement-password-123"}`, sessionCookie, "http://example.com")
+	if wrong.Code != http.StatusUnauthorized || !strings.Contains(wrong.Body.String(), `"code":"current_password_invalid"`) {
+		t.Fatalf("wrong current password response = %d: %s", wrong.Code, wrong.Body.String())
+	}
+	if _, err := service.AuthenticateSession(t.Context(), sessionToken); err != nil {
+		t.Fatalf("wrong current password revoked session: %v", err)
+	}
+	if _, err := service.AuthenticateAPIKey(t.Context(), key.Token); err != nil {
+		t.Fatalf("wrong current password revoked development key: %v", err)
+	}
+
+	changed := authRequest(router, http.MethodPut, "/api/auth/password", `{"current_password":"strong-password-123","new_password":"replacement-password-123"}`, sessionCookie, "http://example.com")
+	if changed.Code != http.StatusOK || !strings.Contains(changed.Body.String(), `"password_changed":true`) || !strings.Contains(changed.Header().Get("Set-Cookie"), "Max-Age=0") {
+		t.Fatalf("password change response = %d: %s %#v", changed.Code, changed.Body.String(), changed.Header())
+	}
+	if _, err := service.AuthenticateSession(t.Context(), sessionToken); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("old session authentication error = %v", err)
+	}
+	if _, err := service.AuthenticateAPIKey(t.Context(), key.Token); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("old development key authentication error = %v", err)
+	}
+	if _, _, err := service.Login(t.Context(), "admin", "strong-password-123"); !errors.Is(err, panelauth.ErrInvalidLogin) {
+		t.Fatalf("old password login error = %v", err)
+	}
+	if _, _, err := service.Login(t.Context(), "admin", "replacement-password-123"); err != nil {
+		t.Fatalf("new password login failed: %v", err)
 	}
 }
 

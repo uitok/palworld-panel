@@ -11,6 +11,7 @@ const auxiliaryMocks = vi.hoisted(() => ({
 	listKeys: vi.fn(),
 	createKey: vi.fn(),
 	revokeKey: vi.fn(),
+	changePassword: vi.fn(),
 	clipboardWrite: vi.fn(),
   getAIConfig: vi.fn(),
   updateAIConfig: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('../api/auth', () => ({ authApi: {
 	listKeys: auxiliaryMocks.listKeys,
 	createKey: auxiliaryMocks.createKey,
 	revokeKey: auxiliaryMocks.revokeKey,
+	changePassword: auxiliaryMocks.changePassword,
 } }));
 vi.mock('../api/aiTranslation', () => ({
   aiTranslationApi: {
@@ -79,6 +81,7 @@ describe('Settings page', () => {
 	auxiliaryMocks.listKeys.mockResolvedValue([]);
 	auxiliaryMocks.createKey.mockResolvedValue({ id: 'key_1', name: '本机自动化', prefix: 'ppk_example', token: 'ppk_full-once', created_at: '2026-07-14T00:00:00Z' });
 	auxiliaryMocks.revokeKey.mockResolvedValue({ revoked: true });
+	auxiliaryMocks.changePassword.mockResolvedValue({ password_changed: true, sessions_revoked: true, api_keys_revoked: true });
     auxiliaryMocks.getAIConfig.mockResolvedValue({ configured: false, base_url: '', model: '', api_key_present: false, timeout_seconds: 90, proxy_configured: false, proxy_url: '', custom_header_names: [] });
     auxiliaryMocks.updateAIConfig.mockResolvedValue({ configured: true, base_url: 'https://ai.example/v1', model: 'translate-model', api_key_present: true, timeout_seconds: 90, proxy_configured: false, proxy_url: '', custom_header_names: [] });
     auxiliaryMocks.testAIConfig.mockResolvedValue({ ok: true, base_url: 'https://ai.example/v1', model: 'translate-model', message: 'ok', timeout_seconds: 90, proxy_configured: false, custom_header_names: [] });
@@ -115,8 +118,8 @@ describe('Settings page', () => {
       last_checked_at: '2026-07-10T00:00:00Z',
       source: 'test',
       manifest_path: '/srv/appmanifest_2394010.acf',
-      game_version: 'v1.0.0.81201',
-      compatibility_target: '1.0.0',
+      game_version: 'v1.0.1.81201',
+      compatibility_target: '1.0.1',
       compatible: true,
       compatibility_warnings: [],
     });
@@ -179,7 +182,7 @@ describe('Settings page', () => {
 
     expect(await screen.findByText('服务器名称')).toBeInTheDocument();
     expect(screen.getByText('配置规范 1.0.0')).toBeInTheDocument();
-    expect(screen.getByText('v1.0.0.81201')).toBeInTheDocument();
+    expect(screen.getByText('v1.0.1.81201')).toBeInTheDocument();
     expect(screen.getByText(/当前未设置/)).toBeInTheDocument();
     expect(screen.getByText('ServerName')).toBeInTheDocument();
     expect(screen.getByText('全部掉落（物品、装备和队伍帕鲁）')).toBeInTheDocument();
@@ -288,5 +291,30 @@ describe('Settings page', () => {
 
 	await waitFor(() => expect(auxiliaryMocks.revokeKey).toHaveBeenCalledWith('key_1'));
 	expect((await screen.findAllByText(/已撤销/)).length).toBeGreaterThan(0);
+  });
+
+  it('changes the administrator password after confirmation', async () => {
+	renderSettings();
+
+	await screen.findByText('修改管理员密码');
+	fireEvent.change(screen.getByLabelText('当前管理员密码'), { target: { value: 'strong-password-123' } });
+	fireEvent.change(screen.getByLabelText('新管理员密码'), { target: { value: 'replacement-password-123' } });
+	fireEvent.change(screen.getByLabelText('确认新管理员密码'), { target: { value: 'replacement-password-123' } });
+	fireEvent.click(screen.getByRole('button', { name: '修改密码并重新登录' }));
+
+	await waitFor(() => expect(auxiliaryMocks.changePassword).toHaveBeenCalledWith('strong-password-123', 'replacement-password-123'));
+  });
+
+  it('rejects mismatched password confirmation without calling the API', async () => {
+	renderSettings();
+
+	await screen.findByText('修改管理员密码');
+	fireEvent.change(screen.getByLabelText('当前管理员密码'), { target: { value: 'strong-password-123' } });
+	fireEvent.change(screen.getByLabelText('新管理员密码'), { target: { value: 'replacement-password-123' } });
+	fireEvent.change(screen.getByLabelText('确认新管理员密码'), { target: { value: 'another-password-123' } });
+	fireEvent.click(screen.getByRole('button', { name: '修改密码并重新登录' }));
+
+	expect(await screen.findByText('两次输入的新密码不一致')).toBeInTheDocument();
+	expect(auxiliaryMocks.changePassword).not.toHaveBeenCalled();
   });
 });

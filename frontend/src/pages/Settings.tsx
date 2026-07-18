@@ -35,7 +35,7 @@ const coerceInitialValue = (field: FieldSchema, value: unknown) => {
 
 export const Settings: React.FC = () => {
   const { t } = useI18n();
-  const { triggerRefresh, session } = useServerStore();
+  const { triggerRefresh, refreshAuthentication, session } = useServerStore();
   const [fields, setFields] = useState<FieldSchema[]>([]);
   const [draft, setDraft] = useState<PalworldSettings>({});
   const [path, setPath] = useState('');
@@ -73,6 +73,10 @@ export const Settings: React.FC = () => {
   const [developmentKeyName, setDevelopmentKeyName] = useState('本机自动化');
   const [revealedDevelopmentKey, setRevealedDevelopmentKey] = useState('');
   const [developmentKeysBusy, setDevelopmentKeysBusy] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const canConfigureAI = Boolean(session?.permissions.includes('ai:config'));
   const canConfigureNetwork = Boolean(session?.permissions.includes('config:write'));
 
@@ -315,6 +319,34 @@ export const Settings: React.FC = () => {
       setMessage(getErrorMessage(error));
     } finally {
       setAIBusy(false);
+    }
+  };
+
+  const changePassword = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!currentPassword) {
+      setMessage('请输入当前管理员密码');
+      return;
+    }
+    if (newPassword.length < 12 || newPassword.length > 128) {
+      setMessage('新密码长度必须为 12–128 个字符');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setMessage('两次输入的新密码不一致');
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      await authApi.changePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      await refreshAuthentication();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setPasswordBusy(false);
     }
   };
 
@@ -625,6 +657,38 @@ export const Settings: React.FC = () => {
           </div>
         </section>
       </div>
+
+      {session && session.name !== 'local' && (
+        <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-violet-50 p-2.5 text-violet-600"><KeyRound size={19} /></div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-800">修改管理员密码</h2>
+              <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">需要验证当前密码。修改成功后，全部登录会话和开发密钥都会立即失效，并返回登录页。</p>
+            </div>
+          </div>
+          <form onSubmit={(event) => void changePassword(event)} className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              当前密码
+              <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" aria-label="当前管理员密码" className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              新密码
+              <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={12} maxLength={128} autoComplete="new-password" aria-label="新管理员密码" className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              确认新密码
+              <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={12} maxLength={128} autoComplete="new-password" aria-label="确认新管理员密码" className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-500 focus:outline-none" />
+            </label>
+            <div className="flex flex-col gap-3 md:col-span-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2 text-[11px] font-semibold leading-relaxed text-amber-700"><AlertTriangle className="mt-0.5 shrink-0" size={14} />请提前保存仍需使用的开发密钥配置；修改密码后旧密钥无法恢复。</div>
+              <button type="submit" disabled={passwordBusy || !currentPassword || !newPassword || !confirmPassword} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-40">
+                <KeyRound size={14} />{passwordBusy ? '正在修改...' : '修改密码并重新登录'}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
       {session?.permissions.includes('security:write') && (
         <section className="border-y border-slate-100 bg-white py-5 sm:py-6">

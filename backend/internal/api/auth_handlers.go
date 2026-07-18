@@ -147,6 +147,43 @@ func (s Server) authMe(c *gin.Context) {
 	ok(c, sessionPayload(CurrentPrincipal(c)))
 }
 
+func (s Server) changePassword(c *gin.Context) {
+	principal := CurrentPrincipal(c)
+	if principal.Credential != panelauth.CredentialSession {
+		fail(c, http.StatusForbidden, "password_change_session_required", "password changes require an authenticated browser session")
+		return
+	}
+	key := "password-change:" + principal.UserID
+	if !s.authLimiter.allow(key) {
+		fail(c, http.StatusTooManyRequests, "rate_limited", "too many password change attempts; try again later")
+		return
+	}
+	var request struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", "current_password and new_password are required")
+		return
+	}
+	err := s.auth.ChangePassword(c.Request.Context(), principal.Name, request.CurrentPassword, request.NewPassword)
+	if errors.Is(err, panelauth.ErrInvalidCurrentPassword) {
+		fail(c, http.StatusUnauthorized, "current_password_invalid", "current password is incorrect")
+		return
+	}
+	if errors.Is(err, panelauth.ErrInvalidPassword) {
+		fail(c, http.StatusUnprocessableEntity, "invalid_password", err.Error())
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "password_change_failed", "could not change the administrator password")
+		return
+	}
+	s.authLimiter.clear(key)
+	clearSessionCookie(c)
+	ok(c, gin.H{"password_changed": true, "sessions_revoked": true, "api_keys_revoked": true})
+}
+
 func (s Server) listAPIKeys(c *gin.Context) {
 	principal := CurrentPrincipal(c)
 	items, err := s.auth.ListAPIKeys(c.Request.Context(), principal.UserID)

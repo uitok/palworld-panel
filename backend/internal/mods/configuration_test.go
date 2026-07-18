@@ -68,6 +68,23 @@ func TestModConfigurationFilesWriteBackupRestoreAndRevision(t *testing.T) {
 	}
 }
 
+func TestConfigurationFieldLabelsUseChineseNamesAndKeepPaths(t *testing.T) {
+	fields := configFields(".json", []byte(`{"preventAdminPasswordInChat":true,"baseRange":{"multiplier":2},"UnknownOption":3}`))
+	labels := map[string]string{}
+	for _, field := range fields {
+		labels[field.Path] = field.Label
+	}
+	for path, want := range map[string]string{
+		"preventAdminPasswordInChat": "防止管理员密码出现在聊天中",
+		"baseRange.multiplier":       "基地范围倍率",
+		"UnknownOption":              "UnknownOption",
+	} {
+		if labels[path] != want {
+			t.Errorf("label for %s = %q, want %q", path, labels[path], want)
+		}
+	}
+}
+
 func TestModConfigurationConcurrentRevisionAllowsOnlyOneWriter(t *testing.T) {
 	manager, store, root := newConfigurationTestManager(t)
 	modRoot := filepath.Join(root, "server", "Mods", "Workshop", "mod_race")

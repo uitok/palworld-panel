@@ -94,6 +94,24 @@ func TestNormalizePlayerSavesWarnsOnceForDuplicatePlayerRecords(t *testing.T) {
 	}
 }
 
+func TestDeduplicatePlayersMergesUIDAndSteamAliases(t *testing.T) {
+	index := Index{Players: []Player{
+		{PlayerUID: "ABCDEF00-0000-0000-0000-000000000001", Nickname: "ABCDEF00-0000-0000-0000-000000000001", Level: 2},
+		{PlayerUID: "abcdef00000000000000000000000001", SteamID: "steam_76561198000000001", Nickname: "Builder", Level: 40},
+		{SteamID: "76561198000000001", Nickname: "Builder", Level: 39},
+	}}
+
+	deduplicatePlayers(&index)
+
+	if len(index.Players) != 1 {
+		t.Fatalf("duplicate players were not merged: %#v", index.Players)
+	}
+	player := index.Players[0]
+	if player.Nickname != "Builder" || player.Level != 40 || player.SteamID != "steam_76561198000000001" {
+		t.Fatalf("merged player = %#v", player)
+	}
+}
+
 func TestCopySnapshotIncludesCaseInsensitivePlayerSavesAndSkipsDirectories(t *testing.T) {
 	worldDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(worldDir, "Level.sav"), []byte("level"), 0o600); err != nil {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/goccy/go-yaml"
@@ -1078,7 +1079,137 @@ func parseScalar(raw string) (any, string) {
 
 func fieldLabel(path string) string {
 	parts := strings.Split(path, ".")
-	return parts[len(parts)-1]
+	leaf := parts[len(parts)-1]
+	for _, candidate := range []string{path, leaf} {
+		if label := chineseConfigFieldLabels[normalizeConfigFieldKey(candidate)]; label != "" {
+			return label
+		}
+	}
+	words := splitConfigFieldWords(leaf)
+	translated := false
+	localized := make([]string, 0, len(words))
+	for _, word := range words {
+		if label, ok := chineseConfigFieldWords[strings.ToLower(word)]; ok {
+			translated = true
+			if label != "" {
+				localized = append(localized, label)
+			}
+			continue
+		}
+		localized = append(localized, word)
+	}
+	if translated {
+		return strings.Join(localized, " ")
+	}
+	return leaf
+}
+
+var chineseConfigFieldLabels = map[string]string{
+	"version":                      "配置版本",
+	"motd":                         "欢迎消息（MOTD）",
+	"exitserveronstartupfailure":   "启动失败时退出服务器",
+	"preventadminpasswordinchat":   "防止管理员密码出现在聊天中",
+	"shouldwarncheaters":           "警告作弊玩家",
+	"shouldwarncheatersreason":     "显示作弊警告原因",
+	"shouldkickcheaters":           "踢出作弊玩家",
+	"shouldbancheaters":            "封禁作弊玩家",
+	"shouldipbancheaters":          "同时封禁作弊玩家 IP",
+	"logchat":                      "记录聊天",
+	"logrcon":                      "记录 RCON 操作",
+	"logplayeruid":                 "记录玩家 UID",
+	"logplayerip":                  "记录玩家 IP",
+	"logplayerdeaths":              "记录玩家死亡",
+	"logplayerlogins":              "记录玩家登录",
+	"logplayerbuildings":           "记录玩家建造",
+	"logplayersummons":             "记录玩家召唤",
+	"logplayercaptures":            "记录玩家捕获",
+	"logcraftings":                 "记录制作",
+	"logtechunlocks":               "记录科技解锁",
+	"useadminwhitelist":            "启用管理员白名单",
+	"adminautologin":               "管理员自动登录",
+	"adminips":                     "管理员 IP 列表",
+	"bannedchatwords":              "聊天违禁词",
+	"bannednames":                  "禁用名称",
+	"announceconnections":          "播报玩家连接",
+	"dontannounceadminconnections": "不播报管理员连接",
+	"announcepunishments":          "播报处罚",
+	"usewhitelist":                 "启用玩家白名单",
+	"whitelistmessage":             "白名单提示消息",
+	"steamidprotection":            "Steam ID 保护",
+	"blocktowerbosscapture":        "阻止捕获高塔头目",
+	"disableillegalitemprotection": "关闭非法物品保护",
+	"disablebutchering":            "禁止肢解帕鲁",
+	"disablerenaming":              "禁止重命名",
+	"disablepalrenaming":           "禁止帕鲁重命名",
+	"doactionuponillegalpalstats":  "发现非法帕鲁属性时执行操作",
+	"palstatsmaxrank":              "帕鲁属性允许的最高 Rank",
+	"bannedtechnologies":           "禁用科技列表",
+	"baserange":                    "基地范围",
+	"baserangemultiplier":          "基地范围倍率",
+	"workefficiencymultiplier":     "工作效率倍率",
+	"basecampworkermaxnum":         "基地最大工作帕鲁数",
+	"buseuobjectarraycache":        "使用 UObject 数组缓存",
+	"guiconsoleenabled":            "启用图形控制台",
+	"consoleenabled":               "启用控制台",
+	"graphicsapi":                  "图形 API",
+	"loglevel":                     "日志级别",
+	"serverpassword":               "服务器密码",
+	"adminpassword":                "管理员密码",
+	"enabled":                      "启用",
+	"disabled":                     "禁用",
+	"multiplier":                   "倍率",
+	"interval":                     "间隔",
+	"timeout":                      "超时",
+	"port":                         "端口",
+}
+
+var chineseConfigFieldWords = map[string]string{
+	"b": "", "use": "使用", "enabled": "启用", "disabled": "禁用", "enable": "启用", "disable": "禁用",
+	"server": "服务器", "admin": "管理员", "player": "玩家", "pal": "帕鲁", "base": "基地", "camp": "营地",
+	"max": "最大", "min": "最小", "count": "数量", "num": "数量", "range": "范围", "limit": "限制",
+	"rate": "速率", "multiplier": "倍率", "interval": "间隔", "timeout": "超时", "port": "端口",
+	"log": "日志", "level": "等级", "password": "密码", "message": "消息", "name": "名称",
+	"cache": "缓存", "array": "数组", "console": "控制台", "graphics": "图形", "api": "API",
+	"worker": "工作帕鲁", "work": "工作", "efficiency": "效率", "protection": "保护", "announce": "播报",
+}
+
+func normalizeConfigFieldKey(value string) string {
+	var builder strings.Builder
+	for _, character := range strings.ToLower(value) {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) {
+			builder.WriteRune(character)
+		}
+	}
+	return builder.String()
+}
+
+func splitConfigFieldWords(value string) []string {
+	runes := []rune(strings.TrimSpace(value))
+	words := make([]string, 0, 6)
+	start := -1
+	flush := func(end int) {
+		if start >= 0 && end > start {
+			words = append(words, string(runes[start:end]))
+		}
+		start = -1
+	}
+	for index, character := range runes {
+		if !unicode.IsLetter(character) && !unicode.IsDigit(character) {
+			flush(index)
+			continue
+		}
+		if start < 0 {
+			start = index
+			continue
+		}
+		previous := runes[index-1]
+		if unicode.IsUpper(character) && (unicode.IsLower(previous) || unicode.IsDigit(previous)) {
+			flush(index)
+			start = index
+		}
+	}
+	flush(len(runes))
+	return words
 }
 
 func isEditableConfigName(name string) bool {

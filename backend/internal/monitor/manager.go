@@ -22,15 +22,16 @@ import (
 )
 
 type Manager struct {
-	cfg       appconfig.Config
-	store     *db.Store
-	server    Server
-	palrest   palrest.Client
-	run       func(context.Context, string, ...string) ([]byte, error)
-	dial      func(string, string, time.Duration) (net.Conn, error)
-	diskUsage func(string) (int64, int64, error)
-	goos      string
-	now       func() time.Time
+	cfg        appconfig.Config
+	store      *db.Store
+	server     Server
+	palrest    palrest.Client
+	run        func(context.Context, string, ...string) ([]byte, error)
+	dial       func(string, string, time.Duration) (net.Conn, error)
+	diskUsage  func(string) (int64, int64, error)
+	processCPU func(context.Context, int) (float64, error)
+	goos       string
+	now        func() time.Time
 }
 
 type Server interface {
@@ -44,7 +45,7 @@ type Snapshot struct {
 func New(cfg appconfig.Config, store *db.Store, serverManager Server, restClient palrest.Client) Manager {
 	return Manager{
 		cfg: cfg, store: store, server: serverManager, palrest: restClient,
-		run: runCommand, dial: net.DialTimeout, diskUsage: platformDiskUsage,
+		run: runCommand, dial: net.DialTimeout, diskUsage: platformDiskUsage, processCPU: platformProcessCPUPercent,
 		goos: runtime.GOOS, now: time.Now,
 	}
 }
@@ -298,12 +299,17 @@ func (m Manager) fillDockerStats(ctx context.Context, sample *db.MonitorSample) 
 }
 
 func (m Manager) fillWindowsProcessStats(ctx context.Context, sample *db.MonitorSample) {
-	pid, _, err := m.store.GetKV(ctx, "windows_pid")
-	if err != nil || strings.TrimSpace(pid) == "" {
+	pidText, _, err := m.store.GetKV(ctx, "windows_pid")
+	if err != nil || strings.TrimSpace(pidText) == "" {
 		appendReason(sample, "windows process: pid unavailable")
 		return
 	}
-	out, err := m.command(ctx, "tasklist", "/FI", "PID eq "+pid, "/FO", "CSV", "/NH")
+	pid, err := strconv.Atoi(strings.TrimSpace(pidText))
+	if err != nil || pid <= 0 {
+		appendReason(sample, "windows process: invalid pid")
+		return
+	}
+	out, err := m.command(ctx, "tasklist", "/FI", "PID eq "+pidText, "/FO", "CSV", "/NH")
 	if err != nil {
 		appendReason(sample, "tasklist: "+strings.TrimSpace(string(out)))
 		return
@@ -318,7 +324,17 @@ func (m Manager) fillWindowsProcessStats(ctx context.Context, sample *db.Monitor
 		sample.MemoryAvailable = true
 		sample.MemoryUsageBytes = value * 1024
 	}
-	sample.CPUAvailable = false
+	collector := m.processCPU
+	if collector == nil {
+		collector = platformProcessCPUPercent
+	}
+	cpuPercent, err := collector(ctx, pid)
+	if err != nil {
+		appendReason(sample, "windows process CPU: "+err.Error())
+		return
+	}
+	sample.CPUAvailable = true
+	sample.CPUPercent = cpuPercent
 }
 
 func (m Manager) fillDiskStats(ctx context.Context, sample *db.MonitorSample) {
