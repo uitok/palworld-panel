@@ -1,4 +1,4 @@
-# PalPanel
+# PalPanel  | 幻兽帕鲁管理面板
 
 <p align="center">
   <img src="frontend/public/brand/palpanel-lockup.svg" width="360" alt="PalPanel · Server Control">
