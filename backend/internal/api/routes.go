@@ -219,6 +219,7 @@ func (s Server) registerWorldRoutes(api *gin.RouterGroup) {
 	api.GET("/pals/:id", s.getSavePal)
 	api.GET("/map/entities", s.listMapEntities)
 	api.GET("/breeding/catalog", s.breedingCatalog)
+	api.GET("/breeding/status", s.breedingStatus)
 	api.GET("/breeding/history", s.breedingHistory)
 	api.GET("/breeding/presets", s.listBreedingPresets)
 	api.POST("/breeding/presets", Require(PermRead), s.putBreedingPreset)

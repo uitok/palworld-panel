@@ -663,6 +663,8 @@ paths:
     delete: {operationId: deleteSaveSource, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /breeding/catalog:
     get: {operationId: getBreedingCatalog, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /breeding/status:
+    get: {operationId: getBreedingStatus, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /breeding/history:
     get: {operationId: listBreedingHistory, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /breeding/presets:
