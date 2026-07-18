@@ -98,15 +98,20 @@ export const Mods: React.FC = () => {
 
   const loadInstalled = useCallback(async () => {
     setLoading(true);
-    const [list, status, nextSecurityStatus] = await Promise.all([
-      modsApi.list(),
-      serverApi.getStatus(),
-      securityApi.status(),
-    ]);
-    setMods(Array.isArray(list) ? list : []);
-    setPendingRestart(status.pending_restart);
-    setSecurityStatus(nextSecurityStatus);
-    setLoading(false);
+    try {
+      const [list, status, nextSecurityStatus] = await Promise.all([
+        modsApi.list(),
+        serverApi.getStatus(),
+        securityApi.status(),
+      ]);
+      setMods(Array.isArray(list) ? list : []);
+      setPendingRestart(status.pending_restart);
+      setSecurityStatus(nextSecurityStatus);
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const loadWorkshopAuthStatus = useCallback(async () => {

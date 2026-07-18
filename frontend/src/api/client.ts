@@ -100,6 +100,13 @@ const apiErrorFrom = (error: unknown): ApiError => {
     }
     return new ApiError(payload.error.message || payload.error.code || 'API request failed', status, payload.error.code);
   }
+  if (status === 502 || status === 503 || status === 504) {
+    return new ApiError(
+      `访问链路暂时无法连接 PalPanel 后端（HTTP ${status}）。安装或更新任务可能仍在运行，请稍后重试或刷新页面。`,
+      status,
+      'backend_temporarily_unavailable',
+    );
+  }
   if (error instanceof ApiError) {
     return error;
   }

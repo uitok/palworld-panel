@@ -197,6 +197,12 @@ export const Setup: React.FC = () => {
   }, [refresh]);
 
   useEffect(() => {
+    if (loading || (host && status)) return;
+    const timer = window.setTimeout(() => void refresh(), 5000);
+    return () => window.clearTimeout(timer);
+  }, [host, loading, refresh, status]);
+
+  useEffect(() => {
     if (host?.os !== 'windows' || status?.installed) return;
     if (status?.server_imported) {
       setWindowsServerSource('existing');
@@ -864,7 +870,7 @@ const ConnectionIssuePanel: React.FC<{
           检测失败
         </h4>
         <p className="mt-2 text-xs font-semibold leading-5 opacity-85">
-          无法读取当前面板后端的关键状态。请确认 PalPanel 服务正在运行，再重新检测。
+          无法读取当前面板后端的关键状态，页面会自动重新检测。安装或更新任务不会因切换页面而取消，但重启 PalPanel 会中断正在运行的任务。
         </p>
         {message && <p className="mt-2 break-words text-[11px] font-semibold opacity-80">{message}</p>}
       </div>

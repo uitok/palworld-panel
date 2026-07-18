@@ -19,10 +19,15 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
   let authorization = '';
   let loginBody: unknown;
   let authenticated = initiallyAuthenticated;
+  let backendUnavailable = false;
   await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const request = route.request();
     if (request.headers().authorization) authorization = request.headers().authorization;
     const path = new URL(request.url()).pathname;
+    if (backendUnavailable && path !== '/api/auth/status') {
+      await route.fulfill({ status: 502, contentType: 'text/plain', body: 'Bad Gateway' });
+      return;
+    }
     let data: unknown = {};
     let status = 200;
     const headers: Record<string, string> = {};
@@ -105,6 +110,7 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
   return {
     authorization: () => authorization,
     loginBody: () => loginBody,
+    setBackendUnavailable: (unavailable: boolean) => { backendUnavailable = unavailable; },
   };
 };
 
@@ -132,6 +138,20 @@ test('viewer session cannot see the world reset command', async ({ page }) => {
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { name: '服务器总览' })).toBeVisible();
   await expect(page.getByRole('button', { name: '重置世界' })).toHaveCount(0);
+});
+
+test('pages remain renderable while the backend temporarily returns 502', async ({ page }) => {
+  const backend = await installFakeBackend(page);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  backend.setBackendUnavailable(true);
+
+  for (const path of ['/setup', '/dashboard', '/tasks', '/settings', '/mods', '/backups']) {
+    await page.goto(path);
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByText('页面加载失败')).toHaveCount(0);
+  }
+  expect(pageErrors).toEqual([]);
 });
 
 test('renders task and schedule data from the API contract', async ({ page }) => {
