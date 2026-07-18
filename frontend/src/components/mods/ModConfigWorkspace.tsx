@@ -23,6 +23,7 @@ import type {
   ModConfigurationField,
   ModItem,
 } from '../../types';
+import { useI18n, type TranslationKey } from '../../i18n';
 
 interface Props {
   mods: ModItem[];
@@ -35,7 +36,16 @@ type Selection =
   | { kind: 'adapter'; id: string; name: string }
   | { kind: 'mod'; id: string; name: string };
 
+const adapterTranslations: Record<string, { name: TranslationKey; description: TranslationKey }> = {
+  paldefender: { name: 'modAdapter.paldefender.name', description: 'modAdapter.paldefender.description' },
+  ue4ss: { name: 'modAdapter.ue4ss.name', description: 'modAdapter.ue4ss.description' },
+  palschema: { name: 'modAdapter.palschema.name', description: 'modAdapter.palschema.description' },
+  'extended-base-range': { name: 'modAdapter.extended-base-range.name', description: 'modAdapter.extended-base-range.description' },
+  'quality-of-life': { name: 'modAdapter.quality-of-life.name', description: 'modAdapter.quality-of-life.description' },
+};
+
 export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWrite, canReloadPalDefender }) => {
+  const { locale, t } = useI18n();
   const [adapters, setAdapters] = useState<ModConfigurationAdapter[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [files, setFiles] = useState<ModConfigFile[]>([]);
@@ -58,10 +68,10 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
     }
     for (const finding of localFindings) {
       if (seen.has(finding.id)) continue;
-      values.push({ id: finding.id, name: finding.name, detail: `${finding.source} · 本地识别` });
+      values.push({ id: finding.id, name: finding.name, detail: `${finding.source} · ${t('modConfig.localDetected')}` });
     }
-    return values.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
-  }, [localFindings, mods]);
+    return values.sort((left, right) => left.name.localeCompare(right.name, locale));
+  }, [localFindings, locale, mods, t]);
 
   useEffect(() => {
     let active = true;
@@ -141,7 +151,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
   const save = async () => {
     if (!selection || !document || !canWrite) return;
     const executable = document.file.executable;
-    if (executable && !window.confirm('Lua 是可执行代码。确认已审查修改差异并保存？')) return;
+    if (executable && !window.confirm(t('modConfig.luaConfirm'))) return;
     setSaving(true);
     setError(null);
     try {
@@ -151,7 +161,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
       setDocument(next);
       setContent(next.content);
       const adapter = selection.kind === 'adapter' ? adapters.find((item) => item.id === selection.id) : undefined;
-      setNotice(adapter?.reload_behavior === 'online_reload' ? '配置已保存，可使用 Mod 自身的在线重载功能应用。' : '配置已保存，需要安全重启服务器后生效。');
+      setNotice(adapter?.reload_behavior === 'online_reload' ? t('modConfig.savedReload') : t('modConfig.savedRestart'));
       setBackups(selection.kind === 'adapter'
         ? await modConfigurationsApi.listAdapterBackups(selection.id, next.file.id)
         : await modConfigurationsApi.listFileBackups(selection.id, next.file.id));
@@ -163,7 +173,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
   };
 
   const restore = async (backup: ModConfigBackup) => {
-    if (!selection || !document || !canWrite || !window.confirm('恢复这个历史版本？当前内容会先自动备份。')) return;
+    if (!selection || !document || !canWrite || !window.confirm(t('modConfig.restoreConfirm'))) return;
     setSaving(true);
     setError(null);
     try {
@@ -172,7 +182,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
         : await modConfigurationsApi.restoreFile(selection.id, document.file.id, backup.id, document.file.revision);
       setDocument(next);
       setContent(next.content);
-      setNotice('历史版本已恢复。');
+      setNotice(t('modConfig.restored'));
     } catch (reason) {
       setError(getErrorMessage(reason));
     } finally {
@@ -185,7 +195,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
     setError(null);
     try {
       const result = await securityApi.reloadConfig();
-      setNotice(result.reloaded ? 'PalDefender 已在线重新加载配置。' : '重载请求未被确认，请检查 PalDefender 是否正在运行。');
+      setNotice(result.reloaded ? t('modConfig.reloadSuccess') : t('modConfig.reloadUnknown'));
     } catch (reason) {
       setError(getErrorMessage(reason));
     } finally {
@@ -204,37 +214,42 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
       <div className="border-b border-slate-100 bg-gradient-to-r from-slate-950 via-slate-900 to-sky-950 px-5 py-5 text-white sm:px-7">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2 text-sm font-black"><FolderCog size={18} className="text-sky-300" />Mod 配置中心</div>
-            <p className="mt-1 text-xs text-slate-300">热门 Mod 使用可视化面板，其他已识别 Mod 使用受限原始文件编辑器。</p>
+            <div className="flex items-center gap-2 text-sm font-black"><FolderCog size={18} className="text-sky-300" />{t('modConfig.title')}</div>
+            <p className="mt-1 text-xs text-slate-300">{t('modConfig.description')}</p>
           </div>
           <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-bold text-slate-200">
-            <ShieldCheck size={13} className="text-emerald-300" />UTF-8 · revision · 自动备份
+            <ShieldCheck size={13} className="text-emerald-300" />{t('modConfig.safety')}
           </div>
         </div>
       </div>
 
       <div className="grid min-h-[620px] lg:grid-cols-[280px_1fr]">
         <aside className="border-b border-slate-200 bg-slate-50/80 p-4 lg:border-b-0 lg:border-r">
-          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">专用面板</p>
+          <p className="mb-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">{t('modConfig.adapters')}</p>
           <div className="space-y-2">
-            {adapters.map((adapter) => (
-              <button
-                key={adapter.id}
-                type="button"
-                disabled={!adapter.available}
-                onClick={() => setSelection({ kind: 'adapter', id: adapter.id, name: adapter.name })}
-                className={`w-full rounded-xl border p-3 text-left transition ${selection?.kind === 'adapter' && selection.id === adapter.id ? 'border-sky-300 bg-sky-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} disabled:cursor-not-allowed disabled:opacity-45`}
-              >
-                <div className="flex items-center justify-between gap-2"><span className="text-xs font-black text-slate-800">{adapter.name}</span><Braces size={14} className="text-sky-500" /></div>
-                <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-slate-500">{adapter.description}</p>
-                <p className="mt-2 text-[10px] font-bold text-slate-400">{adapter.available ? `${adapter.files.length} 个配置文件` : '尚未检测到'}</p>
-              </button>
-            ))}
+            {adapters.map((adapter) => {
+              const translated = adapterTranslations[adapter.id];
+              const adapterName = translated ? t(translated.name) : adapter.name;
+              const adapterDescription = translated ? t(translated.description) : adapter.description;
+              return (
+                <button
+                  key={adapter.id}
+                  type="button"
+                  disabled={!adapter.available}
+                  onClick={() => setSelection({ kind: 'adapter', id: adapter.id, name: adapterName })}
+                  className={`w-full rounded-xl border p-3 text-left transition ${selection?.kind === 'adapter' && selection.id === adapter.id ? 'border-sky-300 bg-sky-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} disabled:cursor-not-allowed disabled:opacity-45`}
+                >
+                  <div className="flex items-center justify-between gap-2"><span className="text-xs font-black text-slate-800">{adapterName}</span><Braces size={14} className="text-sky-500" /></div>
+                  <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-slate-500">{adapterDescription}</p>
+                  <p className="mt-2 text-[10px] font-bold text-slate-400">{adapter.available ? t('modConfig.files', { count: adapter.files.length }) : t('modConfig.notDetected')}</p>
+                </button>
+              );
+            })}
           </div>
 
-          <p className="mb-2 mt-5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">其他已识别 Mod</p>
+          <p className="mb-2 mt-5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">{t('modConfig.otherMods')}</p>
           <select
-            aria-label="选择其他 Mod"
+            aria-label={t('modConfig.selectMod')}
             value={selection?.kind === 'mod' ? selection.id : ''}
             onChange={(event) => {
               const target = modOptions.find((item) => item.id === event.target.value);
@@ -242,7 +257,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
             }}
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-sky-400"
           >
-            <option value="">选择 Mod…</option>
+            <option value="">{t('modConfig.selectModPlaceholder')}</option>
             {modOptions.map((mod) => <option key={mod.id} value={mod.id}>{mod.name} · {mod.detail}</option>)}
           </select>
 
@@ -250,7 +265,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
             <div className="mt-4">
               <label className="relative block">
                 <Search size={13} className="absolute left-3 top-2.5 text-slate-400" />
-                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索配置文件" className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-3 text-xs outline-none focus:border-sky-400" />
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('modConfig.searchFiles')} className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-3 text-xs outline-none focus:border-sky-400" />
               </label>
               <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">
                 {filteredFiles.map((file) => (
@@ -267,7 +282,7 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
         <main className="min-w-0 p-4 sm:p-6">
           {error && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{error}</div>}
           {notice && <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-700">{notice}</div>}
-          {loading && <div className="flex h-64 items-center justify-center gap-2 text-xs font-bold text-slate-400"><LoaderCircle size={16} className="animate-spin" />读取配置…</div>}
+          {loading && <div className="flex h-64 items-center justify-center gap-2 text-xs font-bold text-slate-400"><LoaderCircle size={16} className="animate-spin" />{t('modConfig.reading')}</div>}
           {!loading && selection && files.length === 0 && <EmptyConfig name={selection.name} />}
           {!loading && document && (
             <div className="space-y-5">
@@ -279,21 +294,21 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
                 <div className="flex flex-wrap gap-2">
                   {selection?.kind === 'adapter' && selection.id === 'paldefender' && (
                     <>
-                      <button type="button" disabled={!canWrite || saving} onClick={() => setContent(applyPalDefenderPreset(content))} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-slate-600 hover:bg-slate-50 disabled:opacity-40">应用平衡预设</button>
-                      {canReloadPalDefender && <button type="button" disabled={saving || content !== document.content} onClick={reloadPalDefender} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-black text-emerald-700 hover:bg-emerald-100 disabled:opacity-40">在线重载</button>}
+                      <button type="button" disabled={!canWrite || saving} onClick={() => setContent(applyPalDefenderPreset(content))} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-black text-slate-600 hover:bg-slate-50 disabled:opacity-40">{t('modConfig.balancePreset')}</button>
+                      {canReloadPalDefender && <button type="button" disabled={saving || content !== document.content} onClick={reloadPalDefender} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-black text-emerald-700 hover:bg-emerald-100 disabled:opacity-40">{t('modConfig.reloadOnline')}</button>}
                     </>
                   )}
                   <button type="button" disabled={!canWrite || saving || content === document.content} onClick={save} className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-xs font-black text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40">
-                    {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}保存修改
+                    {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}{t('modConfig.saveChanges')}
                   </button>
                 </div>
               </div>
 
-              {document.file.executable && <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800"><AlertTriangle size={18} className="shrink-0" /><div><p className="font-black">Lua 可执行代码</p><p className="mt-1 leading-5">{document.file.risk}</p></div></div>}
+              {document.file.executable && <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800"><AlertTriangle size={18} className="shrink-0" /><div><p className="font-black">{t('modConfig.luaTitle')}</p><p className="mt-1 leading-5">{document.file.risk}</p></div></div>}
 
               {(document.fields?.length || 0) > 0 && selection?.kind === 'adapter' && (
                 <div>
-                  <h3 className="mb-3 text-xs font-black text-slate-700">可视化参数</h3>
+                  <h3 className="mb-3 text-xs font-black text-slate-700">{t('modConfig.visualFields')}</h3>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {document.fields?.map((field) => <FieldEditor key={field.path} field={field} content={content} format={document.format} disabled={!canWrite} onChange={(value) => updateField(field, value)} />)}
                   </div>
@@ -301,13 +316,13 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
               )}
 
               <div>
-                <div className="mb-2 flex items-center justify-between"><h3 className="text-xs font-black text-slate-700">原始文件</h3><span className="text-[10px] font-bold text-slate-400">最大 1 MiB · {document.format.toUpperCase()}</span></div>
-                <textarea aria-label="Mod 配置原始文件" value={content} readOnly={!canWrite} onChange={(event) => setContent(event.target.value)} spellCheck={false} className="min-h-[320px] w-full resize-y rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-xs leading-6 text-slate-100 outline-none focus:border-sky-500 read-only:opacity-75" />
+                <div className="mb-2 flex items-center justify-between"><h3 className="text-xs font-black text-slate-700">{t('modConfig.rawFile')}</h3><span className="text-[10px] font-bold text-slate-400">1 MiB · {document.format.toUpperCase()}</span></div>
+                <textarea aria-label={t('modConfig.rawFileLabel')} value={content} readOnly={!canWrite} onChange={(event) => setContent(event.target.value)} spellCheck={false} className="min-h-[320px] w-full resize-y rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-xs leading-6 text-slate-100 outline-none focus:border-sky-500 read-only:opacity-75" />
               </div>
 
               {diff.length > 0 && (
                 <div>
-                  <h3 className="mb-2 text-xs font-black text-slate-700">修改差异</h3>
+                  <h3 className="mb-2 text-xs font-black text-slate-700">{t('modConfig.diff')}</h3>
                   <div className="max-h-56 overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] leading-5">
                     {diff.map((line, index) => <div key={`${line.kind}-${index}`} className={line.kind === '+' ? 'text-emerald-300' : 'text-rose-300'}>{line.kind} {line.text || ' '}</div>)}
                   </div>
@@ -315,12 +330,12 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
               )}
 
               <div>
-                <h3 className="mb-3 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} />备份时间线</h3>
-                {backups.length === 0 ? <p className="text-xs text-slate-400">首次修改后会自动创建备份。</p> : (
+                <h3 className="mb-3 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} />{t('modConfig.backups')}</h3>
+                {backups.length === 0 ? <p className="text-xs text-slate-400">{t('modConfig.firstBackup')}</p> : (
                   <div className="space-y-2">{backups.slice(0, 12).map((backup) => (
                     <div key={backup.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5">
-                      <div><p className="text-[11px] font-bold text-slate-700">{new Date(backup.created_at).toLocaleString('zh-CN')}</p><p className="mt-0.5 font-mono text-[9px] text-slate-400">{backup.revision.slice(0, 12)} · {formatBytes(backup.size)}</p></div>
-                      <button type="button" disabled={!canWrite || saving} onClick={() => restore(backup)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-black text-slate-600 hover:bg-slate-50 disabled:opacity-40"><RotateCcw size={12} />恢复</button>
+                      <div><p className="text-[11px] font-bold text-slate-700">{new Date(backup.created_at).toLocaleString(locale)}</p><p className="mt-0.5 font-mono text-[9px] text-slate-400">{backup.revision.slice(0, 12)} · {formatBytes(backup.size)}</p></div>
+                      <button type="button" disabled={!canWrite || saving} onClick={() => restore(backup)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-black text-slate-600 hover:bg-slate-50 disabled:opacity-40"><RotateCcw size={12} />{t('modConfig.restore')}</button>
                     </div>
                   ))}</div>
                 )}
@@ -333,13 +348,16 @@ export const ModConfigWorkspace: React.FC<Props> = ({ mods, localFindings, canWr
   );
 };
 
-const EmptyConfig: React.FC<{ name: string }> = ({ name }) => (
+const EmptyConfig: React.FC<{ name: string }> = ({ name }) => {
+  const { t } = useI18n();
+  return (
   <div className="flex h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-center">
     <FileCode2 size={28} className="text-slate-300" />
-    <p className="mt-3 text-sm font-black text-slate-700">未找到可编辑配置</p>
-    <p className="mt-1 max-w-sm text-xs leading-5 text-slate-400">{name} 中没有符合白名单、大小和安全检查的 UTF-8 文本配置文件。</p>
+    <p className="mt-3 text-sm font-black text-slate-700">{t('modConfig.noConfig')}</p>
+    <p className="mt-1 max-w-sm text-xs leading-5 text-slate-400">{t('modConfig.noConfigDescription', { name })}</p>
   </div>
-);
+  );
+};
 
 const FieldEditor: React.FC<{
   field: ModConfigurationField;

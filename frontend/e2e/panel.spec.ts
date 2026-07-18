@@ -12,7 +12,10 @@ const sessionForRole = (role: Role) => ({
     : ['read'],
 });
 
-const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAuthenticated = true) => {
+const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAuthenticated = true, locale = 'zh-CN') => {
+  await page.addInitScript((initialLocale) => {
+    if (!window.localStorage.getItem('palpanel.locale')) window.localStorage.setItem('palpanel.locale', initialLocale);
+  }, locale);
   let authorization = '';
   let loginBody: unknown;
   let authenticated = initiallyAuthenticated;
@@ -140,6 +143,19 @@ test('loads schema-backed server settings', async ({ page }) => {
   await page.goto('/settings');
   await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
   await expect(page.getByLabel('服务器名称')).toHaveValue('E2E Server');
+});
+
+test('selects and persists the interface language', async ({ page }) => {
+  await installFakeBackend(page, 'admin', true, 'en-US');
+  await page.goto('/settings');
+  await expect(page.getByRole('heading', { name: 'System settings' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+
+  await page.getByRole('button', { name: '简体中文' }).click();
+  await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
 });
 
 test('mobile navigation stays in view and closes from the backdrop', async ({ page }) => {

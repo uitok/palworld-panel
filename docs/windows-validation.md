@@ -102,6 +102,23 @@ PalPanel lifecycle log are required as live-start evidence; current Palworld bui
 reliably emit server stdout. Dependency loading is checked separately in native
 `UE4SS.log` and `PalDefender\Logs\*.log` files.
 
+After an extracted Windows package and a complete game installation are present under the
+runtime root, run the focused control-plane check as well:
+
+```powershell
+.\scripts\windows-live-game-check.ps1 `
+  -RuntimeRoot ".\dev-runtime\windows"
+```
+
+This focused check does not download or install anything. It starts the packaged backend
+and real dedicated server, then requires official REST `info/players`, RCON
+`Info/ShowPlayers/Save`, an observed `.sav` update, a new process after restart, direct
+official REST shutdown, and PalPanel safe-stop completion without the managed-force-stop
+fallback. It also verifies the safe-stop audit record and writes compact evidence below
+`dev-runtime/windows/artifacts/live-game-*`. `-PackageDir` can select a specific extracted
+package; otherwise the newest valid extracted Windows package under the runtime root is
+used.
+
 On success, the per-run test and temp directories can be removed; the package, SteamCMD,
 game installation, and reports remain cached. `-KeepArtifacts` also keeps the isolated
 test root. On failure or timeout, the script terminates its tracked backend process tree

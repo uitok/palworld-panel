@@ -267,11 +267,15 @@ func TestDedicatedConfigurationAdapters(t *testing.T) {
 	writeConfigurationTestFile(t, filepath.Join(manager.cfg.Win64Dir(), "Mods", "mods.txt"), "PalSchema : 1\n")
 	palschemaRoot := filepath.Join(root, "server", "Mods", "Workshop", "palschema")
 	extendedRoot := filepath.Join(root, "server", "Mods", "Workshop", "extended")
+	qualityOfLifeRoot := filepath.Join(root, "server", "Mods", "Workshop", "quality-of-life")
 	writeConfigurationTestFile(t, filepath.Join(palschemaRoot, "settings.json"), `{"Enabled":true}`)
 	writeConfigurationTestFile(t, filepath.Join(extendedRoot, "Scripts", "main.lua"), "BaseRange = 1200\n")
+	writeConfigurationTestFile(t, filepath.Join(qualityOfLifeRoot, "Mods", "NativeMods", "UE4SS", "Mods", "QualityOfLife", "qualityoflifeCONFIG.JSON"), `{"baseRange":{"multiplier":1.5},"workEfficiency":{"multiplier":4}}`)
+	writeConfigurationTestFile(t, filepath.Join(qualityOfLifeRoot, "Mods", "NativeMods", "UE4SS", "Mods", "QualityOfLife", "generated.json"), `{"ignored":true}`)
 	for _, record := range []db.Mod{
 		{ID: "palschema", Name: "PalSchema", PackageName: "PalSchema", WorkshopID: "3625280368", Path: palschemaRoot},
 		{ID: "extended", Name: "Extended Base Range", PackageName: "ExtendedBaseRange", WorkshopID: "3625907101", Path: extendedRoot},
+		{ID: "quality-of-life", Name: "QualityOfLife", PackageName: "QualityOfLife", WorkshopID: "3761921027", Path: qualityOfLifeRoot},
 	} {
 		if err := store.UpsertMod(context.Background(), record); err != nil {
 			t.Fatal(err)
@@ -281,7 +285,7 @@ func TestDedicatedConfigurationAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(adapters) != 4 {
+	if len(adapters) != 5 {
 		t.Fatalf("adapters = %#v", adapters)
 	}
 	for _, adapter := range adapters {
@@ -296,6 +300,23 @@ func TestDedicatedConfigurationAdapters(t *testing.T) {
 	}
 	if len(document.Fields) != 1 || document.Fields[0].Path != "BaseRange" {
 		t.Fatalf("extended fields = %#v", document.Fields)
+	}
+	qualityOfLife := adapters[4]
+	if len(qualityOfLife.Files) != 1 || !strings.EqualFold(qualityOfLife.Files[0].Name, "QualityOfLifeConfig.json") {
+		t.Fatalf("quality-of-life files = %#v", qualityOfLife.Files)
+	}
+	qualityDocument, err := manager.GetConfiguration(t.Context(), qualityOfLife.ID, qualityOfLife.Files[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qualityDocument.Fields) != 2 || qualityDocument.Fields[0].Path != "baseRange.multiplier" || qualityDocument.Fields[1].Path != "workEfficiency.multiplier" {
+		t.Fatalf("quality-of-life fields = %#v", qualityDocument.Fields)
+	}
+	if _, err := manager.WriteConfiguration(t.Context(), qualityOfLife.ID, qualityOfLife.Files[0].ID, ConfigWriteRequest{
+		Content:  `{"baseRange":`,
+		Revision: qualityDocument.File.Revision,
+	}); configurationErrorCode(err) != "configuration_parse_failed" {
+		t.Fatalf("invalid quality-of-life JSON error = %v", err)
 	}
 }
 

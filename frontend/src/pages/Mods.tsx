@@ -33,21 +33,22 @@ import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { ModConfigWorkspace } from '../components/mods/ModConfigWorkspace';
 import { useServerStore } from '../store/useServerStore';
+import { useI18n, type TranslationKey } from '../i18n';
 
 type ModsTab = 'store' | 'installed' | 'local' | 'config';
 
-const tabs: Array<{ id: ModsTab; label: string }> = [
-  { id: 'store', label: 'Mod 商店' },
-  { id: 'installed', label: '已安装' },
-  { id: 'local', label: '本地检测' },
-  { id: 'config', label: '配置中心' },
+const tabs: Array<{ id: ModsTab; labelKey: TranslationKey }> = [
+  { id: 'store', labelKey: 'mods.store' },
+  { id: 'installed', labelKey: 'mods.installed' },
+  { id: 'local', labelKey: 'mods.local' },
+  { id: 'config', labelKey: 'mods.config' },
 ];
 
 const sortOptions = [
-  { id: 'popular', label: '热门' },
-  { id: 'trend', label: '趋势' },
-  { id: 'new', label: '最新' },
-  { id: 'updated', label: '最近更新' },
+  { id: 'popular', labelKey: 'mods.popular' as TranslationKey },
+  { id: 'trend', labelKey: 'mods.trending' as TranslationKey },
+  { id: 'new', labelKey: 'mods.new' as TranslationKey },
+  { id: 'updated', labelKey: 'mods.updated' as TranslationKey },
 ];
 
 const isSteamLoginRequired = (error: unknown) => error instanceof ApiError && error.code === 'steam_login_required';
@@ -58,6 +59,7 @@ const isWorkshopImportSource = (source: string) => {
 };
 
 export const Mods: React.FC = () => {
+  const { t } = useI18n();
   const { session } = useServerStore();
   const canAuthenticateSteam = Boolean(session?.permissions.includes('security:write'));
   const [activeTab, setActiveTab] = useState<ModsTab>('store');
@@ -402,19 +404,19 @@ export const Mods: React.FC = () => {
 				  active ? 'bg-sky-100 text-sky-800 ring-1 ring-sky-200' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
 				}`}
 			  >
-				{tab.label}
+				{t(tab.labelKey)}
 			  </button>
 			);
 		  })}
 		</div>
 		<button type="button" onClick={() => setImportOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-4 py-2.5 text-xs font-bold text-white hover:bg-sky-600">
-		  <DownloadCloud size={15} />导入 Mod
+		  <DownloadCloud size={15} />{t('mods.import')}
 		</button>
       </div>
 
       {pendingRestart && (
         <div className="rounded-lg border border-amber-100 bg-amber-50 px-5 py-4">
-          <p className="text-xs font-bold text-amber-800">Mod 列表已变更，服务器需要重启后生效。</p>
+          <p className="text-xs font-bold text-amber-800">{t('mods.pendingRestart')}</p>
         </div>
       )}
       {message && <div className="rounded-lg border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">{message}</div>}
@@ -423,7 +425,7 @@ export const Mods: React.FC = () => {
       {activeTab === 'store' && workshopAuthLoading && (
         <div className="py-12 text-center text-xs font-semibold text-slate-400">
           <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
-          正在验证 Steam 登录缓存...
+          {t('mods.verifyingSteam')}
         </div>
       )}
 
@@ -452,7 +454,7 @@ export const Mods: React.FC = () => {
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') void loadStore(true);
                   }}
-                  placeholder="搜索 Workshop Mod"
+                  placeholder={t('mods.searchWorkshop')}
                   className="w-full rounded-lg border border-slate-200 py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
                 />
               </div>
@@ -462,7 +464,7 @@ export const Mods: React.FC = () => {
                   type="text"
                   value={tagText}
                   onChange={(event) => setTagText(event.target.value)}
-                  placeholder="标签，逗号分隔"
+                  placeholder={t('mods.tags')}
                   className="w-full rounded-lg border border-slate-200 py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
                 />
               </div>
@@ -473,7 +475,7 @@ export const Mods: React.FC = () => {
                 className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50"
               >
                 <Search size={14} />
-                搜索
+                {t('mods.search')}
               </button>
             </div>
             <div className="mt-3 flex max-w-full items-center gap-2 overflow-x-auto">
@@ -491,7 +493,7 @@ export const Mods: React.FC = () => {
                       active ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'
                     }`}
                   >
-                    {option.label}
+                    {t(option.labelKey)}
                   </button>
                 );
               })}
@@ -515,12 +517,12 @@ export const Mods: React.FC = () => {
           {storeLoading && (
             <div className="py-10 text-center text-xs font-semibold text-slate-400">
               <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
-              正在读取 Workshop...
+              {t('mods.loadingWorkshop')}
             </div>
           )}
           {!storeLoading && !storeError && storeItems.length === 0 && (
             <div className="rounded-lg border border-dashed border-slate-200 bg-white px-4 py-12 text-center text-xs font-semibold text-slate-400">
-              暂无匹配 Mod
+              {t('mods.noMatches')}
             </div>
           )}
           {storeNextCursor && (
@@ -531,7 +533,7 @@ export const Mods: React.FC = () => {
                 disabled={storeLoading}
                 className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
               >
-                加载更多{storeTotal > 0 ? `（${storeItems.length}/${storeTotal}）` : ''}
+                {t('mods.loadMore')}{storeTotal > 0 ? ` (${storeItems.length}/${storeTotal})` : ''}
               </button>
             </div>
           )}
@@ -542,9 +544,9 @@ export const Mods: React.FC = () => {
         <section className="rounded-lg border border-slate-100 bg-white p-4 sm:p-6">
           <div className="flex flex-col gap-3 border-b border-slate-100 pb-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <h2 className="text-[15px] font-bold text-slate-800">本地 Mod 检测</h2>
+              <h2 className="text-[15px] font-bold text-slate-800">{t('mods.localScan')}</h2>
               <p className="mt-1 break-all font-mono text-[10px] font-semibold text-slate-400" title={localScan?.server_dir || undefined}>
-                {localScan?.server_dir || '等待扫描服务器目录'}
+                {localScan?.server_dir || t('mods.waitingScan')}
               </p>
             </div>
             <button
@@ -554,7 +556,7 @@ export const Mods: React.FC = () => {
               className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
               <RefreshCw size={14} className={localScanLoading ? 'animate-spin' : ''} />
-              重新扫描
+              {t('mods.rescan')}
             </button>
           </div>
 
@@ -654,11 +656,11 @@ export const Mods: React.FC = () => {
           {loading ? (
             <div className="py-12 text-center text-xs font-semibold text-slate-400">
               <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
-              正在读取 Mod 列表...
+              {t('mods.loadingInstalled')}
             </div>
           ) : (
             <DataTable
-              title={`已安装 Mod（${mods.length}）`}
+              title={t('mods.installedTitle', { count: mods.length })}
               headers={headers}
               data={filteredInstalled}
               searchText={installedSearch}
