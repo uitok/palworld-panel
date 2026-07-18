@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -52,26 +53,38 @@ func hardenCredentialTreeWithRunner(ctx context.Context, steamCMDDir string, run
 	return nil
 }
 
-func launchInteractiveSteamCMD(binary, directory, accountName string) error {
-	cmd, err := interactiveSteamCMDCommand(binary, directory, accountName)
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("launch SteamCMD: %w", err)
-	}
-	if err := cmd.Process.Release(); err != nil {
-		return fmt.Errorf("release SteamCMD process handle: %w", err)
-	}
-	return nil
-}
-
-func interactiveSteamCMDCommand(binary, directory, accountName string) (*exec.Cmd, error) {
+func launchInteractiveSteamCMD(binary, directory, accountName string) (<-chan struct{}, error) {
 	if err := ValidateAccountName(accountName); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(binary, "+login", accountName)
-	cmd.Dir = directory
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_CONSOLE | windows.CREATE_NEW_PROCESS_GROUP}
-	return cmd, nil
+	applicationName, err := windows.UTF16PtrFromString(binary)
+	if err != nil {
+		return nil, fmt.Errorf("encode SteamCMD path: %w", err)
+	}
+	commandLine, err := windows.UTF16PtrFromString(interactiveSteamCMDCommandLine(binary, accountName))
+	if err != nil {
+		return nil, fmt.Errorf("encode SteamCMD command line: %w", err)
+	}
+	currentDirectory, err := windows.UTF16PtrFromString(directory)
+	if err != nil {
+		return nil, fmt.Errorf("encode SteamCMD directory: %w", err)
+	}
+	startup := &windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
+	process := &windows.ProcessInformation{}
+	flags := uint32(windows.CREATE_NEW_CONSOLE | windows.CREATE_NEW_PROCESS_GROUP)
+	if err := windows.CreateProcess(applicationName, commandLine, nil, nil, false, flags, nil, currentDirectory, startup, process); err != nil {
+		return nil, fmt.Errorf("launch SteamCMD with an interactive console: %w", err)
+	}
+	_ = windows.CloseHandle(process.Thread)
+	done := make(chan struct{})
+	go func() {
+		_, _ = windows.WaitForSingleObject(process.Process, windows.INFINITE)
+		_ = windows.CloseHandle(process.Process)
+		close(done)
+	}()
+	return done, nil
+}
+
+func interactiveSteamCMDCommandLine(binary, accountName string) string {
+	return strings.Join([]string{syscall.EscapeArg(binary), "+login", syscall.EscapeArg(accountName)}, " ")
 }

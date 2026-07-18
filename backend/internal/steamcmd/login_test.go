@@ -47,14 +47,15 @@ func TestStartInteractiveLoginHardensCredentialsAndLaunchesNewSession(t *testing
 		hardened = directory == cfg.SteamCMDDir
 		return nil
 	}
-	client.interactiveLauncher = func(binary, directory, account string) error {
+	done := make(chan struct{})
+	client.interactiveLauncher = func(binary, directory, account string) (<-chan struct{}, error) {
 		if !hardened {
 			t.Fatal("interactive launcher ran before the credential ACL hardener")
 		}
 		if binary != cfg.SteamCMDBinaryPath() || directory != cfg.SteamCMDDir || account != "fixture_user" {
 			t.Fatalf("launcher values = %q, %q, %q", binary, directory, account)
 		}
-		return nil
+		return done, nil
 	}
 	status, err := client.StartInteractiveLogin(t.Context(), "fixture_user")
 	if err != nil {
@@ -62,6 +63,46 @@ func TestStartInteractiveLoginHardensCredentialsAndLaunchesNewSession(t *testing
 	}
 	if !status.LoginInProgress || status.LoggedIn || !status.CredentialsSecure {
 		t.Fatalf("status = %#v", status)
+	}
+	blockedCtx, cancelBlocked := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancelBlocked()
+	if _, err := client.acquire(blockedCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SteamCMD command gate was released while the login window was open: %v", err)
+	}
+	close(done)
+	deadline := time.Now().Add(time.Second)
+	for client.LoginStatus("fixture_user").LoginInProgress && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if client.LoginStatus("fixture_user").LoginInProgress {
+		t.Fatal("login process exit did not clear progress state")
+	}
+	release, err := client.acquire(t.Context())
+	if err != nil {
+		t.Fatalf("SteamCMD command gate was not released after login exit: %v", err)
+	}
+	release()
+}
+
+func TestVerifyLoginRejectsConcurrentInteractiveWindow(t *testing.T) {
+	client, _ := newTestClient(t)
+	client.login = loginState{account: "fixture_user", loginInProgress: true, credentialsSecure: true}
+	status, err := client.VerifyLogin(t.Context(), "fixture_user")
+	if !errors.Is(err, ErrLoginInProgress) || !status.LoginInProgress {
+		t.Fatalf("VerifyLogin = %#v, %v", status, err)
+	}
+}
+
+func TestLoginSuccessOutputAcceptsCurrentSteamCMDSuccessMarkers(t *testing.T) {
+	for _, output := range []string{
+		"Waiting for user info...OK",
+		"Logged in OK",
+		"Login successful",
+		"Logging in using cached credentials\nConnecting anonymously to Steam Public...OK",
+	} {
+		if !loginSuccessOutput([]byte(output)) {
+			t.Errorf("success output was rejected: %q", output)
+		}
 	}
 }
 

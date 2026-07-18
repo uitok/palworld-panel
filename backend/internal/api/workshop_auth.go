@@ -114,6 +114,8 @@ func failSteamAuth(c *gin.Context, operation string, err error) {
 		fail(c, http.StatusBadRequest, "steam_account_required", mods.ErrSteamAccountRequired.Error())
 	case errors.Is(err, steamcmd.ErrInteractiveLogin):
 		fail(c, http.StatusConflict, "steam_login_unsupported", steamcmd.ErrInteractiveLogin.Error())
+	case errors.Is(err, steamcmd.ErrLoginInProgress):
+		fail(c, http.StatusConflict, "steam_login_in_progress", steamcmd.ErrLoginInProgress.Error())
 	case errors.Is(err, context.Canceled):
 		fail(c, http.StatusRequestTimeout, "steam_login_cancelled", "Steam login operation was cancelled")
 	case errors.Is(err, context.DeadlineExceeded):

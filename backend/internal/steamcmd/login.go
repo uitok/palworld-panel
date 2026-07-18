@@ -18,13 +18,14 @@ const (
 
 var (
 	ErrLoginRequired      = errors.New("Steam login is required; open the SteamCMD login window and verify the cached session before downloading Workshop Mods")
+	ErrLoginInProgress    = errors.New("SteamCMD login window is still open; complete login, enter quit, and wait for the window to close")
 	ErrInteractiveLogin   = errors.New("interactive SteamCMD login is supported only on a Windows host")
 	ErrInvalidAccountName = errors.New("invalid Steam account name")
 	steamAccountNameRegex = regexp.MustCompile(`^[A-Za-z0-9_]{3,64}$`)
 )
 
 type credentialHardener func(context.Context, string) error
-type interactiveLauncher func(string, string, string) error
+type interactiveLauncher func(string, string, string) (<-chan struct{}, error)
 type sessionVerifier func(context.Context, string) (bool, error)
 
 // LoginStatus contains only non-secret account and verification metadata.
@@ -47,6 +48,7 @@ type loginState struct {
 	verifiedAt        time.Time
 	loginInProgress   bool
 	credentialsSecure bool
+	attempt           uint64
 }
 
 func ValidateAccountName(accountName string) error {
@@ -106,6 +108,9 @@ func (c *Client) StartInteractiveLogin(ctx context.Context, accountName string) 
 	if err := ValidateAccountName(accountName); err != nil {
 		return c.LoginStatus(accountName), err
 	}
+	if status := c.LoginStatus(accountName); status.LoginInProgress {
+		return status, ErrLoginInProgress
+	}
 	if err := c.Ensure(ctx); err != nil {
 		return c.LoginStatus(accountName), err
 	}
@@ -113,7 +118,12 @@ func (c *Client) StartInteractiveLogin(ctx context.Context, accountName string) 
 	if err != nil {
 		return c.LoginStatus(accountName), err
 	}
-	defer release()
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			release()
+		}
+	}()
 	if err := c.validateInstalled(); err != nil {
 		return c.LoginStatus(accountName), err
 	}
@@ -123,16 +133,34 @@ func (c *Client) StartInteractiveLogin(ctx context.Context, accountName string) 
 	if c.interactiveLauncher == nil {
 		return c.LoginStatus(accountName), fmt.Errorf("SteamCMD interactive launcher is unavailable")
 	}
-	if err := c.interactiveLauncher(c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, accountName); err != nil {
+	done, err := c.interactiveLauncher(c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, accountName)
+	if err != nil {
 		return c.LoginStatus(accountName), fmt.Errorf("open SteamCMD login window: %w", err)
 	}
+	if done == nil {
+		return c.LoginStatus(accountName), errors.New("SteamCMD interactive launcher did not return process status")
+	}
 	c.loginMu.Lock()
+	c.login.attempt++
+	attempt := c.login.attempt
 	c.login.account = accountName
 	c.login.verifiedAt = time.Time{}
 	c.login.loginInProgress = true
 	c.login.credentialsSecure = true
 	c.loginMu.Unlock()
+	releaseOnReturn = false
+	go c.watchInteractiveLogin(accountName, attempt, done, release)
 	return c.LoginStatus(accountName), nil
+}
+
+func (c *Client) watchInteractiveLogin(accountName string, attempt uint64, done <-chan struct{}, release func()) {
+	defer release()
+	<-done
+	c.loginMu.Lock()
+	if c.login.account == accountName && c.login.attempt == attempt {
+		c.login.loginInProgress = false
+	}
+	c.loginMu.Unlock()
 }
 
 func (c *Client) VerifyLogin(ctx context.Context, accountName string) (LoginStatus, error) {
@@ -142,6 +170,9 @@ func (c *Client) VerifyLogin(ctx context.Context, accountName string) (LoginStat
 	}
 	if err := ValidateAccountName(accountName); err != nil {
 		return c.LoginStatus(accountName), err
+	}
+	if status := c.LoginStatus(accountName); status.LoginInProgress {
+		return status, ErrLoginInProgress
 	}
 	if err := c.Ensure(ctx); err != nil {
 		return c.LoginStatus(accountName), err
@@ -240,6 +271,8 @@ func (c *Client) verifyCachedSession(ctx context.Context, accountName string) (b
 func loginSuccessOutput(output []byte) bool {
 	lower := strings.ToLower(string(output))
 	return strings.Contains(lower, "waiting for user info...ok") ||
+		strings.Contains(lower, "logged in ok") ||
+		strings.Contains(lower, "login successful") ||
 		strings.Contains(lower, "logging in using cached credentials") && strings.Contains(lower, "steam public...ok")
 }
 

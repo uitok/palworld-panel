@@ -76,7 +76,7 @@ x-ai-translation-test: &aiTranslationTest
     application/json:
       schema: {$ref: '#/components/schemas/AITranslationTestEnvelope'}
 x-network-proxy-config: &networkProxyConfig
-  description: Public installation and community-server proxy settings. Credentials are never returned.
+  description: Public download/server-update and community-server proxy settings. The download scope includes SteamCMD, Workshop, GitHub/HTTPS mods, PalDefender, and UE4SS. Credentials are never returned.
   content:
     application/json:
       schema: {$ref: '#/components/schemas/NetworkProxyConfigEnvelope'}

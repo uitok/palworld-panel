@@ -5,10 +5,8 @@ package steamcmd
 import (
 	"context"
 	"path/filepath"
-	"reflect"
+	"strings"
 	"testing"
-
-	"golang.org/x/sys/windows"
 )
 
 func TestHardenCredentialTreeTargetsOnlySteamCMDConfig(t *testing.T) {
@@ -31,20 +29,9 @@ func TestHardenCredentialTreeTargetsOnlySteamCMDConfig(t *testing.T) {
 	}
 }
 
-func TestInteractiveSteamCMDCommandUsesDirectNewConsole(t *testing.T) {
-	cmd, err := interactiveSteamCMDCommand(`C:\tools\steamcmd.exe`, `C:\tools`, "fixture_user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantArgs := []string{`C:\tools\steamcmd.exe`, "+login", "fixture_user"}
-	if !reflect.DeepEqual(cmd.Args, wantArgs) {
-		t.Fatalf("command args = %#v, want %#v", cmd.Args, wantArgs)
-	}
-	if cmd.Dir != `C:\tools` {
-		t.Fatalf("command directory = %q", cmd.Dir)
-	}
-	wantFlags := uint32(windows.CREATE_NEW_CONSOLE | windows.CREATE_NEW_PROCESS_GROUP)
-	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags&wantFlags != wantFlags {
-		t.Fatalf("creation flags = %#v", cmd.SysProcAttr)
+func TestInteractiveSteamCMDCommandLineQuotesBinaryAndUsesOnlyAccountName(t *testing.T) {
+	commandLine := interactiveSteamCMDCommandLine(`C:\Program Files\SteamCMD\steamcmd.exe`, "fixture_user")
+	if !strings.Contains(commandLine, `"C:\Program Files\SteamCMD\steamcmd.exe"`) || !strings.HasSuffix(commandLine, "+login fixture_user") {
+		t.Fatalf("command line = %q", commandLine)
 	}
 }

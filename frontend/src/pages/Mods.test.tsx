@@ -191,9 +191,12 @@ describe('Mods Workshop store', () => {
   it('does not load Workshop until SteamCMD login is explicitly verified', async () => {
     mocks.authApi.status.mockResolvedValue({ initialized: true, authenticated: true, user: { name: 'admin', role: 'admin', permissions: ['read', 'mods:write', 'security:write'] } });
     mocks.authApi.me.mockResolvedValue({ name: 'admin', role: 'admin', permissions: ['read', 'mods:write', 'security:write'] });
-    mocks.modsApi.workshopAuthStatus.mockResolvedValue({
+    mocks.modsApi.workshopAuthStatus.mockResolvedValueOnce({
       supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
       logged_in: false, verification_required: true,
+    }).mockResolvedValueOnce({
+      supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
+      logged_in: true, verification_required: false, account_name: 'steam_account', last_verified_at: '2026-07-15T12:00:00Z',
     });
 
     renderMods();
@@ -207,8 +210,8 @@ describe('Mods Workshop store', () => {
     await waitFor(() => expect(mocks.modsApi.startWorkshopAuth).toHaveBeenCalledWith('steam_account'));
     expect(mocks.modsApi.searchWorkshop).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: '我已完成，验证登录' }));
-    await waitFor(() => expect(mocks.modsApi.verifyWorkshopAuth).toHaveBeenCalledWith('steam_account'));
+    expect(screen.getByRole('button', { name: '我已完成，验证登录' })).toBeDisabled();
+    await waitFor(() => expect(mocks.modsApi.workshopAuthStatus).toHaveBeenCalledTimes(2), { timeout: 2_000 });
     await waitFor(() => expect(mocks.modsApi.searchWorkshop).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('dialog', { name: '登录 Steam 以使用 Workshop' })).not.toBeInTheDocument();
   });

@@ -8,6 +8,6 @@ func hardenCredentialTree(context.Context, string) error {
 	return ErrInteractiveLogin
 }
 
-func launchInteractiveSteamCMD(string, string, string) error {
-	return ErrInteractiveLogin
+func launchInteractiveSteamCMD(string, string, string) (<-chan struct{}, error) {
+	return nil, ErrInteractiveLogin
 }

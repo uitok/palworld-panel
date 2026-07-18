@@ -53,6 +53,29 @@ func TestInstallReleaseFromZip(t *testing.T) {
 	}
 }
 
+func TestPublicHTTPClientUsesManagedDownloadProxy(t *testing.T) {
+	manager := Manager{
+		client:   &http.Client{},
+		proxyURL: func() (string, error) { return "http://proxy-user:proxy-secret@127.0.0.1:7890", nil },
+	}
+	client, err := manager.publicHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy == nil {
+		t.Fatal("PalDefender client did not configure the managed proxy")
+	}
+	request, _ := http.NewRequest(http.MethodGet, latestURL, nil)
+	proxyURL, err := transport.Proxy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyURL == nil || proxyURL.Host != "127.0.0.1:7890" || proxyURL.User == nil {
+		t.Fatalf("proxy URL = %#v", proxyURL)
+	}
+}
+
 func TestInstallReleasePrefersDirectGitHubAssets(t *testing.T) {
 	assets := map[string][]byte{
 		"d3d9.dll":        []byte("direct-loader"),

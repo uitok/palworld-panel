@@ -62,6 +62,28 @@ func TestSafeDownloaderRejectsNonPublicDestinationsAndCredentials(t *testing.T) 
 	}
 }
 
+func TestSafeDownloaderUsesOnlyExplicitManagedProxy(t *testing.T) {
+	downloader := newSafeDownloader(func() (string, error) {
+		return "http://proxy-user:proxy-secret@127.0.0.1:7890", nil
+	})
+	client, err := downloader.clientForDownload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy == nil {
+		t.Fatal("managed download proxy was not configured")
+	}
+	request, _ := http.NewRequest(http.MethodGet, "https://public.example/mod.zip", nil)
+	proxyURL, err := transport.Proxy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyURL == nil || proxyURL.Host != "127.0.0.1:7890" || proxyURL.User == nil {
+		t.Fatalf("proxy URL = %#v", proxyURL)
+	}
+}
+
 func TestSafeDownloaderAllowsExactlyFiveRedirects(t *testing.T) {
 	downloader := newSafeDownloader()
 	downloader.resolver = staticResolver{"public.example": {{IP: net.ParseIP("8.8.8.8")}}}

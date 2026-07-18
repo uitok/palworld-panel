@@ -20,6 +20,7 @@ import (
 	"palpanel/internal/db"
 	"palpanel/internal/id"
 	"palpanel/internal/jobs"
+	"palpanel/internal/networkproxy"
 	"palpanel/internal/steamcmd"
 )
 
@@ -108,11 +109,12 @@ func newImportRegistry(cfg appconfig.Config) *importRegistry {
 	if limit <= 0 {
 		limit = 256 << 20
 	}
+	proxyService := networkproxy.New(cfg)
 	return &importRegistry{
 		records:       map[string]*importRecord{},
 		root:          root,
 		now:           time.Now,
-		downloader:    newSafeDownloader(),
+		downloader:    newSafeDownloader(proxyService.InstallProxyURL),
 		githubAPIBase: "https://api.github.com",
 		maxBytes:      limit,
 		cfg:           cfg,

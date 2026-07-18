@@ -16,6 +16,7 @@ import (
 
 	"palpanel/internal/aitranslation"
 	"palpanel/internal/appconfig"
+	"palpanel/internal/networkproxy"
 )
 
 const (
@@ -80,17 +81,34 @@ type SteamClient struct {
 	appID      string
 	baseURL    string
 	httpClient *http.Client
+	proxyURL   func() (string, error)
 }
 
 func NewSteamClient(apiKey, appID string) *SteamClient {
+	directTransport, _ := networkproxy.Transport("")
 	return &SteamClient{
 		apiKey:  strings.TrimSpace(apiKey),
 		appID:   strings.TrimSpace(appID),
 		baseURL: appconfig.DefaultSteamAPIBaseURL,
 		httpClient: &http.Client{
-			Timeout: workshopRequestTimeout,
+			Transport: directTransport,
+			Timeout:   workshopRequestTimeout,
 		},
 	}
+}
+
+func (c *SteamClient) clientForRequest() (*http.Client, error) {
+	if c.proxyURL == nil {
+		return c.httpClient, nil
+	}
+	rawProxy, err := c.proxyURL()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(rawProxy) == "" {
+		return c.httpClient, nil
+	}
+	return networkproxy.HTTPClient(c.httpClient, rawProxy, c.httpClient.Timeout)
 }
 
 func (c *SteamClient) QueryFiles(ctx context.Context, params WorkshopSearchParams) (WorkshopSearchResult, error) {
@@ -196,7 +214,11 @@ func (c *SteamClient) doJSON(ctx context.Context, method, path string, query url
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	client, clientErr := c.clientForRequest()
+	if clientErr != nil {
+		return SteamAPIError{Code: "steam_unreachable", Message: "Steam API proxy configuration could not be loaded"}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		var netErr net.Error
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -239,6 +261,8 @@ func NewWorkshopService(cfg appconfig.Config) *WorkshopService {
 		timeout = workshopRequestTimeout
 	}
 	client := NewSteamClient(cfg.EffectiveSteamWebAPIKey(), cfg.WorkshopAppID)
+	proxyService := networkproxy.New(cfg)
+	client.proxyURL = proxyService.InstallProxyURL
 	if baseURL := strings.TrimRight(strings.TrimSpace(cfg.SteamAPIBaseURL), "/"); baseURL != "" {
 		client.baseURL = baseURL
 	}

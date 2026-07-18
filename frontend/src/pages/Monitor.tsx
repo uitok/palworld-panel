@@ -204,10 +204,10 @@ export const Monitor: React.FC = () => {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Bug size={16} className="text-violet-500" />
-              <h3 className="text-[14px] font-bold text-slate-800">Debug 日志</h3>
+              <h3 className="text-[14px] font-bold text-slate-800">PalPanel 面板 Debug 日志</h3>
             </div>
             <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
-              开启后记录接口耗时、健康探测和连接结果，不记录密码、Token 或请求正文。日志达到上限后自动轮转。
+              这是 PalPanel 面板自身的运行日志开关。开启后记录接口耗时、健康探测和连接结果，不会开启 Palworld 或 PalDefender 的 Debug，也不记录密码、Token 或请求正文。日志达到上限后自动轮转。
             </p>
           </div>
           <button
@@ -217,7 +217,7 @@ export const Monitor: React.FC = () => {
             className={`inline-flex shrink-0 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50 ${debugStatus?.enabled ? 'bg-rose-500 hover:bg-rose-600' : 'bg-violet-600 hover:bg-violet-700'}`}
           >
             <Bug size={14} />
-            {debugSaving ? '正在保存' : debugStatus?.enabled ? '关闭 Debug' : '开启 Debug'}
+            {debugSaving ? '正在保存' : debugStatus?.enabled ? '关闭面板 Debug' : '开启面板 Debug'}
           </button>
         </div>
         <div className="mt-4 flex min-w-0 items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4">
