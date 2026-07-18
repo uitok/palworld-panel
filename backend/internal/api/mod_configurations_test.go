@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"palpanel/internal/appconfig"
+	panelauth "palpanel/internal/auth"
 	"palpanel/internal/db"
 	"palpanel/internal/docker"
 	"palpanel/internal/mods"
@@ -75,4 +76,73 @@ func TestModConfigurationHandlersListReadAndWrite(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil || document.Data.Content != `{"Enabled":false}` {
 		t.Fatalf("write response = %s, %v", response.Body.String(), err)
 	}
+}
+
+func TestModConfigurationRoutesEnforceActualPermissions(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		role       Role
+		wantUpdate int
+	}{
+		{name: "viewer", role: RoleViewer, wantUpdate: http.StatusForbidden},
+		{name: "operator", role: RoleOperator, wantUpdate: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			router, file := newModConfigurationPermissionRouter(t, test.role)
+			request := httptest.NewRequest(http.MethodGet, "/api/mods/mod_permission/files/"+file.ID, nil)
+			authorizeTestRequest(request)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("GET status = %d, body = %s", response.Code, response.Body.String())
+			}
+
+			body := bytes.NewBufferString(`{"content":"{\"Enabled\":false}","revision":"` + file.Revision + `"}`)
+			request = httptest.NewRequest(http.MethodPut, "/api/mods/mod_permission/files/"+file.ID, body)
+			request.Header.Set("Content-Type", "application/json")
+			authorizeTestRequest(request)
+			response = httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != test.wantUpdate {
+				t.Fatalf("PUT status = %d, want %d: %s", response.Code, test.wantUpdate, response.Body.String())
+			}
+		})
+	}
+}
+
+func newModConfigurationPermissionRouter(t *testing.T, role Role) (*gin.Engine, mods.ConfigFile) {
+	t.Helper()
+	root := t.TempDir()
+	cfg := appconfig.Config{
+		RuntimeRoot: root, DataDir: filepath.Join(root, "data"), ServerDir: filepath.Join(root, "server"),
+		UploadsDir: filepath.Join(root, "uploads"), BackupsDir: filepath.Join(root, "backups"),
+		DBPath: filepath.Join(root, "test.db"), RequireAuth: true,
+	}
+	modRoot := filepath.Join(cfg.ServerDir, "Mods", "Workshop", "mod_permission")
+	if err := os.MkdirAll(modRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modRoot, "Config.json"), []byte(`{"Enabled":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := db.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	provisionTestPrincipal(t, store, role)
+	if err := store.UpsertMod(t.Context(), db.Mod{ID: "mod_permission", Name: "Permission", PackageName: "Permission", Path: modRoot}); err != nil {
+		t.Fatal(err)
+	}
+	manager := mods.NewManager(cfg, store, docker.NewRunner(cfg))
+	files, err := manager.ListModConfigFiles(t.Context(), "mod_permission")
+	if err != nil || len(files) != 1 {
+		t.Fatalf("files = %#v, %v", files, err)
+	}
+	server := Server{cfg: cfg, store: store, mods: manager, auth: panelauth.New(store)}
+	router := gin.New()
+	api := router.Group("/api")
+	api.Use(Auth(cfg, server.auth), AuditMiddleware(store))
+	server.registerModConfigurationRoutes(api)
+	return router, files[0]
 }

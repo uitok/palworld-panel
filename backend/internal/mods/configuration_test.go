@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"palpanel/internal/appconfig"
@@ -45,6 +46,12 @@ func TestModConfigurationFilesWriteBackupRestoreAndRevision(t *testing.T) {
 	if written.File.Revision == document.File.Revision {
 		t.Fatal("revision did not change")
 	}
+	for _, pattern := range []string{".palpanel-config-*", "Config.json.palpanel-old-*"} {
+		matches, globErr := filepath.Glob(filepath.Join(modRoot, pattern))
+		if globErr != nil || len(matches) != 0 {
+			t.Fatalf("temporary files for %q = %#v, %v", pattern, matches, globErr)
+		}
+	}
 	if _, err := manager.WriteModConfigFile(t.Context(), "mod_one", files[0].ID, ConfigWriteRequest{Content: `{}`, Revision: document.File.Revision}); configurationErrorCode(err) != "configuration_revision_conflict" {
 		t.Fatalf("stale write error = %v", err)
 	}
@@ -58,6 +65,54 @@ func TestModConfigurationFilesWriteBackupRestoreAndRevision(t *testing.T) {
 	}
 	if restored.Content != document.Content {
 		t.Fatalf("restored content = %q, want %q", restored.Content, document.Content)
+	}
+}
+
+func TestModConfigurationConcurrentRevisionAllowsOnlyOneWriter(t *testing.T) {
+	manager, store, root := newConfigurationTestManager(t)
+	modRoot := filepath.Join(root, "server", "Mods", "Workshop", "mod_race")
+	writeConfigurationTestFile(t, filepath.Join(modRoot, "Config.json"), `{"Value":0}`)
+	if err := store.UpsertMod(t.Context(), db.Mod{ID: "mod_race", Name: "Race", PackageName: "Race", Path: modRoot}); err != nil {
+		t.Fatal(err)
+	}
+	files, err := manager.ListModConfigFiles(t.Context(), "mod_race")
+	if err != nil || len(files) != 1 {
+		t.Fatalf("files = %#v, %v", files, err)
+	}
+	document, err := manager.GetModConfigFile(t.Context(), "mod_race", files[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for _, content := range []string{`{"Value":1}`, `{"Value":2}`} {
+		go func(content string) {
+			ready.Done()
+			<-start
+			_, writeErr := manager.WriteModConfigFile(t.Context(), "mod_race", files[0].ID, ConfigWriteRequest{Content: content, Revision: document.File.Revision})
+			results <- writeErr
+		}(content)
+	}
+	ready.Wait()
+	close(start)
+	successes, conflicts := 0, 0
+	for range 2 {
+		if writeErr := <-results; writeErr == nil {
+			successes++
+		} else if configurationErrorCode(writeErr) == "configuration_revision_conflict" {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected concurrent write error: %v", writeErr)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes = %d, conflicts = %d", successes, conflicts)
+	}
+	backups, err := manager.ListModConfigBackups(t.Context(), "mod_race", files[0].ID)
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %#v, %v", backups, err)
 	}
 }
 
@@ -119,6 +174,89 @@ func TestModConfigurationRejectsOversizedInvalidJSONAndLinks(t *testing.T) {
 	_, err = manager.WriteModConfigFile(t.Context(), "mod_safe", files[0].ID, ConfigWriteRequest{Content: `{`, Revision: document.File.Revision})
 	if configurationErrorCode(err) != "configuration_parse_failed" {
 		t.Fatalf("invalid JSON error = %v", err)
+	}
+}
+
+func TestModConfigurationValidatesTOMLINIAndCFG(t *testing.T) {
+	for _, test := range []struct {
+		name, filename, initial, invalid string
+	}{
+		{name: "toml", filename: "settings.toml", initial: "enabled = true\n", invalid: "enabled = [\n"},
+		{name: "ini", filename: "settings.ini", initial: "[General]\nenabled=true\n", invalid: "[General\nenabled=true\n"},
+		{name: "cfg", filename: "settings.cfg", initial: "enabled: true\n", invalid: "missing assignment\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, store, root := newConfigurationTestManager(t)
+			modID := "mod_" + test.name
+			modRoot := filepath.Join(root, "server", "Mods", "Workshop", modID)
+			writeConfigurationTestFile(t, filepath.Join(modRoot, test.filename), test.initial)
+			if err := store.UpsertMod(t.Context(), db.Mod{ID: modID, Name: test.name, PackageName: test.name, Path: modRoot}); err != nil {
+				t.Fatal(err)
+			}
+			files, err := manager.ListModConfigFiles(t.Context(), modID)
+			if err != nil || len(files) != 1 {
+				t.Fatalf("files = %#v, %v", files, err)
+			}
+			_, err = manager.WriteModConfigFile(t.Context(), modID, files[0].ID, ConfigWriteRequest{Content: test.invalid, Revision: files[0].Revision})
+			if configurationErrorCode(err) != "configuration_parse_failed" {
+				t.Fatalf("invalid %s error = %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestModConfigurationRejectsDatabasePathOutsideManagedWorkshopMod(t *testing.T) {
+	manager, store, root := newConfigurationTestManager(t)
+	secretRoot := filepath.Join(root, "data", "secrets")
+	writeConfigurationTestFile(t, filepath.Join(secretRoot, "token.json"), `{"token":"secret"}`)
+	if err := store.UpsertMod(t.Context(), db.Mod{ID: "mod_untrusted", Name: "Untrusted", PackageName: "Untrusted", Path: secretRoot}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ListModConfigFiles(t.Context(), "mod_untrusted"); configurationErrorCode(err) != "unsafe_configuration_path" {
+		t.Fatalf("untrusted database path error = %v", err)
+	}
+}
+
+func TestModConfigurationRejectsLinkedBackupDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows junction coverage is in configuration_windows_test.go")
+	}
+	manager, store, root := newConfigurationTestManager(t)
+	modRoot := filepath.Join(root, "server", "Mods", "Workshop", "mod_backup_link")
+	writeConfigurationTestFile(t, filepath.Join(modRoot, "Config.json"), `{}`)
+	if err := store.UpsertMod(t.Context(), db.Mod{ID: "mod_backup_link", Name: "Backup", PackageName: "Backup", Path: modRoot}); err != nil {
+		t.Fatal(err)
+	}
+	files, err := manager.ListModConfigFiles(t.Context(), "mod_backup_link")
+	if err != nil || len(files) != 1 {
+		t.Fatalf("files = %#v, %v", files, err)
+	}
+	target, err := manager.resolveModFileTarget(t.Context(), "mod_backup_link", files[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupDir := manager.backupDirectory(target)
+	outside := filepath.Join(root, "outside-backups")
+	if err := os.MkdirAll(filepath.Dir(backupDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, backupDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ListModConfigBackups(t.Context(), "mod_backup_link", files[0].ID); configurationErrorCode(err) != "configuration_backup_read_failed" {
+		t.Fatalf("linked backup directory error = %v", err)
+	}
+}
+
+func TestKnownModIdentityRequiresExactNormalizedMatch(t *testing.T) {
+	if !knownModIdentityMatches("Extended Base Range", "", "extended base range") {
+		t.Fatal("expected canonical identity match")
+	}
+	if knownModIdentityMatches("Extended Base Range Evil", "", "extended base range") || knownModIdentityMatches("NotPalSchema", "", "palschema") {
+		t.Fatal("substring identity was accepted")
 	}
 }
 

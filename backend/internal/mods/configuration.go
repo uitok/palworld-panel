@@ -13,10 +13,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/goccy/go-yaml"
+	"github.com/pelletier/go-toml/v2"
 
 	"palpanel/internal/id"
 )
@@ -31,6 +33,8 @@ var editableConfigExtensions = map[string]bool{
 var forbiddenConfigNames = map[string]bool{
 	"info.json": true, "installmanifest.json": true, "palmodsettings.ini": true,
 }
+
+var configPathLocks sync.Map
 
 type ConfigurationError struct {
 	Code string
@@ -262,7 +266,11 @@ func (m Manager) resolveModConfigRoot(ctx context.Context, modID string) (string
 		return "", configFailure("mod_not_found", fs.ErrNotExist)
 	}
 	if record, err := m.store.GetMod(ctx, modID); err == nil {
-		return m.validateConfigRoot(record.Path)
+		root, targetErr := palPanelOwnedModTarget(m.cfg.WorkshopModsDir(), record.ID, record.Path)
+		if targetErr != nil {
+			return "", configFailure("unsafe_configuration_path", targetErr)
+		}
+		return m.validateConfigRoot(root)
 	}
 	scan, err := m.ScanLocal(ctx)
 	if err != nil {
@@ -272,21 +280,67 @@ func (m Manager) resolveModConfigRoot(ctx context.Context, modID string) (string
 		if finding.ID != modID {
 			continue
 		}
-		if finding.Source == LocalModSourceLegacyPak || finding.Source == LocalModSourceDatabase {
+		if finding.Source == LocalModSourceDatabase {
 			return "", configFailure("mod_has_no_config_root", fs.ErrNotExist)
 		}
 		root := commonConfigRoot(finding.Paths)
 		if root == "" {
 			return "", configFailure("mod_has_no_config_root", fs.ErrNotExist)
 		}
-		for _, broadRoot := range []string{m.cfg.LegacyModsDir(), filepath.Join(m.cfg.Win64Dir(), "Mods")} {
-			if sameScanPath(root, broadRoot) {
-				return "", configFailure("mod_has_no_config_root", fs.ErrNotExist)
-			}
+		if err := m.validateSupportedLocalModRoot(finding.Source, root); err != nil {
+			return "", err
 		}
 		return m.validateConfigRoot(root)
 	}
 	return "", configFailure("mod_not_found", fs.ErrNotExist)
+}
+
+func (m Manager) validateSupportedLocalModRoot(source LocalModSource, root string) error {
+	switch source {
+	case LocalModSourceWorkshop:
+		if isDirectChildOfServerLayout(m.cfg.ServerDirectory(), root, "Mods", "Workshop") {
+			return nil
+		}
+	case LocalModSourceLegacyPak:
+		if isDirectChildOfServerLayout(m.cfg.ServerDirectory(), root, "Pal", "Content", "Paks", "LogicMods", "Mods") {
+			return nil
+		}
+	case LocalModSourceUE4SS:
+		for _, components := range [][]string{
+			{"Pal", "Binaries", "Win64", "Mods"},
+			{"Pal", "Binaries", "Win64", "UE4SS", "Mods"},
+			{"Pal", "Binaries", "Win64", "RE-UE4SS", "Mods"},
+		} {
+			if isDirectChildOfServerLayout(m.cfg.ServerDirectory(), root, components...) {
+				return nil
+			}
+		}
+	default:
+		return configFailure("mod_has_no_config_root", fs.ErrNotExist)
+	}
+	return configFailure("unsafe_configuration_path", fmt.Errorf("configuration root is not a direct child of a supported Mod directory"))
+}
+
+func isDirectChildOfServerLayout(serverRoot, target string, parentComponents ...string) bool {
+	serverAbsolute, serverErr := filepath.Abs(filepath.Clean(serverRoot))
+	targetAbsolute, targetErr := filepath.Abs(filepath.Clean(target))
+	if serverErr != nil || targetErr != nil {
+		return false
+	}
+	relative, err := filepath.Rel(serverAbsolute, targetAbsolute)
+	if err != nil || unsafeRelativePath(relative) {
+		return false
+	}
+	components := strings.Split(filepath.ToSlash(relative), "/")
+	if len(components) != len(parentComponents)+1 {
+		return false
+	}
+	for index, expected := range parentComponents {
+		if !strings.EqualFold(components[index], expected) {
+			return false
+		}
+	}
+	return strings.TrimSpace(components[len(components)-1]) != ""
 }
 
 func (m Manager) validateConfigRoot(root string) (string, error) {
@@ -502,6 +556,9 @@ func (m Manager) writeConfigTarget(target configTarget, request ConfigWriteReque
 	if err := validateTextContent(extension, content); err != nil {
 		return ConfigDocument{}, err
 	}
+	lock := configPathMutex(target.path)
+	lock.Lock()
+	defer lock.Unlock()
 	current, info, err := m.secureReadTarget(target)
 	if err != nil {
 		return ConfigDocument{}, err
@@ -552,15 +609,9 @@ func (m Manager) atomicReplace(target configTarget, content []byte, mode fs.File
 	if err := temporary.Close(); err != nil {
 		return configFailure("configuration_write_failed", err)
 	}
-	previous := target.path + ".palpanel-old-" + id.New("config")
-	if err := os.Rename(target.path, previous); err != nil {
+	if err := replaceConfigFile(temporaryPath, target.path); err != nil {
 		return configFailure("configuration_write_failed", err)
 	}
-	if err := os.Rename(temporaryPath, target.path); err != nil {
-		_ = os.Rename(previous, target.path)
-		return configFailure("configuration_write_failed", err)
-	}
-	_ = os.Remove(previous)
 	complete = true
 	return nil
 }
@@ -580,6 +631,38 @@ func validateTextContent(extension string, content []byte) error {
 		if err := yaml.Unmarshal(content, &value); err != nil {
 			return configFailure("configuration_parse_failed", fmt.Errorf("invalid YAML: %w", err))
 		}
+	case ".toml":
+		var value any
+		if err := toml.Unmarshal(content, &value); err != nil {
+			return configFailure("configuration_parse_failed", fmt.Errorf("invalid TOML: %w", err))
+		}
+	case ".ini", ".cfg":
+		if err := validateINIContent(content); err != nil {
+			return configFailure("configuration_parse_failed", err)
+		}
+	}
+	return nil
+}
+
+func validateINIContent(content []byte) error {
+	for index, rawLine := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
+		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			if !strings.HasSuffix(line, "]") || strings.TrimSpace(line[1:len(line)-1]) == "" {
+				return fmt.Errorf("invalid INI section on line %d", index+1)
+			}
+			continue
+		}
+		separator := strings.IndexByte(line, '=')
+		if separator < 0 {
+			separator = strings.IndexByte(line, ':')
+		}
+		if separator <= 0 || strings.TrimSpace(line[:separator]) == "" {
+			return fmt.Errorf("invalid INI assignment on line %d", index+1)
+		}
 	}
 	return nil
 }
@@ -593,15 +676,24 @@ func validateTextSafety(content []byte) error {
 
 func (m Manager) createBackup(target configTarget, content []byte) (ConfigBackup, error) {
 	directory := m.backupDirectory(target)
-	if err := m.cfg.ValidateManagedPath(directory, false); err != nil {
+	if err := m.validateBackupPath(directory, true); err != nil {
 		return ConfigBackup{}, configFailure("configuration_backup_failed", err)
 	}
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return ConfigBackup{}, configFailure("configuration_backup_failed", err)
 	}
+	if err := m.validateBackupPath(directory, false); err != nil {
+		return ConfigBackup{}, configFailure("configuration_backup_failed", err)
+	}
 	backupID := time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + id.New("backup")
 	path := filepath.Join(directory, backupID+".bak")
+	if err := m.validateBackupPath(path, true); err != nil {
+		return ConfigBackup{}, configFailure("configuration_backup_failed", err)
+	}
 	if err := os.WriteFile(path, content, 0o600); err != nil {
+		return ConfigBackup{}, configFailure("configuration_backup_failed", err)
+	}
+	if err := m.validateBackupPath(path, false); err != nil {
 		return ConfigBackup{}, configFailure("configuration_backup_failed", err)
 	}
 	return ConfigBackup{ID: backupID, Revision: configRevision(content), Size: int64(len(content)), CreatedAt: time.Now().UTC()}, nil
@@ -609,6 +701,12 @@ func (m Manager) createBackup(target configTarget, content []byte) (ConfigBackup
 
 func (m Manager) listBackups(target configTarget) ([]ConfigBackup, error) {
 	directory := m.backupDirectory(target)
+	if err := m.validateBackupPath(directory, false); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return []ConfigBackup{}, nil
+		}
+		return nil, configFailure("configuration_backup_read_failed", err)
+	}
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, fs.ErrNotExist) {
 		return []ConfigBackup{}, nil
@@ -651,6 +749,9 @@ func (m Manager) restoreBackup(target configTarget, backupID, revision string) (
 		return ConfigDocument{}, configFailure("configuration_revision_conflict", fmt.Errorf("configuration changed since it was opened"))
 	}
 	backupPath := filepath.Join(m.backupDirectory(target), backupID+".bak")
+	if err := m.validateBackupPath(backupPath, false); err != nil {
+		return ConfigDocument{}, configFailure("configuration_backup_not_found", fs.ErrNotExist)
+	}
 	backupInfo, err := os.Lstat(backupPath)
 	if err != nil {
 		return ConfigDocument{}, configFailure("configuration_backup_not_found", fs.ErrNotExist)
@@ -666,6 +767,16 @@ func (m Manager) restoreBackup(target configTarget, backupID, revision string) (
 	if err := validateTextContent(filepath.Ext(target.path), body); err != nil {
 		return ConfigDocument{}, err
 	}
+	lock := configPathMutex(target.path)
+	lock.Lock()
+	defer lock.Unlock()
+	current, info, err = m.secureReadTarget(target)
+	if err != nil {
+		return ConfigDocument{}, err
+	}
+	if revision == "" || revision != configRevision(current) {
+		return ConfigDocument{}, configFailure("configuration_revision_conflict", fmt.Errorf("configuration changed since it was opened"))
+	}
 	if _, err := m.createBackup(target, current); err != nil {
 		return ConfigDocument{}, err
 	}
@@ -673,6 +784,47 @@ func (m Manager) restoreBackup(target configTarget, backupID, revision string) (
 		return ConfigDocument{}, err
 	}
 	return m.readConfigTarget(target)
+}
+
+func (m Manager) validateBackupPath(path string, allowMissing bool) error {
+	if err := m.cfg.ValidateManagedPath(path, false); err != nil {
+		return err
+	}
+	root, err := filepath.Abs(filepath.Clean(m.cfg.BackupsDir))
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	if !scanPathWithin(root, target) || sameScanPath(root, target) {
+		return fmt.Errorf("backup path escapes the configured backup root")
+	}
+	for current := target; ; current = filepath.Dir(current) {
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			if !allowMissing || !errors.Is(statErr, fs.ErrNotExist) {
+				return statErr
+			}
+		} else {
+			linked, linkErr := localScanPathIsLink(current, info)
+			if linkErr != nil {
+				return linkErr
+			}
+			if linked {
+				return fmt.Errorf("backup path contains a link or reparse point")
+			}
+		}
+		if sameScanPath(current, root) {
+			break
+		}
+		parent := filepath.Dir(current)
+		if sameScanPath(parent, current) {
+			return fmt.Errorf("backup path escapes the configured backup root")
+		}
+	}
+	return nil
 }
 
 func (m Manager) backupDirectory(target configTarget) string {
@@ -736,8 +888,12 @@ func (m Manager) findKnownModRoot(ctx context.Context, workshopID, name string) 
 		return "", err
 	}
 	for _, mod := range mods {
-		if mod.WorkshopID == workshopID || strings.Contains(strings.ToLower(mod.Name+" "+mod.PackageName), strings.ToLower(name)) {
-			return m.validateConfigRoot(mod.Path)
+		if mod.WorkshopID == workshopID {
+			root, targetErr := palPanelOwnedModTarget(m.cfg.WorkshopModsDir(), mod.ID, mod.Path)
+			if targetErr != nil {
+				return "", configFailure("unsafe_configuration_path", targetErr)
+			}
+			return m.validateConfigRoot(root)
 		}
 	}
 	scan, err := m.ScanLocal(ctx)
@@ -745,11 +901,30 @@ func (m Manager) findKnownModRoot(ctx context.Context, workshopID, name string) 
 		return "", err
 	}
 	for _, finding := range scan.Findings {
-		if strings.Contains(strings.ToLower(finding.Name+" "+finding.PackageName), strings.ToLower(name)) {
-			return m.validateConfigRoot(commonConfigRoot(finding.Paths))
+		if knownModIdentityMatches(finding.Name, finding.PackageName, name) {
+			root := commonConfigRoot(finding.Paths)
+			if err := m.validateSupportedLocalModRoot(finding.Source, root); err != nil {
+				return "", err
+			}
+			return m.validateConfigRoot(root)
 		}
 	}
 	return "", fs.ErrNotExist
+}
+
+func knownModIdentityMatches(modName, packageName, expected string) bool {
+	want := normalizeModIdentity(expected)
+	return want != "" && (normalizeModIdentity(modName) == want || normalizeModIdentity(packageName) == want)
+}
+
+func normalizeModIdentity(value string) string {
+	var builder strings.Builder
+	for _, character := range strings.ToLower(strings.TrimSpace(value)) {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			builder.WriteRune(character)
+		}
+	}
+	return builder.String()
 }
 
 func existingTargets(scope, root string, relatives []string) ([]configTarget, error) {
@@ -907,6 +1082,12 @@ func configRevision(content []byte) string {
 func configFileID(scope, relative string) string {
 	hash := sha256.Sum256([]byte(scope + "\x00" + filepath.ToSlash(relative)))
 	return hex.EncodeToString(hash[:16])
+}
+
+func configPathMutex(path string) *sync.Mutex {
+	key := scanPathKey(filepath.Clean(path))
+	value, _ := configPathLocks.LoadOrStore(key, &sync.Mutex{})
+	return value.(*sync.Mutex)
 }
 
 func configFailure(code string, err error) error { return ConfigurationError{Code: code, Err: err} }
