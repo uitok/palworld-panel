@@ -48,6 +48,12 @@ Localization data
     palworld-server-tool
     Copyright 2024 zaigie
 
+  The reduced Chinese technology metadata also incorporates the Apache-2.0
+  GM fork bingyouxue/palworld-server-tool-gm commit
+  d45c74cf92ca3d1b081bf03a62adfebe131888ad. Technology descriptions are
+  excluded; OP.GG image URLs are retained for runtime identification only and
+  the images are not redistributed with PalPanel.
+
 - Palworld item-identification WebP artwork under frontend/public/assets/items
   is sourced from zaigie/palworld-server-tool commit
   18df587bd9e62d0f890b8cef1c32985fa6e9ba39. Palworld and its artwork are

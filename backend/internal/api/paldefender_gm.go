@@ -69,6 +69,28 @@ func (s Server) palDefenderGMGiveItems(c *gin.Context) {
 	})
 }
 
+func (s Server) palDefenderGMRemoveItems(c *gin.Context) {
+	var request paldefender.RemoveItemsRequest
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RCONRemoveItems(ctx, c.Param("id"), request)
+	})
+}
+
+func (s Server) palDefenderGMTeleport(c *gin.Context) {
+	var request paldefender.TeleportRequest
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RCONTeleport(ctx, c.Param("id"), request)
+	})
+}
+
 func (s Server) palDefenderGMSendMessage(c *gin.Context) {
 	var input struct {
 		SendType string `json:"SendType"`

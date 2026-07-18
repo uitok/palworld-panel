@@ -10,6 +10,9 @@ import (
 //go:embed catalog.zh-CN.json
 var catalogJSON []byte
 
+//go:embed technologies.zh-CN.json
+var technologyCatalogJSON []byte
+
 type catalog struct {
 	Pals      map[string]string `json:"pals"`
 	Items     map[string]string `json:"items"`
@@ -22,12 +25,28 @@ type normalizedCatalog struct {
 	items    map[string]string
 	passives map[string]string
 	itemList []ItemEntry
+	palList  []PalEntry
+	techList []TechnologyEntry
 }
 
 type ItemEntry struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Icon string `json:"icon,omitempty"`
+}
+
+type PalEntry struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type TechnologyEntry struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Level    int    `json:"level"`
+	Category string `json:"category"`
+	Boss     bool   `json:"boss"`
+	IconURL  string `json:"icon_url,omitempty"`
 }
 
 var names = loadCatalog()
@@ -45,15 +64,57 @@ func loadCatalog() normalizedCatalog {
 			itemList = append(itemList, ItemEntry{ID: id, Name: name, Icon: strings.TrimSpace(source.ItemIcons[id])})
 		}
 	}
+	palList := make([]PalEntry, 0, len(source.Pals))
+	for id, name := range source.Pals {
+		id = strings.TrimSpace(id)
+		name = strings.TrimSpace(name)
+		if id != "" && name != "" {
+			palList = append(palList, PalEntry{ID: id, Name: name})
+		}
+	}
+	var techList []TechnologyEntry
+	if err := json.Unmarshal(technologyCatalogJSON, &techList); err != nil {
+		panic("decode embedded Palworld technology catalog: " + err.Error())
+	}
+	techList = normalizeTechnologyEntries(techList)
 	sort.Slice(itemList, func(i, j int) bool {
 		return strings.ToLower(itemList[i].ID) < strings.ToLower(itemList[j].ID)
+	})
+	sort.Slice(palList, func(i, j int) bool {
+		return strings.ToLower(palList[i].ID) < strings.ToLower(palList[j].ID)
 	})
 	return normalizedCatalog{
 		pals:     normalizeKeys(source.Pals),
 		items:    normalizeKeys(source.Items),
 		passives: normalizeKeys(source.Passives),
 		itemList: itemList,
+		palList:  palList,
+		techList: techList,
 	}
+}
+
+func normalizeTechnologyEntries(entries []TechnologyEntry) []TechnologyEntry {
+	out := make([]TechnologyEntry, 0, len(entries))
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		entry.ID = strings.TrimSpace(entry.ID)
+		entry.Name = strings.TrimSpace(entry.Name)
+		entry.Category = strings.TrimSpace(entry.Category)
+		entry.IconURL = strings.TrimSpace(entry.IconURL)
+		key := normalize(entry.ID)
+		if entry.ID == "" || entry.Name == "" || entry.Level < 0 || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, entry)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Level != out[j].Level {
+			return out[i].Level < out[j].Level
+		}
+		return strings.ToLower(out[i].ID) < strings.ToLower(out[j].ID)
+	})
+	return out
 }
 
 func normalizeKeys(source map[string]string) map[string]string {
@@ -110,6 +171,51 @@ func SearchItems(query string, limit int) []ItemEntry {
 		}
 	}
 	return results
+}
+
+func SearchPals(query string, limit int) []PalEntry {
+	limit = normalizeSearchLimit(limit)
+	query = normalize(query)
+	results := make([]PalEntry, 0, min(limit, len(names.palList)))
+	for _, pal := range names.palList {
+		if query != "" && !strings.Contains(normalize(pal.ID), query) && !strings.Contains(normalize(pal.Name), query) {
+			continue
+		}
+		results = append(results, pal)
+		if len(results) == limit {
+			break
+		}
+	}
+	return results
+}
+
+func SearchTechnologies(query string, limit int) []TechnologyEntry {
+	limit = normalizeSearchLimit(limit)
+	query = normalize(query)
+	results := make([]TechnologyEntry, 0, min(limit, len(names.techList)))
+	for _, technology := range names.techList {
+		if query != "" &&
+			!strings.Contains(normalize(technology.ID), query) &&
+			!strings.Contains(normalize(technology.Name), query) &&
+			!strings.Contains(normalize(technology.Category), query) {
+			continue
+		}
+		results = append(results, technology)
+		if len(results) == limit {
+			break
+		}
+	}
+	return results
+}
+
+func normalizeSearchLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 5000 {
+		return 5000
+	}
+	return limit
 }
 
 func PassiveName(passiveID string) string {

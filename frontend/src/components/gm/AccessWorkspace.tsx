@@ -5,7 +5,7 @@ import { getErrorMessage } from '../../api/client';
 import { palDefenderGMApi } from '../../api/paldefenderGM';
 import type { PalDefenderAccessSettingsUpdate } from '../../types';
 
-type ActionRunner = (key: string, action: () => Promise<unknown>, success: string) => Promise<void>;
+type ActionRunner = (key: string, action: () => Promise<unknown>, success: string) => Promise<boolean>;
 
 const emptySettings: PalDefenderAccessSettingsUpdate = {
   use_whitelist: false,

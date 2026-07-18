@@ -11,8 +11,9 @@ const mocks = vi.hoisted(() => ({
   palsApi: { getPalsList: vi.fn() },
   gmApi: {
     status: vi.fn(), players: vi.fn(), player: vi.fn(), items: vi.fn(), inventory: vi.fn(),
+    removeItems: vi.fn(), teleport: vi.fn(), localTechnologyCatalog: vi.fn(), technologyCatalog: vi.fn(), palCatalog: vi.fn(),
     progression: vi.fn(), giveProgression: vi.fn(), techs: vi.fn(), learnTech: vi.fn(), forgetTech: vi.fn(),
-    pals: vi.fn(), givePals: vi.fn(), templates: vi.fn(), template: vi.fn(), putTemplate: vi.fn(),
+    pals: vi.fn(), givePals: vi.fn(), releasePal: vi.fn(), templates: vi.fn(), template: vi.fn(), putTemplate: vi.fn(),
     givePalTemplates: vi.fn(), exportPals: vi.fn(), exportedPalTemplates: vi.fn(), exportedPalTemplate: vi.fn(),
     accessSettings: vi.fn(), putAccessSettings: vi.fn(), whitelist: vi.fn(), whitelistAdd: vi.fn(),
     whitelistRemove: vi.fn(), toggleAdmin: vi.fn(), giveItems: vi.fn(), sendMessage: vi.fn(),
@@ -78,7 +79,7 @@ describe('PalDefender player center', () => {
       containers: [{ container_id: 'bag_1', owner_type: 'player', owner_id: 'uid_1', slots: [{ slot: 0, item_id: 'Money', item_name: '金币', count: 25, durability: 0 }] }],
     });
     mocks.palsApi.getPalsList.mockResolvedValue({
-      items: [{ id: 'pal_1', instance_id: 'pal_1', character_id: 'Anubis', name: '阿努比斯', nickname: '矿工', level: 50, rarity: 'Common', owner_nickname: 'Builder', owner_steam_id: 'steam_1', skills: [], passives: [], raw_passives: [], raw_skills: [], work_suitability: [], health: 100, max_health: 100, status: 'Healthy', x: 0, y: 0, z: 0 }],
+      items: [{ id: 'pal_1', instance_id: 'pal_1', character_id: 'Anubis', name: '阿努比斯', nickname: '矿工', level: 50, rarity: 'Common', gender: 'male', rank: 4, owner_nickname: 'Builder', owner_steam_id: 'steam_1', skills: [], passives: [], raw_passives: [], raw_skills: [], work_suitability: [], health: 100, max_health: 100, status: 'Healthy', x: 0, y: 0, z: 0 }],
       status: saveStatus,
       summary: { total: 1, returned: 1 },
     });
@@ -102,6 +103,9 @@ describe('PalDefender player center', () => {
       Progression: { Player: { level: 45, exp: 1000, unusedStatusPoints: 0 }, Currencies: { relics: {}, technologyPoints: 12, ancientTechnologyPoints: 3 }, Bosses: {}, Captures: {}, Activities: {} },
     });
     mocks.gmApi.techs.mockResolvedValue({ Meta: { Player: 'steam_1', PlayerUID: 'uid_1', UnlockedCount: 1, LockedCount: 1, TotalCount: 2 }, Techs: { Unlocked: ['Technology_1'] } });
+    mocks.gmApi.localTechnologyCatalog.mockResolvedValue({ items: [{ id: 'Technology_1', name: '原始作业台', level: 1, category: '建筑', boss: false }, { id: 'Technology_2', name: '石斧', level: 1, category: '科技', boss: false }], returned: 2 });
+    mocks.gmApi.technologyCatalog.mockResolvedValue({ catalog: { command: '/gettechids', output: '', entries: ['Technology_1', 'Technology_2'] }, reference_url: '' });
+    mocks.gmApi.palCatalog.mockResolvedValue({ items: [{ id: 'Anubis', name: '阿努比斯' }, { id: 'PinkCat', name: '捣蛋猫' }], returned: 2 });
     mocks.gmApi.pals.mockResolvedValue({ Meta: { Player: 'steam_1', PlayerUID: 'uid_1', TeamCount: 1, PalboxCount: 10, BaseCampCount: 2 }, Pals: {} });
     mocks.gmApi.templates.mockResolvedValue({ templates: [{ name: 'starter.json', path: 'starter.json', size: 10, modified_at: '' }], reference_url: '' });
     mocks.gmApi.exportedPalTemplates.mockResolvedValue({ player_id: 'steam_1', templates: [{ name: 'anubis.json', path: 'anubis.json', size: 20, modified_at: '' }], reference_url: '' });
@@ -109,7 +113,7 @@ describe('PalDefender player center', () => {
     mocks.gmApi.exportedPalTemplate.mockResolvedValue({ PalID: 'Anubis', Level: 50, IVs: { Health: 100 } });
     mocks.gmApi.accessSettings.mockResolvedValue({ use_whitelist: false, whitelist_message: 'Not allowed', use_admin_whitelist: false, admin_auto_login: false, admin_ips: ['127.0.0.1'], reload_required: false, reference_url: '' });
     mocks.gmApi.whitelist.mockResolvedValue({ command: '/whitelist_get', output: '', entries: [] });
-    for (const name of ['giveProgression', 'learnTech', 'forgetTech', 'givePals', 'givePalTemplates', 'exportPals', 'putTemplate', 'putAccessSettings', 'whitelistAdd', 'whitelistRemove', 'toggleAdmin', 'sendMessage', 'broadcast', 'kick', 'ban', 'unban'] as const) {
+    for (const name of ['removeItems', 'teleport', 'giveProgression', 'learnTech', 'forgetTech', 'givePals', 'releasePal', 'givePalTemplates', 'exportPals', 'putTemplate', 'putAccessSettings', 'whitelistAdd', 'whitelistRemove', 'toggleAdmin', 'sendMessage', 'broadcast', 'kick', 'ban', 'unban'] as const) {
       mocks.gmApi[name].mockResolvedValue({ Success: true });
     }
     mocks.gmApi.giveItems.mockResolvedValue({ Granted: { Items: 5 } });
@@ -123,7 +127,7 @@ describe('PalDefender player center', () => {
   it('merges save-index and PalDefender players and selects the online player first', async () => {
     renderPage();
 
-    expect(await screen.findByRole('heading', { name: 'Builder' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Builder' }, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Builder 在线' })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Archivist 离线' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'OfflineUser 离线' })).toBeInTheDocument();
@@ -173,6 +177,25 @@ describe('PalDefender player center', () => {
     await waitFor(() => expect(mocks.gmApi.learnTech).toHaveBeenCalledWith('steam_1', { Technology: ['Technology_2', 'Technology_3'] }));
   });
 
+  it('adjusts an existing item total by removing the negative delta', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '物品' }));
+    fireEvent.click(await screen.findByRole('button', { name: '调整总量' }));
+    fireEvent.change(screen.getByLabelText('目标物品总量'), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认调整' }));
+    await waitFor(() => expect(mocks.gmApi.removeItems).toHaveBeenCalledWith('steam_1', { Items: [{ ItemID: 'Money', Count: 5 }] }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('25 → 20'));
+  });
+
+  it('teleports the selected online player to coordinates', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '传送' }));
+    fireEvent.change(screen.getByLabelText('X'), { target: { value: '100' } });
+    fireEvent.change(screen.getByLabelText('Y'), { target: { value: '-200' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认传送' }));
+    await waitFor(() => expect(mocks.gmApi.teleport).toHaveBeenCalledWith('steam_1', { Mode: 'coordinates', X: 100, Y: -200 }));
+  });
+
   it('gives a pal and loads an exported pal into the template editor', async () => {
     renderPage();
     fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
@@ -189,6 +212,15 @@ describe('PalDefender player center', () => {
     await waitFor(() => expect(mocks.gmApi.exportedPalTemplate).toHaveBeenCalledWith('steam_1', 'anubis.json'));
     expect(screen.getByLabelText('模板名称')).toHaveValue('anubis');
     expect(screen.getByLabelText('IV 生命')).toHaveValue(100);
+  });
+
+  it('requires typed confirmation before releasing one matching pal', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    fireEvent.click(await screen.findByRole('button', { name: '放生 矿工' }));
+    fireEvent.change(screen.getByLabelText('放生确认玩家名称'), { target: { value: 'Builder' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认放生' }));
+    await waitFor(() => expect(mocks.gmApi.releasePal).toHaveBeenCalledWith('steam_1', { PalID: 'Anubis', Level: 50, Gender: 'male', Rank: 4 }));
   });
 
   it('manages the current player whitelist, temporary admin, and persistent access settings', async () => {

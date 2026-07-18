@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, ExternalLink, FileJson, LoaderCircle, RefreshCw, Save, Send, Sword, Upload } from 'lucide-react';
+import { AlertTriangle, Download, ExternalLink, FileJson, LoaderCircle, RefreshCw, Save, Search, Send, Sword, Trash2, Upload } from 'lucide-react';
 import { palDefenderGMApi } from '../../api/paldefenderGM';
-import type { Pal, PalDefenderPalTemplate } from '../../types';
+import type { Pal, PalDefenderPalCatalogEntry, PalDefenderPalTemplate } from '../../types';
 import { PalIcon } from './PalIcon';
 
-type ActionRunner = (key: string, action: () => Promise<unknown>, success: string) => Promise<void>;
+type ActionRunner = (key: string, action: () => Promise<unknown>, success: string) => Promise<boolean>;
 
 export const PalWorkspace: React.FC<{
   identifier: string;
@@ -15,14 +15,24 @@ export const PalWorkspace: React.FC<{
   busy: boolean;
   pending: string;
   savePals: Pal[];
+  palCatalog: PalDefenderPalCatalogEntry[];
   onRun: ActionRunner;
-}> = ({ identifier, playerName, canWrite, available, busy, pending, savePals, onRun }) => {
+  onRelease: (pal: Pal) => Promise<boolean>;
+}> = ({ identifier, playerName, canWrite, available, busy, pending, savePals, palCatalog, onRun, onRelease }) => {
   const queryClient = useQueryClient();
   const [palID, setPalID] = useState('');
   const [palLevel, setPalLevel] = useState('1');
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [selectedExport, setSelectedExport] = useState('');
   const [editor, setEditor] = useState<TemplateEditor>(() => emptyTemplateEditor());
+  const [palSearch, setPalSearch] = useState('');
+  const [releaseTarget, setReleaseTarget] = useState<Pal | null>(null);
+  const [releaseConfirmation, setReleaseConfirmation] = useState('');
+
+  const filteredPalCatalog = palCatalog.filter((pal) => {
+    const needle = palSearch.trim().toLowerCase();
+    return !needle || pal.id.toLowerCase().includes(needle) || pal.name.toLowerCase().includes(needle);
+  }).slice(0, 80);
 
   const palsQuery = useQuery({
     queryKey: ['paldefender-gm', 'pals', identifier],
@@ -98,6 +108,10 @@ export const PalWorkspace: React.FC<{
             <label className="text-xs font-bold text-slate-600">PalID<input aria-label="帕鲁 ID" value={palID} onChange={(event) => setPalID(event.target.value)} placeholder="例如 Anubis" className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
             <label className="text-xs font-bold text-slate-600">等级<input aria-label="帕鲁等级" type="number" min={1} max={255} value={palLevel} onChange={(event) => setPalLevel(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
           </div>
+          <label className="relative mt-3 block"><Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input aria-label="搜索帕鲁目录" value={palSearch} onChange={(event) => setPalSearch(event.target.value)} placeholder="搜索中文名或 PalID" className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
+          <div className="mt-3 grid max-h-56 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3">
+            {filteredPalCatalog.map((pal) => <button type="button" key={pal.id} onClick={() => setPalID(pal.id)} aria-pressed={palID.toLowerCase() === pal.id.toLowerCase()} className={`flex min-w-0 items-center gap-2 rounded-xl border p-2 text-left ${palID.toLowerCase() === pal.id.toLowerCase() ? 'border-sky-300 bg-sky-50' : 'border-slate-100 bg-slate-50/70'}`}><PalIcon characterID={pal.id} name={pal.name} className="h-9 w-9 rounded-lg" /><span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-bold text-slate-700">{pal.name}</span><span className="mt-1 block truncate font-mono text-[9px] text-slate-400">{pal.id}</span></span></button>)}
+          </div>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button type="button" onClick={() => void directGrant()} disabled={disabled || !palID.trim()} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'give-pal' ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}发放帕鲁</button>
             <a href="https://paldeck.cc/pals" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600">查询 PalID <ExternalLink size={12} /></a>
@@ -149,8 +163,9 @@ export const PalWorkspace: React.FC<{
 
       <section className="rounded-2xl border border-slate-100 bg-white">
         <div className="border-b border-slate-100 px-4 py-3"><h3 className="text-sm font-bold text-slate-800">存档解析中的玩家帕鲁</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">图标来自参考项目的公开资源地址；加载失败时自动使用本地图标。</p></div>
-        {savePals.length === 0 ? <div className="px-4 py-10 text-center text-xs font-semibold text-slate-400">没有匹配的存档帕鲁</div> : <div className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{savePals.map((pal) => <button type="button" key={pal.id} onClick={() => setPalID(pal.character_id || '')} className="flex min-w-0 items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-left hover:border-sky-200 hover:bg-sky-50"><PalIcon characterID={pal.character_id} name={pal.name} className="h-12 w-12 rounded-xl" /><span className="min-w-0 flex-1"><span className="block truncate text-xs font-bold text-slate-700">{pal.nickname || pal.name}</span><span className="block truncate font-mono text-[10px] text-slate-400">{pal.character_id || pal.id}</span><span className="mt-1 block text-[10px] font-bold text-slate-500">Lv.{pal.level} · {pal.rarity_name || pal.rarity}</span></span></button>)}</div>}
+        {savePals.length === 0 ? <div className="px-4 py-10 text-center text-xs font-semibold text-slate-400">没有匹配的存档帕鲁</div> : <div className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{savePals.map((pal) => <div key={pal.id} className="flex min-w-0 items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3"><button type="button" onClick={() => setPalID(pal.character_id || '')} className="flex min-w-0 flex-1 items-center gap-3 text-left"><PalIcon characterID={pal.character_id} name={pal.name} className="h-12 w-12 rounded-xl" /><span className="min-w-0 flex-1"><span className="block truncate text-xs font-bold text-slate-700">{pal.nickname || pal.name}</span><span className="block truncate font-mono text-[10px] text-slate-400">{pal.character_id || pal.id}</span><span className="mt-1 block text-[10px] font-bold text-slate-500">Lv.{pal.level} · {pal.gender || '未知性别'} · Rank {pal.rank ?? 0}</span></span></button><button type="button" aria-label={`放生 ${pal.nickname || pal.name}`} title="谨慎放生" onClick={() => { setReleaseTarget(pal); setReleaseConfirmation(''); }} disabled={!canWrite || !available || busy || !pal.character_id} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 disabled:opacity-35"><Trash2 size={13} /></button></div>)}</div>}
       </section>
+      {releaseTarget && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4" role="presentation"><section role="dialog" aria-modal="true" aria-labelledby="release-pal-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"><h3 id="release-pal-title" className="flex items-center gap-2 text-base font-black text-rose-700"><AlertTriangle size={17} />确认放生帕鲁</h3><p className="mt-3 text-xs font-semibold leading-5 text-slate-600">将通过 PalDefender 删除最多一只匹配帕鲁：<strong>{releaseTarget.nickname || releaseTarget.name}</strong>，{releaseTarget.character_id}，Lv.{releaseTarget.level}{releaseTarget.gender ? `，${releaseTarget.gender}` : ''}{releaseTarget.rank != null ? `，Rank ${releaseTarget.rank}` : ''}。</p><p className="mt-2 rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] font-semibold leading-5 text-amber-800">PalDefender 按属性筛选而不是实例 ID；存在完全相同帕鲁时，可能删除其中任意一只。存档快照也可能暂时滞后。</p><label className="mt-4 block text-xs font-bold text-slate-600">输入玩家名称“{playerName}”确认<input aria-label="放生确认玩家名称" value={releaseConfirmation} onChange={(event) => setReleaseConfirmation(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold" /></label><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setReleaseTarget(null)} disabled={busy} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-40">取消</button><button type="button" onClick={async () => { if (await onRelease(releaseTarget)) setReleaseTarget(null); }} disabled={busy || releaseConfirmation !== playerName} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'release-pal' && <LoaderCircle size={14} className="animate-spin" />}确认放生</button></div></section></div>}
     </div>
   );
 };

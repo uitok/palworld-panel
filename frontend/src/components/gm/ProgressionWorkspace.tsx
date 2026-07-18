@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { BookOpen, Coins, LoaderCircle, RefreshCw, Sparkles, Undo2 } from 'lucide-react';
 import { palDefenderGMApi } from '../../api/paldefenderGM';
-import type { PalDefenderProgression, PalDefenderTechs } from '../../types';
+import type { PalDefenderProgression, PalDefenderTechnologyCatalogEntry, PalDefenderTechs } from '../../types';
 
-type ActionRunner = (key: string, action: () => Promise<unknown>, success: string) => Promise<void>;
+type ActionRunner = (key: string, action: () => Promise<unknown>, success: string) => Promise<boolean>;
 
 export const ProgressionWorkspace: React.FC<{
   identifier: string;
@@ -13,19 +13,33 @@ export const ProgressionWorkspace: React.FC<{
   pending: string;
   progression?: PalDefenderProgression;
   techs?: PalDefenderTechs;
+  catalog: PalDefenderTechnologyCatalogEntry[];
+  runtimeTechnologyIDs: string[];
   loading: boolean;
   onRun: ActionRunner;
   onRefresh: () => Promise<void>;
-}> = ({ identifier, canWrite, available, busy, pending, progression, techs, loading, onRun, onRefresh }) => {
+}> = ({ identifier, canWrite, available, busy, pending, progression, techs, catalog, runtimeTechnologyIDs, loading, onRun, onRefresh }) => {
   const [exp, setExp] = useState('');
   const [technologyPoints, setTechnologyPoints] = useState('');
   const [ancientTechnologyPoints, setAncientTechnologyPoints] = useState('');
   const [technologyIDs, setTechnologyIDs] = useState('');
+  const [technologySearch, setTechnologySearch] = useState('');
 
   const parsedTechnology = useMemo(() => {
     const values = technologyIDs.split(/[\s,，;；]+/).map((value) => value.trim()).filter(Boolean);
     return [...new Set(values)];
   }, [technologyIDs]);
+  const runtimeSet = useMemo(() => new Set(runtimeTechnologyIDs.map((id) => id.toLowerCase())), [runtimeTechnologyIDs]);
+  const unlockedSet = useMemo(() => new Set((techs?.Techs.Unlocked ?? []).map((id) => id.toLowerCase())), [techs?.Techs.Unlocked]);
+  const filteredCatalog = useMemo(() => {
+    const needle = technologySearch.trim().toLowerCase();
+    return catalog.filter((entry) => !needle || [entry.id, entry.name, entry.category, String(entry.level)].some((value) => value.toLowerCase().includes(needle))).slice(0, 120);
+  }, [catalog, technologySearch]);
+
+  const toggleTechnology = (id: string) => {
+    const current = parsedTechnology;
+    setTechnologyIDs((current.some((value) => value.toLowerCase() === id.toLowerCase()) ? current.filter((value) => value.toLowerCase() !== id.toLowerCase()) : [...current, id]).join('\n'));
+  };
 
   const grant = async () => {
     const request: { EXP?: number; TechnologyPoints?: number; AncientTechnologyPoints?: number } = {};
@@ -86,6 +100,11 @@ export const ProgressionWorkspace: React.FC<{
 
       <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
         <div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><BookOpen size={16} className="text-violet-500" />科技解锁与遗忘</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">可用逗号、空格或换行分隔 TechID；输入 All 可处理全部科技。</p></div>
+        <label className="relative mt-4 block"><span className="sr-only">搜索科技目录</span><input aria-label="搜索科技目录" value={technologySearch} onChange={(event) => setTechnologySearch(event.target.value)} placeholder="搜索中文名、TechID、等级或类别" className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-400 focus:outline-none" /></label>
+        <div className="mt-3 grid max-h-64 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+          {filteredCatalog.map((entry) => { const selected = parsedTechnology.some((id) => id.toLowerCase() === entry.id.toLowerCase()); const supported = runtimeSet.size === 0 || runtimeSet.has(entry.id.toLowerCase()); const unlocked = unlockedSet.has(entry.id.toLowerCase()); return <button type="button" key={entry.id} onClick={() => toggleTechnology(entry.id)} disabled={!supported} aria-pressed={selected} className={`flex items-start gap-3 rounded-xl border p-3 text-left ${selected ? 'border-violet-300 bg-violet-50' : 'border-slate-100 bg-slate-50/70'} disabled:opacity-45`}><span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white ring-1 ring-slate-100">{entry.icon_url ? <img src={entry.icon_url} alt={`${entry.name}图标`} loading="lazy" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = 'none'; }} className="h-full w-full object-contain" /> : <BookOpen size={17} className="text-slate-300" />}</span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-xs font-bold text-slate-700">{entry.name}</span><span className="shrink-0 rounded-md bg-white px-1.5 py-0.5 text-[9px] font-bold text-slate-500">Lv.{entry.level}</span></span><span className="mt-1 block truncate font-mono text-[9px] text-slate-400">{entry.id}</span><span className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-md bg-white px-1.5 py-0.5 text-[9px] font-bold text-slate-500">{entry.category || '科技'}</span>{entry.boss && <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">古代</span>}{unlocked && <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700">已解锁</span>}{!supported && <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">当前服务端不可用</span>}</span></span></button>; })}
+          {filteredCatalog.length === 0 && <div className="col-span-full rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-xs font-semibold text-slate-400">没有匹配的科技</div>}
+        </div>
         <label className="mt-4 block text-xs font-bold text-slate-600">
           TechID
           <textarea aria-label="科技 ID" value={technologyIDs} onChange={(event) => setTechnologyIDs(event.target.value)} rows={5} placeholder={'Technology_1\nTechnology_2'} className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 p-3 font-mono text-xs text-slate-700 focus:border-sky-500 focus:outline-none" />

@@ -91,6 +91,8 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 		{http.MethodGet, "/api/security/paldefender/gm/players", "", `"UserId":"steam_1"`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1", "", `"UserId":"steam_1"`},
 		{http.MethodGet, "/api/security/paldefender/gm/items?q=Money", "", `"id":"Money"`},
+		{http.MethodGet, "/api/security/paldefender/gm/catalog/pals?q=Anubis", "", `"name":"阿努比斯"`},
+		{http.MethodGet, "/api/security/paldefender/gm/catalog/technologies?q=Workbench", "", `"name":"原始的作业台"`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/inventory", "", `"ItemID":"Money"`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":10}]}`, `"Items":10`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/progression", "", `"technologyPoints":5`},
@@ -209,6 +211,9 @@ func TestPalDefenderGMAllWritesRequireBackendPermissionAndAuthentication(t *test
 		body string
 	}{
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":1}]}`},
+		{"/api/security/paldefender/gm/players/steam_1/items/remove", `{"Items":[{"ItemID":"Money","Count":1}]}`},
+		{"/api/security/paldefender/gm/players/steam_1/teleport", `{"Mode":"coordinates","X":1,"Y":2}`},
+		{"/api/security/paldefender/gm/players/steam_1/pals/release", `{"PalID":"Anubis","Level":50}`},
 		{"/api/security/paldefender/gm/players/steam_1/message", `{"SendType":"PlayerChat","Message":"hello"}`},
 		{"/api/security/paldefender/gm/broadcast", `{"message":"hello","alert":false}`},
 		{"/api/security/paldefender/gm/players/steam_1/kick", `{"Reason":"AFK"}`},
@@ -439,6 +444,9 @@ func TestPalDefenderGMPrerequisitesAndStrictInput(t *testing.T) {
 		body string
 	}{
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":1}],"Command":"quit"}`},
+		{"/api/security/paldefender/gm/players/steam_1/items/remove", `{"Items":[{"ItemID":"Money;quit","Count":1}]}`},
+		{"/api/security/paldefender/gm/players/steam_1/teleport", `{"Mode":"player","TargetPlayer":"steam_2","Command":"quit"}`},
+		{"/api/security/paldefender/gm/players/steam_1/pals/release", `{"PalID":"Anubis Limit 99"}`},
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money;quit","Count":1}]}`},
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":1}]} {}`},
 		{"/api/security/paldefender/gm/players/bad.id/items", `{"Items":[{"ItemID":"Money","Count":1}]}`},

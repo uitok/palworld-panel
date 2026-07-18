@@ -662,6 +662,12 @@ export type PalDefenderInventorySlot = components['schemas']['PalDefenderInvento
 export type PalDefenderItemGrant = components['schemas']['PalDefenderItemGrant'];
 export type PalDefenderItemCatalogEntry = components['schemas']['PalDefenderItemCatalogEntry'];
 export type PalDefenderItemCatalog = components['schemas']['PalDefenderItemCatalog'];
+export type PalDefenderRemoveItemsRequest = components['schemas']['PalDefenderRemoveItemsRequest'];
+export type PalDefenderReleasePalRequest = components['schemas']['PalDefenderReleasePalRequest'];
+export type PalDefenderPalCatalogEntry = components['schemas']['PalDefenderPalCatalogEntry'];
+export type PalDefenderPalCatalog = components['schemas']['PalDefenderPalCatalog'];
+export type PalDefenderTechnologyCatalogEntry = components['schemas']['PalDefenderTechnologyCatalogEntry'];
+export type PalDefenderTechnologyCatalog = components['schemas']['PalDefenderTechnologyCatalog'];
 export type PalDefenderMessageRequest = components['schemas']['PalDefenderMessageRequest'];
 export type PalDefenderPunishmentRequest = components['schemas']['PalDefenderPunishmentRequest'];
 export type PalDefenderProgressionGrantRequest = components['schemas']['PalDefenderProgressionGrantRequest'];
@@ -671,6 +677,10 @@ export type PalDefenderGivePalTemplatesRequest = components['schemas']['PalDefen
 export type PalDefenderPalTemplate = components['schemas']['PalDefenderPalTemplate'];
 export type PalDefenderExportedPalTemplateInfo = components['schemas']['PalDefenderExportedPalTemplateInfo'];
 export type PalDefenderAccessSettingsUpdate = components['schemas']['PalDefenderAccessSettingsUpdate'];
+
+export type PalDefenderTeleportRequest =
+  | { Mode: 'coordinates'; X: number; Y: number; Z?: number }
+  | { Mode: 'player'; TargetPlayer: string };
 
 export interface PalDefenderTechnologyRequest {
   Technology: string | string[];

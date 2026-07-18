@@ -40,3 +40,14 @@ func TestSearchItemsUsesIDsAndChineseNamesWithLimits(t *testing.T) {
 		t.Fatalf("limited catalog = %#v", got)
 	}
 }
+
+func TestSearchPalAndTechnologyCatalogs(t *testing.T) {
+	pals := SearchPals("阿努比斯", 10)
+	if len(pals) < 1 || pals[0].ID != "Anubis" {
+		t.Fatalf("Pal search = %#v", pals)
+	}
+	technologies := SearchTechnologies("原始的作业台", 10)
+	if len(technologies) != 1 || technologies[0].ID != "Workbench" || technologies[0].Level != 1 || technologies[0].IconURL == "" {
+		t.Fatalf("technology search = %#v", technologies)
+	}
+}

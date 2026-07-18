@@ -22,12 +22,15 @@ export const ItemWorkspace: React.FC<{
   pending: string;
   onRefresh: () => void;
   onGive: (items: PalDefenderItemGrant[]) => Promise<void>;
-}> = ({ catalog, inventory, inventoryLoading, canWrite, online, busy, pending, onRefresh, onGive }) => {
+  onAdjust: (itemID: string, currentCount: number, targetCount: number) => Promise<boolean>;
+}> = ({ catalog, inventory, inventoryLoading, canWrite, online, busy, pending, onRefresh, onGive, onAdjust }) => {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<PalDefenderItemCatalogEntry | null>(null);
   const [count, setCount] = useState('1');
   const [rows, setRows] = useState<GrantRow[]>([]);
   const [containerKey, setContainerKey] = useState<ContainerKey>('Items');
+  const [adjustment, setAdjustment] = useState<{ itemID: string; name: string; current: number } | null>(null);
+  const [targetCount, setTargetCount] = useState('0');
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -54,6 +57,27 @@ export const ItemWorkspace: React.FC<{
   const container: PalDefenderInventoryContainer | undefined = inventory?.[containerKey];
   const slots = container ? Object.entries(container.Slots).sort(([left], [right]) => Number(left) - Number(right)) : [];
   const catalogMap = new Map(catalog.map((item) => [item.id.toLowerCase(), item]));
+  const inventoryTotals = new Map<string, number>();
+  if (inventory) {
+    for (const inventoryContainer of Object.values(inventory)) {
+      for (const slot of Object.values(inventoryContainer.Slots)) {
+        inventoryTotals.set(slot.ItemID.toLowerCase(), (inventoryTotals.get(slot.ItemID.toLowerCase()) || 0) + slot.Count);
+      }
+    }
+  }
+
+  const openAdjustment = (itemID: string, name: string) => {
+    const current = inventoryTotals.get(itemID.toLowerCase()) || 0;
+    setAdjustment({ itemID, name, current });
+    setTargetCount(String(current));
+  };
+
+  const submitAdjustment = async () => {
+    if (!adjustment) return;
+    const target = Number(targetCount);
+    if (!Number.isInteger(target) || target < 0) return;
+    if (await onAdjust(adjustment.itemID, adjustment.current, target)) setAdjustment(null);
+  };
 
   return (
     <div className="grid gap-5 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]">
@@ -86,8 +110,9 @@ export const ItemWorkspace: React.FC<{
       <section className="min-w-0 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><Boxes size={16} className="text-violet-500" />PalDefender 实时背包</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">玩家在线时读取六个实时容器。</p></div><button type="button" onClick={onRefresh} title="刷新实时背包" className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500"><RefreshCw size={13} className={inventoryLoading ? 'animate-spin' : ''} /></button></div>
         <div className="mt-4 flex flex-wrap items-center gap-2"><select aria-label="背包容器" value={containerKey} onChange={(event) => setContainerKey(event.target.value as ContainerKey)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">{containerOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}</select>{container && <span className="text-[10px] font-bold text-slate-400">{container.UsedSlots}/{container.MaxSlots} 槽 · {container.FreeSlots} 空闲</span>}</div>
-        <div className="mt-3 max-h-[560px] overflow-y-auto rounded-xl border border-slate-200"><table className="w-full min-w-[360px] text-left"><thead className="sticky top-0 bg-slate-50 text-[10px] font-bold text-slate-400"><tr><th className="px-3 py-2.5">物品</th><th className="px-3 py-2.5">槽位</th><th className="px-3 py-2.5 text-right">数量</th></tr></thead><tbody className="divide-y divide-slate-100">{inventoryLoading && slots.length === 0 ? <tr><td colSpan={3} className="px-3 py-10 text-center text-xs font-semibold text-slate-400">正在读取实时背包...</td></tr> : slots.length === 0 ? <tr><td colSpan={3} className="px-3 py-10 text-center text-xs font-semibold text-slate-400">该容器暂无实时数据</td></tr> : slots.map(([slot, item]) => { const entry = catalogMap.get(item.ItemID.toLowerCase()); return <tr key={slot}><td className="px-3 py-3"><div className="flex min-w-0 items-center gap-2">{entry?.icon ? <img src={`/assets/items/${encodeURIComponent(entry.icon)}.webp`} alt="" className="h-8 w-8 object-contain" /> : <span className="h-8 w-8 rounded-lg bg-slate-100" />}<span className="min-w-0"><span className="block truncate text-xs font-bold text-slate-700">{entry?.name || item.ItemID}</span><span className="block truncate font-mono text-[9px] text-slate-400">{item.ItemID}</span></span></div></td><td className="px-3 py-3 font-mono text-[10px] text-slate-400">{slot}</td><td className="px-3 py-3 text-right text-xs font-bold text-slate-700">{item.Count.toLocaleString()}</td></tr>; })}</tbody></table></div>
+        <div className="mt-3 max-h-[560px] overflow-y-auto rounded-xl border border-slate-200"><table className="w-full min-w-[430px] text-left"><thead className="sticky top-0 bg-slate-50 text-[10px] font-bold text-slate-400"><tr><th className="px-3 py-2.5">物品</th><th className="px-3 py-2.5">槽位</th><th className="px-3 py-2.5 text-right">数量</th><th className="px-3 py-2.5 text-right">操作</th></tr></thead><tbody className="divide-y divide-slate-100">{inventoryLoading && slots.length === 0 ? <tr><td colSpan={4} className="px-3 py-10 text-center text-xs font-semibold text-slate-400">正在读取实时背包...</td></tr> : slots.length === 0 ? <tr><td colSpan={4} className="px-3 py-10 text-center text-xs font-semibold text-slate-400">该容器暂无实时数据</td></tr> : slots.map(([slot, item]) => { const entry = catalogMap.get(item.ItemID.toLowerCase()); return <tr key={slot}><td className="px-3 py-3"><div className="flex min-w-0 items-center gap-2">{entry?.icon ? <img src={`/assets/items/${encodeURIComponent(entry.icon)}.webp`} alt="" className="h-8 w-8 object-contain" /> : <span className="h-8 w-8 rounded-lg bg-slate-100" />}<span className="min-w-0"><span className="block truncate text-xs font-bold text-slate-700">{entry?.name || item.ItemID}</span><span className="block truncate font-mono text-[9px] text-slate-400">{item.ItemID}</span></span></div></td><td className="px-3 py-3 font-mono text-[10px] text-slate-400">{slot}</td><td className="px-3 py-3 text-right text-xs font-bold text-slate-700">{item.Count.toLocaleString()}</td><td className="px-3 py-3 text-right"><button type="button" onClick={() => openAdjustment(item.ItemID, entry?.name || item.ItemID)} disabled={!canWrite || !online || busy} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-600 disabled:opacity-40">调整总量</button></td></tr>; })}</tbody></table></div>
       </section>
+      {adjustment && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 p-4" role="presentation"><section role="dialog" aria-modal="true" aria-labelledby="adjust-item-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"><h3 id="adjust-item-title" className="text-base font-black text-slate-900">调整 {adjustment.name} 总量</h3><p className="mt-2 text-[11px] font-semibold leading-5 text-slate-500">当前跨全部背包容器共 {adjustment.current.toLocaleString()} 件。增加会调用发放，减少会调用 PalDefender 物品移除。</p><label className="mt-4 block text-xs font-bold text-slate-600">目标总量<input aria-label="目标物品总量" type="number" min={0} value={targetCount} onChange={(event) => setTargetCount(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold" /></label><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setAdjustment(null)} disabled={busy} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-40">取消</button><button type="button" onClick={() => void submitAdjustment()} disabled={busy || !Number.isInteger(Number(targetCount)) || Number(targetCount) < 0 || Number(targetCount) === adjustment.current} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'adjust-item' && <LoaderCircle size={14} className="animate-spin" />}确认调整</button></div></section></div>}
     </div>
   );
 };

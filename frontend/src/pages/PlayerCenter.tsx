@@ -3,14 +3,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle, BookOpen, Boxes, CheckCircle2, Database, Gamepad2, LoaderCircle, MessageSquareText,
-  RefreshCw, Search, ShieldAlert, Sword, UserCog, UserRound, Wifi, WifiOff,
+  MapPin, RefreshCw, Search, ShieldAlert, Sword, UserCog, UserRound, Wifi, WifiOff,
 } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
 import { palDefenderGMApi } from '../api/paldefenderGM';
 import { palsApi } from '../api/pals';
 import { playersApi } from '../api/players';
 import { useServerStore } from '../store/useServerStore';
-import type { PalDefenderGMPlayer, PalDefenderMessageRequest, Player } from '../types';
+import type { Pal, PalDefenderGMPlayer, PalDefenderMessageRequest, PalDefenderTeleportRequest, Player } from '../types';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { SaveDataTabs } from '../components/ui/SaveDataTabs';
 import { AccessWorkspace } from '../components/gm/AccessWorkspace';
@@ -21,6 +21,7 @@ import { PalWorkspace } from '../components/gm/PalWorkspace';
 import { PlayerOverview, type PlayerOverviewModel } from '../components/gm/PlayerOverview';
 import { ProgressionWorkspace } from '../components/gm/ProgressionWorkspace';
 import { SaveInventoryPanel } from '../components/gm/SaveInventoryPanel';
+import { TeleportDialog } from '../components/gm/TeleportDialog';
 
 type WorkspaceTab = 'profile' | 'items' | 'progression' | 'pals' | 'message' | 'access';
 type PlayerFilter = 'all' | 'online' | 'offline';
@@ -64,6 +65,7 @@ export const PlayerCenter: React.FC = () => {
   const [pending, setPending] = useState('');
   const [notice, setNotice] = useState('');
   const [actionError, setActionError] = useState('');
+  const [teleportOpen, setTeleportOpen] = useState(false);
   const actionInFlight = useRef(false);
 
   const statusQuery = useQuery({ queryKey: ['paldefender-gm', 'status'], queryFn: palDefenderGMApi.status });
@@ -151,6 +153,25 @@ export const PlayerCenter: React.FC = () => {
     queryFn: () => palDefenderGMApi.techs(gmIdentifier),
     enabled: Boolean(liveReady && activeTab === 'progression'),
   });
+  const localTechnologyCatalogQuery = useQuery({
+    queryKey: ['paldefender-gm', 'catalog', 'technologies'],
+    queryFn: () => palDefenderGMApi.localTechnologyCatalog('', 5000),
+    enabled: activeTab === 'progression',
+    staleTime: 30 * 60 * 1000,
+  });
+  const runtimeTechnologyCatalogQuery = useQuery({
+    queryKey: ['paldefender-gm', 'catalog', 'technology-runtime'],
+    queryFn: palDefenderGMApi.technologyCatalog,
+    enabled: Boolean(status?.available && activeTab === 'progression'),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+  const palCatalogQuery = useQuery({
+    queryKey: ['paldefender-gm', 'catalog', 'pals'],
+    queryFn: () => palDefenderGMApi.palCatalog('', 5000),
+    enabled: activeTab === 'pals',
+    staleTime: 30 * 60 * 1000,
+  });
 
   const selectedGM = gmPlayerQuery.data ?? selected?.gm;
   const selectedSave = saveDetailQuery.data?.player ?? selected?.save;
@@ -171,8 +192,8 @@ export const PlayerCenter: React.FC = () => {
     hasLiveData: Boolean(selectedGM),
   } : null;
 
-  const runAction = async (key: string, action: () => Promise<unknown>, success: string) => {
-    if (actionInFlight.current) return;
+  const runAction = async (key: string, action: () => Promise<unknown>, success: string): Promise<boolean> => {
+    if (actionInFlight.current) return false;
     actionInFlight.current = true;
     setPending(key);
     setNotice('');
@@ -180,8 +201,10 @@ export const PlayerCenter: React.FC = () => {
     try {
       await action();
       if (success) setNotice(success);
+      return true;
     } catch (error) {
       setActionError(getErrorMessage(error));
+      return false;
     } finally {
       actionInFlight.current = false;
       setPending('');
@@ -196,6 +219,42 @@ export const PlayerCenter: React.FC = () => {
       await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'inventory', gmIdentifier] });
       setNotice(`已向 ${selectedName} 发放 ${result.Granted.Items} 件物品`);
     }, '');
+  };
+
+  const adjustItemTotal = async (itemID: string, currentCount: number, targetCount: number) => {
+    if (!selected || !selectedOnline || targetCount === currentCount) return targetCount === currentCount;
+    const delta = targetCount - currentCount;
+    const verb = delta > 0 ? '增加' : '移除';
+    if (!window.confirm(`为 ${selectedName} 调整 ${itemID}：${currentCount} → ${targetCount}（${verb} ${Math.abs(delta)}）？`)) return false;
+    return runAction('adjust-item', async () => {
+      if (delta > 0) await palDefenderGMApi.giveItems(gmIdentifier, [{ ItemID: itemID, Count: delta }]);
+      else await palDefenderGMApi.removeItems(gmIdentifier, { Items: [{ ItemID: itemID, Count: Math.abs(delta) }] });
+      await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'inventory', gmIdentifier] });
+    }, `已将 ${itemID} 的目标总量调整为 ${targetCount}`);
+  };
+
+  const teleportPlayer = async (request: PalDefenderTeleportRequest) => {
+    if (!selectedOnline || !liveReady) return false;
+    const destination = request.Mode === 'player' ? `玩家 ${request.TargetPlayer}` : `坐标 ${request.X}, ${request.Y}${request.Z == null ? '' : `, ${request.Z}`}`;
+    if (!window.confirm(`将 ${selectedName} 传送到${destination}？`)) return false;
+    return runAction('teleport', async () => {
+      await palDefenderGMApi.teleport(gmIdentifier, request);
+      await Promise.all([gmPlayersQuery.refetch(), gmPlayerQuery.refetch()]);
+    }, `已发送 ${selectedName} 的传送命令`);
+  };
+
+  const releasePal = async (pal: Pal) => {
+    if (!pal.character_id || !liveReady) return false;
+    const palID = pal.character_id;
+    return runAction('release-pal', async () => {
+      await palDefenderGMApi.releasePal(gmIdentifier, {
+        PalID: palID,
+        ...(pal.level > 0 ? { Level: pal.level } : {}),
+        ...(pal.gender === 'male' || pal.gender === 'female' ? { Gender: pal.gender } : {}),
+        ...(pal.rank != null ? { Rank: pal.rank } : {}),
+      });
+      await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'pals', gmIdentifier] });
+    }, `已提交 ${pal.nickname || pal.name} 的放生命令；存档快照可能暂未更新`);
   };
 
   const submitMessage = async () => {
@@ -222,6 +281,7 @@ export const PlayerCenter: React.FC = () => {
   const queryError = savePlayersQuery.error || gmPlayersQuery.error || gmPlayerQuery.error || saveDetailQuery.error || saveInventoryQuery.error || savePalsQuery.error || catalogQuery.error;
   const visibleError = actionError || (queryError ? getErrorMessage(queryError) : '');
   const busy = Boolean(pending);
+  const teleportOptions = unifiedPlayers.filter((player) => player.online && player.gm && player.identifier !== gmIdentifier).map((player) => ({ id: player.identifier, name: player.name }));
 
   return (
     <div className="mx-auto flex w-full max-w-[1720px] flex-col gap-5 p-4 sm:p-6 lg:p-8">
@@ -255,20 +315,21 @@ export const PlayerCenter: React.FC = () => {
             <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                 <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-black text-slate-900">{selectedName}</h2><StatusBadge status={selectedOnline ? 'Online' : 'Offline'} /><span className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">Lv.{overview.level}</span>{selected.platform && <span className="rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-bold uppercase text-slate-500">{selected.platform}</span>}</div><p className="mt-1 truncate font-mono text-[10px] text-slate-400">{gmIdentifier || overview.playerUID} · {overview.playerUID}</p><p className="mt-1 text-[11px] font-semibold text-slate-500">{overview.guildName || '无公会'} · {overview.x.toFixed(0)}, {overview.y.toFixed(0)}, {overview.z.toFixed(0)}</p></div>
-                <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-slate-100 p-1" role="tablist" aria-label="玩家操作分类">
+                <div className="flex items-center gap-2"><button type="button" onClick={() => setTeleportOpen(true)} disabled={!canWrite || !selectedOnline || !liveReady || busy} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-700 disabled:opacity-40"><MapPin size={13} />传送</button><div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-slate-100 p-1" role="tablist" aria-label="玩家操作分类">
                   {([['profile', '档案', UserRound], ['items', '物品', Boxes], ['progression', '成长', BookOpen], ['pals', '帕鲁', Sword], ['message', '消息', MessageSquareText], ['access', '管理', ShieldAlert]] as const).map(([id, label, Icon]) => <button type="button" role="tab" aria-selected={activeTab === id} key={id} onClick={() => setActiveTab(id)} className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold ${activeTab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}><Icon size={13} />{label}</button>)}
-                </div>
+                </div></div>
               </div>
             </div>
             {activeTab === 'profile' && <PlayerOverview player={overview} progression={progressionQuery.data} savePals={savePalsQuery.data?.items ?? []} saveInventory={saveInventoryQuery.data?.containers ?? []} saveLoading={savePalsQuery.isLoading || saveInventoryQuery.isLoading} />}
-            {activeTab === 'items' && <><ItemWorkspace catalog={catalogQuery.data?.items ?? []} inventory={liveInventoryQuery.data?.Inventory} inventoryLoading={liveInventoryQuery.isLoading || liveInventoryQuery.isFetching} canWrite={canWrite} online={selectedOnline && liveReady} busy={busy} pending={pending} onRefresh={() => void liveInventoryQuery.refetch()} onGive={giveItems} /><SaveInventoryPanel containers={saveInventoryQuery.data?.containers ?? []} catalog={catalogQuery.data?.items ?? []} loading={saveInventoryQuery.isLoading} /></>}
-            {activeTab === 'progression' && <ProgressionWorkspace identifier={gmIdentifier} canWrite={canWrite} available={liveReady} busy={busy} pending={pending} progression={progressionQuery.data} techs={techsQuery.data} loading={progressionQuery.isFetching || techsQuery.isFetching} onRun={runAction} onRefresh={async () => { await Promise.all([progressionQuery.refetch(), techsQuery.refetch()]); }} />}
-            {activeTab === 'pals' && <PalWorkspace identifier={gmIdentifier} playerName={selectedName} canWrite={canWrite} available={liveReady} busy={busy} pending={pending} savePals={savePalsQuery.data?.items ?? []} onRun={runAction} />}
+            {activeTab === 'items' && <><ItemWorkspace catalog={catalogQuery.data?.items ?? []} inventory={liveInventoryQuery.data?.Inventory} inventoryLoading={liveInventoryQuery.isLoading || liveInventoryQuery.isFetching} canWrite={canWrite} online={selectedOnline && liveReady} busy={busy} pending={pending} onRefresh={() => void liveInventoryQuery.refetch()} onGive={giveItems} onAdjust={adjustItemTotal} /><SaveInventoryPanel containers={saveInventoryQuery.data?.containers ?? []} catalog={catalogQuery.data?.items ?? []} loading={saveInventoryQuery.isLoading} /></>}
+            {activeTab === 'progression' && <ProgressionWorkspace identifier={gmIdentifier} canWrite={canWrite} available={liveReady} busy={busy} pending={pending} progression={progressionQuery.data} techs={techsQuery.data} catalog={localTechnologyCatalogQuery.data?.items ?? []} runtimeTechnologyIDs={runtimeTechnologyCatalogQuery.data?.catalog.entries ?? []} loading={progressionQuery.isFetching || techsQuery.isFetching} onRun={runAction} onRefresh={async () => { await Promise.all([progressionQuery.refetch(), techsQuery.refetch()]); }} />}
+            {activeTab === 'pals' && <PalWorkspace identifier={gmIdentifier} playerName={selectedName} canWrite={canWrite} available={liveReady} busy={busy} pending={pending} savePals={savePalsQuery.data?.items ?? []} palCatalog={palCatalogQuery.data?.items ?? []} onRun={runAction} onRelease={releasePal} />}
             {activeTab === 'message' && <MessageWorkspace mode={messageMode} onModeChange={setMessageMode} messageType={messageType} onMessageTypeChange={setMessageType} message={message} onMessageChange={setMessage} canWrite={canWrite && liveReady} online={selectedOnline} busy={busy} onSubmit={() => void submitMessage()} />}
             {activeTab === 'access' && <><AccessWorkspace identifier={gmIdentifier} playerName={selectedName} canSecurityWrite={canSecurityWrite} busy={busy} pending={pending} onRun={runAction} /><ModerationWorkspace reason={reason} onReasonChange={setReason} banIP={banIP} onBanIPChange={setBanIP} canWrite={canWrite && liveReady} busy={busy} online={selectedOnline} pending={pending} onAction={(action) => void moderate(action)} /></>}
           </> : <div className="flex min-h-[720px] flex-col items-center justify-center px-6 text-center text-xs font-semibold text-slate-400"><UserRound size={30} className="mb-3 text-slate-300" />请先从左侧选择玩家</div>}
         </main>
       </section>
+      <TeleportDialog open={teleportOpen} playerName={selectedName} options={teleportOptions} pending={pending === 'teleport'} onClose={() => setTeleportOpen(false)} onSubmit={teleportPlayer} />
     </div>
   );
 };

@@ -518,6 +518,14 @@ export interface components {
       "Message": string;
       "SendType"?: "PlayerChat" | "PlayerGlobalChat" | "PlayerGuildChat" | "PlayerLogNormal" | "PlayerLogImportant" | "PlayerLogVeryImportant";
     };
+    "PalDefenderPalCatalog": {
+      "items": Array<components["schemas"]["PalDefenderPalCatalogEntry"]>;
+      "returned": number;
+    };
+    "PalDefenderPalCatalogEntry": {
+      "id": string;
+      "name": string;
+    };
     "PalDefenderPalGrant": {
       "Level": number;
       "PalID": string;
@@ -574,9 +582,32 @@ export interface components {
       "Version": string;
       "VersionLong": string;
     };
+    "PalDefenderReleasePalRequest": {
+      "Gender"?: "male" | "female";
+      "Level"?: number;
+      "Lucky"?: boolean;
+      "PalID": string;
+      "Rank"?: number;
+    };
+    "PalDefenderRemoveItemsRequest": {
+      "Items": Array<components["schemas"]["PalDefenderItemGrant"]>;
+    };
+    "PalDefenderTechnologyCatalog": {
+      "items": Array<components["schemas"]["PalDefenderTechnologyCatalogEntry"]>;
+      "returned": number;
+    };
+    "PalDefenderTechnologyCatalogEntry": {
+      "boss": boolean;
+      "category": string;
+      "icon_url"?: string;
+      "id": string;
+      "level": number;
+      "name": string;
+    };
     "PalDefenderTechnologyRequest": {
       "Technology": unknown;
     };
+    "PalDefenderTeleportRequest": unknown;
     "SafeLifecycleRequest": {
       "message"?: string;
       "waittime"?: number;

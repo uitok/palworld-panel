@@ -45,10 +45,16 @@ describe('PalDefender GM API', () => {
     await palDefenderGMApi.giveItems('steam/user', [{ ItemID: 'Money', Count: 5 }], 'gm-request-001');
     await palDefenderGMApi.sendMessage('steam/user', { SendType: 'PlayerChat', Message: 'hello' }, 'gm-request-002');
     await palDefenderGMApi.ban('steam/user', { Reason: 'abuse', IP: true }, 'gm-request-003');
+    await palDefenderGMApi.removeItems('steam/user', { Items: [{ ItemID: 'Money', Count: 2 }] }, 'gm-request-004');
+    await palDefenderGMApi.teleport('steam/user', { Mode: 'player', TargetPlayer: 'gdk_2' }, 'gm-request-005');
+    await palDefenderGMApi.releasePal('steam/user', { PalID: 'Anubis', Level: 50, Gender: 'male', Rank: 4 }, 'gm-request-006');
 
     expect(post).toHaveBeenNthCalledWith(1, '/security/paldefender/gm/players/steam%2Fuser/items', { Items: [{ ItemID: 'Money', Count: 5 }] }, { headers: { 'Idempotency-Key': 'gm-request-001' } });
     expect(post).toHaveBeenNthCalledWith(2, '/security/paldefender/gm/players/steam%2Fuser/message', { SendType: 'PlayerChat', Message: 'hello' }, { headers: { 'Idempotency-Key': 'gm-request-002' } });
     expect(post).toHaveBeenNthCalledWith(3, '/security/paldefender/gm/players/steam%2Fuser/ban', { Reason: 'abuse', IP: true }, { headers: { 'Idempotency-Key': 'gm-request-003' } });
+    expect(post).toHaveBeenNthCalledWith(4, '/security/paldefender/gm/players/steam%2Fuser/items/remove', { Items: [{ ItemID: 'Money', Count: 2 }] }, { headers: { 'Idempotency-Key': 'gm-request-004' } });
+    expect(post).toHaveBeenNthCalledWith(5, '/security/paldefender/gm/players/steam%2Fuser/teleport', { Mode: 'player', TargetPlayer: 'gdk_2' }, { headers: { 'Idempotency-Key': 'gm-request-005' } });
+    expect(post).toHaveBeenNthCalledWith(6, '/security/paldefender/gm/players/steam%2Fuser/pals/release', { PalID: 'Anubis', Level: 50, Gender: 'male', Rank: 4 }, { headers: { 'Idempotency-Key': 'gm-request-006' } });
   });
 
   it('maps structured readiness state and player detail', async () => {
@@ -80,6 +86,17 @@ describe('PalDefender GM API', () => {
 
     expect(catalog).toEqual({ items: [{ id: 'Money', name: '金币', icon: 'money' }], returned: 1 });
     expect(get).toHaveBeenCalledWith('/security/paldefender/gm/items?limit=5000');
+  });
+
+  it('maps local Pal and technology catalogs', async () => {
+    const get = vi.spyOn(apiClient, 'get');
+    get.mockResolvedValueOnce({ status: 200, data: { ok: true, data: { items: [{ id: 'Anubis', name: '阿努比斯' }], returned: 1 } } });
+    get.mockResolvedValueOnce({ status: 200, data: { ok: true, data: { items: [{ id: 'Workbench', name: '原始的作业台', level: 1, category: '建筑', boss: false, icon_url: 'https://cdn.example/workbench.webp' }], returned: 1 } } });
+
+    expect(await palDefenderGMApi.palCatalog('', 5000)).toEqual({ items: [{ id: 'Anubis', name: '阿努比斯' }], returned: 1 });
+    expect(await palDefenderGMApi.localTechnologyCatalog('', 5000)).toEqual({ items: [{ id: 'Workbench', name: '原始的作业台', level: 1, category: '建筑', boss: false, icon_url: 'https://cdn.example/workbench.webp' }], returned: 1 });
+    expect(get).toHaveBeenNthCalledWith(1, '/security/paldefender/gm/catalog/pals?limit=5000');
+    expect(get).toHaveBeenNthCalledWith(2, '/security/paldefender/gm/catalog/technologies?limit=5000');
   });
 
   it('reads progression and technology state and sends typed grants', async () => {

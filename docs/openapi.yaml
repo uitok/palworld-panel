@@ -715,6 +715,12 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/PalDefenderGiveItemsRequest'}
       responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}
+  /security/paldefender/gm/players/{id}/items/remove:
+    parameters: [*idParameter]
+    post: {operationId: removePalDefenderGMItems, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderRemoveItemsRequest'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/teleport:
+    parameters: [*idParameter]
+    post: {operationId: teleportPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderTeleportRequest'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/progression:
     parameters: [*idParameter]
     get: {operationId: getPalDefenderGMProgression, tags: [security], x-palpanel-permission: read, responses: *readResponses}
@@ -732,6 +738,9 @@ paths:
     parameters: [*idParameter]
     get: {operationId: getPalDefenderGMPals, tags: [security], x-palpanel-permission: read, responses: *readResponses}
     post: {operationId: givePalDefenderGMPals, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGivePalsRequest'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/pals/release:
+    parameters: [*idParameter]
+    post: {operationId: releasePalDefenderGMPal, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderReleasePalRequest'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/pal-templates:
     parameters: [*idParameter]
     post: {operationId: givePalDefenderGMPalTemplates, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGivePalTemplatesRequest'}}}}, responses: *writeResponses}
@@ -786,6 +795,24 @@ paths:
     get: {operationId: listRuntimePalDefenderGMCommands, tags: [security], x-palpanel-permission: 'security:write', responses: *readResponses}
   /security/paldefender/gm/catalog/technology:
     get: {operationId: listPalDefenderTechnologyCatalog, tags: [security], x-palpanel-permission: read, responses: *readResponses}
+  /security/paldefender/gm/catalog/technologies:
+    get:
+      operationId: searchPalDefenderLocalTechnologyCatalog
+      tags: [security]
+      x-palpanel-permission: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+      responses: *readResponses
+  /security/paldefender/gm/catalog/pals:
+    get:
+      operationId: searchPalDefenderPalCatalog
+      tags: [security]
+      x-palpanel-permission: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+      responses: *readResponses
   /security/paldefender/gm/catalog/skins:
     get: {operationId: listPalDefenderSkinCatalog, tags: [security], x-palpanel-permission: read, responses: *readResponses}
   /security/paldefender/gm/catalog/references:
@@ -1558,6 +1585,28 @@ components:
       additionalProperties: false
       properties:
         Items: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderItemGrant'}}
+    PalDefenderRemoveItemsRequest:
+      type: object
+      required: [Items]
+      additionalProperties: false
+      properties:
+        Items: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderItemGrant'}}
+    PalDefenderTeleportRequest:
+      oneOf:
+        - type: object
+          required: [Mode, X, Y]
+          additionalProperties: false
+          properties:
+            Mode: {type: string, const: coordinates}
+            X: {type: number, minimum: -10000000, maximum: 10000000}
+            Y: {type: number, minimum: -10000000, maximum: 10000000}
+            Z: {type: number, minimum: -10000000, maximum: 10000000}
+        - type: object
+          required: [Mode, TargetPlayer]
+          additionalProperties: false
+          properties:
+            Mode: {type: string, const: player}
+            TargetPlayer: {type: string, pattern: '^[A-Za-z0-9_-]{1,128}$'}
     PalDefenderProgressionGrantRequest:
       type: object
       minProperties: 1
@@ -1592,6 +1641,44 @@ components:
       additionalProperties: false
       properties:
         Pals: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderPalGrant'}}
+    PalDefenderReleasePalRequest:
+      type: object
+      required: [PalID]
+      additionalProperties: false
+      properties:
+        PalID: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_:-]{1,128}$'}
+        Level: {type: integer, minimum: 1, maximum: 255}
+        Gender: {type: string, enum: [male, female]}
+        Rank: {type: integer, minimum: 0, maximum: 255}
+        Lucky: {type: boolean}
+    PalDefenderPalCatalogEntry:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    PalDefenderPalCatalog:
+      type: object
+      required: [items, returned]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PalDefenderPalCatalogEntry'}}
+        returned: {type: integer}
+    PalDefenderTechnologyCatalogEntry:
+      type: object
+      required: [id, name, level, category, boss]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        level: {type: integer, minimum: 0}
+        category: {type: string}
+        boss: {type: boolean}
+        icon_url: {type: string, format: uri}
+    PalDefenderTechnologyCatalog:
+      type: object
+      required: [items, returned]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PalDefenderTechnologyCatalogEntry'}}
+        returned: {type: integer}
     PalDefenderGivePalTemplatesRequest:
       type: object
       required: [PalTemplates]

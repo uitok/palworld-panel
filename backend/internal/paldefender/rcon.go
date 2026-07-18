@@ -373,6 +373,9 @@ func PalDefenderCommandCatalog() []CommandCatalogEntry {
 		{Name: "givebosstechpoints", Syntax: "/givebosstechpoints <UserId> [Amount]", Description: "发放古代科技点", Category: "progression", Transport: "rest", ReferenceURL: source},
 		{Name: "givepal", Syntax: "/givepal <UserId> <PalId> [Level]", Description: "按 ID 和等级发放帕鲁", Category: "pals", Transport: "rest", ReferenceURL: source},
 		{Name: "givepal_j", Syntax: "/givepal_j <UserId> <PalTemplate>", Description: "按模板发放带属性的帕鲁", Category: "pals", Transport: "rest", ReferenceURL: source},
+		{Name: "delitems", Syntax: "/delitems <UserId> <ItemId>[:<Amount>] ...", Description: "从玩家背包移除一种或多种物品", Category: "items", Transport: "rcon", Destructive: true, ReferenceURL: source},
+		{Name: "tp", Syntax: "/tp <UserId> <X> <Y> [Z] 或 /tp <UserId1> <UserId2>", Description: "把在线玩家传送到坐标或另一名玩家", Category: "player", Transport: "rcon", ReferenceURL: source},
+		{Name: "deletepals", Syntax: "/deletepals <UserId> <PalFilter>", Description: "按结构化筛选条件删除玩家帕鲁", Category: "pals", Transport: "rcon", Destructive: true, ReferenceURL: source},
 		{Name: "gettechids", Syntax: "/gettechids", Description: "读取当前服务端可用科技 ID", Category: "catalog", Transport: "rcon", ReferenceURL: source},
 		{Name: "getskinids", Syntax: "/getskinids", Description: "读取当前服务端可用皮肤 ID", Category: "catalog", Transport: "rcon", ReferenceURL: source},
 	}
