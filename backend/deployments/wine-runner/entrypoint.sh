@@ -7,11 +7,6 @@ export LC_ALL=C
 cmd="${1:-start}"
 shift || true
 
-steam_login_args=("+login" "anonymous")
-if [[ -n "${STEAM_USERNAME:-}" && -n "${STEAM_PASSWORD:-}" ]]; then
-  steam_login_args=("+login" "$STEAM_USERNAME" "$STEAM_PASSWORD")
-fi
-
 restore_host_ownership() {
   if [[ -z "${PALPANEL_HOST_UID:-}" || -z "${PALPANEL_HOST_GID:-}" ]]; then
     return 0
@@ -36,7 +31,7 @@ install_server() {
     +@sSteamCmdForcePlatformType windows \
     +@sSteamCmdForcePlatformBitness 64 \
     +force_install_dir /data/server \
-    "${steam_login_args[@]}" \
+    +login anonymous \
     +app_info_update 1 \
     +app_update 2394010 validate \
     +quit; then
@@ -50,7 +45,7 @@ install_server() {
     rm -f "$log_file"
     log_file="$(mktemp)"
     run_steamcmd_logged "$log_file" \
-      "${steam_login_args[@]}" \
+      +login anonymous \
       +app_info_update 1 \
       +@sSteamCmdForcePlatformType windows \
       +@sSteamCmdForcePlatformBitness 64 \
@@ -78,7 +73,7 @@ install_server() {
       +@sSteamCmdForcePlatformType windows \
       +@sSteamCmdForcePlatformBitness 64 \
       +force_install_dir /data/server \
-      "${steam_login_args[@]}" \
+      +login anonymous \
       +app_info_update 1 \
       +app_update 2394010 validate \
       +quit
@@ -100,23 +95,39 @@ install_server() {
 run_steamcmd_logged() {
   local log_file="${1:?log file is required}"
   shift
+  local restore_errexit=0
+  [[ "$-" == *e* ]] && restore_errexit=1
   set +e
   /opt/steamcmd/steamcmd.sh "$@" 2>&1 | tee "$log_file"
   local status=${PIPESTATUS[0]}
-  set -e
+  if [[ "$restore_errexit" -eq 1 ]]; then
+    set -e
+  else
+    set +e
+  fi
   return "$status"
 }
 
 download_workshop() {
   local item_id="${1:?workshop item id is required}"
+  local account_name="${2:?Steam account name is required}"
   local app_id="${PALPANEL_WORKSHOP_APP_ID:-1623730}"
   mkdir -p /data/workshop/.steamcmd
+  set +e
   /opt/steamcmd/steamcmd.sh \
+    +@ShutdownOnFailedCommand 1 \
+    +@NoPromptForPassword 1 \
     +@sSteamCmdForcePlatformType windows \
     +force_install_dir /data/workshop/.steamcmd \
-    "${steam_login_args[@]}" \
+    +login "$account_name" \
     +workshop_download_item "$app_id" "$item_id" validate \
     +quit
+  local steam_status=$?
+  set -e
+  restore_host_ownership /data/workshop /opt/steamcmd/config
+  if [[ "$steam_status" -ne 0 ]]; then
+    return "$steam_status"
+  fi
 
   local src="/data/workshop/.steamcmd/steamapps/workshop/content/$app_id/$item_id"
   local dst="/data/workshop/$item_id"
@@ -127,16 +138,57 @@ download_workshop() {
   rm -rf "$dst"
   mkdir -p "$dst"
   cp -a "$src"/. "$dst"/
-  restore_host_ownership /data/workshop
 }
 
 app_info() {
   /opt/steamcmd/steamcmd.sh \
     +@sSteamCmdForcePlatformType windows \
-    "${steam_login_args[@]}" \
+    +login anonymous \
     +app_info_update 1 \
     +app_info_print 2394010 \
     +quit
+}
+
+steam_auth_login() {
+  local account_name="${1:?Steam account name is required}"
+  if [[ ! "$account_name" =~ ^[A-Za-z0-9_]{3,64}$ ]]; then
+    echo "invalid Steam account name" >&2
+    return 64
+  fi
+  mkdir -p /opt/steamcmd/config
+  set +e
+  /opt/steamcmd/steamcmd.sh +login "$account_name"
+  local status=$?
+  set -e
+  restore_host_ownership /opt/steamcmd/config
+  return "$status"
+}
+
+steam_auth_verify() {
+  local account_name="${1:?Steam account name is required}"
+  local log_file
+  log_file="$(mktemp)"
+  set +e
+  run_steamcmd_logged "$log_file" \
+    +@ShutdownOnFailedCommand 1 \
+    +@NoPromptForPassword 1 \
+    +login "$account_name" \
+    +quit
+  local status=$?
+  set -e
+  restore_host_ownership /opt/steamcmd/config
+
+  if [[ "$status" -eq 0 ]] && grep -Eqi \
+    'Waiting for user info\.\.\.OK|Logged in OK|Login Successful|Logging in using cached credentials' \
+    "$log_file" && ! grep -Eqi \
+    'Invalid Password|Account Logon Denied|Steam Guard|Two-factor|No cached credentials|Cached credentials not found|Password required|Login Failure|Failed to log in|Not logged on' \
+    "$log_file"; then
+    rm -f "$log_file"
+    return 0
+  fi
+  rm -f "$log_file"
+  echo "[palpanel] Steam authentication cache is missing or expired; run palpanelctl steam-login for this account." >&2
+  return 3
 }
 
 rotate_server_log() {
@@ -257,6 +309,12 @@ case "$cmd" in
     ;;
   appinfo)
     app_info
+    ;;
+  steam-auth-login)
+    steam_auth_login "$@"
+    ;;
+  steam-auth-verify)
+    steam_auth_verify "$@"
     ;;
   start)
     start_server "$@"

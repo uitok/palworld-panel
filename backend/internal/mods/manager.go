@@ -13,7 +13,6 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
-	"palpanel/internal/docker"
 	"palpanel/internal/jobs"
 	"palpanel/internal/steamcmd"
 )
@@ -23,7 +22,7 @@ var workshopIDPattern = regexp.MustCompile(`^\d{5,20}$`)
 type Manager struct {
 	cfg       appconfig.Config
 	store     *db.Store
-	runner    docker.Runner
+	runner    workshopDockerRunner
 	native    nativeWorkshopDownloader
 	steamAuth workshopAuthenticator
 	workshop  *WorkshopService
@@ -32,7 +31,15 @@ type Manager struct {
 	local     *localActionState
 }
 
-func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, executors ...*jobs.Executor) Manager {
+type workshopDockerRunner interface {
+	BuildImage(context.Context) error
+	DownloadWorkshopTo(context.Context, string, string, ...string) error
+	ImageExists(context.Context) (bool, error)
+	VerifyWorkshopLogin(context.Context, string) (bool, error)
+	WorkshopCredentialsSecure() bool
+}
+
+func NewManager(cfg appconfig.Config, store *db.Store, runner workshopDockerRunner, executors ...*jobs.Executor) Manager {
 	executor := jobs.New(store, 4)
 	if len(executors) > 0 && executors[0] != nil {
 		executor = executors[0]

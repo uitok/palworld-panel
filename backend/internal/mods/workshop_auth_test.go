@@ -20,6 +20,26 @@ type fakeWorkshopAuthenticator struct {
 	requireErr   error
 }
 
+type fakeWorkshopDockerRunner struct {
+	imageExists bool
+	secure      bool
+	verified    bool
+	verifyCalls []string
+}
+
+func (f *fakeWorkshopDockerRunner) BuildImage(context.Context) error { return nil }
+func (f *fakeWorkshopDockerRunner) DownloadWorkshopTo(context.Context, string, string, ...string) error {
+	return nil
+}
+func (f *fakeWorkshopDockerRunner) ImageExists(context.Context) (bool, error) {
+	return f.imageExists, nil
+}
+func (f *fakeWorkshopDockerRunner) VerifyWorkshopLogin(_ context.Context, account string) (bool, error) {
+	f.verifyCalls = append(f.verifyCalls, account)
+	return f.verified, nil
+}
+func (f *fakeWorkshopDockerRunner) WorkshopCredentialsSecure() bool { return f.secure }
+
 func (f *fakeWorkshopAuthenticator) LoginStatus(account string) steamcmd.LoginStatus {
 	status := f.status
 	status.AccountName = account
@@ -142,20 +162,26 @@ func TestWorkshopImportRejectsMissingLoginBeforeSubmittingJobAndReleasesClaim(t 
 	}
 }
 
-func TestDockerWorkshopAuthUsesCompleteEnvironmentCredentials(t *testing.T) {
+func TestDockerWorkshopAuthVerifiesPersistedSteamCMDCache(t *testing.T) {
 	manager, store := newImportTestManager(t)
 	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("STEAM_USERNAME", " fixture_user ")
-	t.Setenv("STEAM_PASSWORD", "fixture-password")
+	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "fixture_user"); err != nil {
+		t.Fatal(err)
+	}
+	fakeRunner := &fakeWorkshopDockerRunner{imageExists: true, secure: true, verified: true}
+	manager.runner = fakeRunner
 
 	status, err := manager.WorkshopAuthStatus(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Supported || !status.LoggedIn || !status.CredentialsSecure || status.VerificationRequired || status.AccountName != "fixture_user" {
+	if !status.Supported || !status.SteamCMDInstalled || !status.LoggedIn || !status.CredentialsSecure || status.VerificationRequired || status.AccountName != "fixture_user" {
 		t.Fatalf("Docker/Wine auth status = %#v", status)
+	}
+	if len(fakeRunner.verifyCalls) != 1 || fakeRunner.verifyCalls[0] != "fixture_user" {
+		t.Fatalf("verify calls = %#v", fakeRunner.verifyCalls)
 	}
 	if _, err := manager.RequireWorkshopLogin(t.Context()); err != nil {
 		t.Fatalf("RequireWorkshopLogin returned error: %v", err)
@@ -165,25 +191,27 @@ func TestDockerWorkshopAuthUsesCompleteEnvironmentCredentials(t *testing.T) {
 	}
 }
 
-func TestDockerWorkshopAuthRequiresBothEnvironmentCredentials(t *testing.T) {
+func TestDockerWorkshopAuthRejectsMissingOrExpiredCache(t *testing.T) {
 	manager, store := newImportTestManager(t)
 	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("STEAM_USERNAME", "fixture_user")
-	t.Setenv("STEAM_PASSWORD", "")
+	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "fixture_user"); err != nil {
+		t.Fatal(err)
+	}
+	manager.runner = &fakeWorkshopDockerRunner{imageExists: true, secure: true, verified: false}
 
 	status, err := manager.WorkshopAuthStatus(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.LoggedIn || !status.VerificationRequired || status.CredentialsSecure {
-		t.Fatalf("incomplete Docker/Wine auth status = %#v", status)
+	if status.LoggedIn || !status.VerificationRequired || !status.CredentialsSecure {
+		t.Fatalf("expired Docker/Wine auth status = %#v", status)
 	}
-	if _, err := manager.RequireWorkshopLogin(t.Context()); !errors.Is(err, steamcmd.ErrLoginRequired) || !strings.Contains(err.Error(), "STEAM_PASSWORD") {
+	if _, err := manager.RequireWorkshopLogin(t.Context()); !errors.Is(err, steamcmd.ErrLoginRequired) || !strings.Contains(err.Error(), "palpanelctl steam-login") {
 		t.Fatalf("RequireWorkshopLogin error = %v", err)
 	}
-	if _, err := manager.StartWorkshopLogin(t.Context(), "fixture_user"); !errors.Is(err, steamcmd.ErrInteractiveLogin) {
+	if _, err := manager.StartWorkshopLogin(t.Context(), "fixture_user"); !errors.Is(err, steamcmd.ErrInteractiveLogin) || !strings.Contains(err.Error(), "palpanelctl steam-login fixture_user") {
 		t.Fatalf("StartWorkshopLogin error = %v", err)
 	}
 }

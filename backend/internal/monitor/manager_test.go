@@ -116,6 +116,25 @@ OptionSettings=(AdminPassword="secret",RCONEnabled=False)`
 	}
 }
 
+func TestLiveDockerCPUCollection(t *testing.T) {
+	containerName := strings.TrimSpace(os.Getenv("PALPANEL_LIVE_DOCKER_CONTAINER"))
+	if containerName == "" {
+		t.Skip("set PALPANEL_LIVE_DOCKER_CONTAINER to exercise docker stats against a running container")
+	}
+	manager := Manager{
+		cfg: appconfig.Config{DockerBinary: "docker", DockerContainer: containerName},
+		run: runCommand,
+	}
+	sample := db.MonitorSample{}
+	manager.fillDockerStats(t.Context(), &sample)
+	if !sample.CPUAvailable || sample.CPUPercent <= 0 {
+		t.Fatalf("live Docker CPU sample unavailable: %#v", sample)
+	}
+	if !sample.MemoryAvailable || sample.MemoryUsageBytes <= 0 || sample.MemoryLimitBytes <= 0 {
+		t.Fatalf("live Docker memory sample unavailable: %#v", sample)
+	}
+}
+
 func TestRESTHealthUsesCurrentServerPasswordInsteadOfStalePanelPassword(t *testing.T) {
 	root := t.TempDir()
 	store, err := db.Open(filepath.Join(root, "monitor.db"))

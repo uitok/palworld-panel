@@ -33,9 +33,9 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapGet("/v1/catalog", () => Results.Ok(new CatalogResponse(
     palDb.Version,
-    palDb.Pals.OrderBy(p => p.Name).Select(p => new PalCatalogItem(p.InternalName, p.Name)).ToList(),
-    palDb.StandardPassiveSkills.OrderBy(p => p.Name).Select(p => new PassiveCatalogItem(p.InternalName, p.Name, p.SupportsSurgery, p.SurgeryCost)).ToList(),
-    palDb.ActiveSkills.OrderBy(p => p.Name).Select(p => new SkillCatalogItem(p.InternalName, p.Name)).ToList()
+    palDb.Pals.OrderBy(p => LocalizedName(p.Name, p.LocalizedNames)).Select(p => new PalCatalogItem(p.InternalName, LocalizedName(p.Name, p.LocalizedNames), p.Name)).ToList(),
+    palDb.StandardPassiveSkills.OrderBy(p => LocalizedName(p.Name, p.LocalizedNames)).Select(p => new PassiveCatalogItem(p.InternalName, LocalizedName(p.Name, p.LocalizedNames), p.Name, p.SupportsSurgery, p.SurgeryCost)).ToList(),
+    palDb.ActiveSkills.OrderBy(p => LocalizedName(p.Name, p.LocalizedNames)).Select(p => new SkillCatalogItem(p.InternalName, LocalizedName(p.Name, p.LocalizedNames), p.Name)).ToList()
 )));
 
 app.MapPost("/v1/jobs", (SolveRequest request) =>
@@ -196,8 +196,10 @@ static async Task RunJob(SolverJob job, PalDB db, SemaphoreSlim gate)
 
 static SolveResult ToResult(IPalReference result) => new(
     result.Pal.InternalName,
+    LocalizedName(result.Pal.Name, result.Pal.LocalizedNames),
     result.Pal.Name,
     result.Gender.ToString().ToLowerInvariant(),
+    result.EffectivePassives.Select(p => LocalizedName(p.Name, p.LocalizedNames)).ToList(),
     result.EffectivePassives.Select(p => p.InternalName).ToList(),
     new IvRangeDto(ToIv(result.IVs.HP), ToIv(result.IVs.Attack), ToIv(result.IVs.Defense)),
     result.BreedingEffort.TotalSeconds,
@@ -222,9 +224,11 @@ static TreeNodeDto ToTree(IPalReference value)
             _ => "unknown",
         },
         PalId = value.Pal.InternalName,
-        PalName = value.Pal.Name,
+        PalName = LocalizedName(value.Pal.Name, value.Pal.LocalizedNames),
+        RawPalName = value.Pal.Name,
         Gender = value.Gender.ToString().ToLowerInvariant(),
-        Passives = value.EffectivePassives.Select(p => p.InternalName).ToList(),
+        Passives = value.EffectivePassives.Select(p => LocalizedName(p.Name, p.LocalizedNames)).ToList(),
+        RawPassives = value.EffectivePassives.Select(p => p.InternalName).ToList(),
         Ivs = new IvRangeDto(ToIv(value.IVs.HP), ToIv(value.IVs.Attack), ToIv(value.IVs.Defense)),
         EffortSeconds = value.BreedingEffort.TotalSeconds,
         SelfEffortSeconds = value.SelfBreedingEffort.TotalSeconds,
@@ -257,6 +261,21 @@ static TreeNodeDto ToTree(IPalReference value)
 }
 
 static IvValueDto ToIv(IV_Value value) => new(value.IsRelevant, value.Min, value.Max);
+
+static string LocalizedName(string fallback, Dictionary<string, string>? localizedNames)
+{
+    if (localizedNames != null)
+    {
+        foreach (var locale in new[] { "zh-Hans", "zh-CN", "zh" })
+        {
+            if (localizedNames.TryGetValue(locale, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+    }
+    return fallback;
+}
 
 static PalInstance ToPalInstance(OwnedPalInput input, PalDB db) => new()
 {
@@ -367,9 +386,9 @@ sealed class SolverJob(string id, SolveRequest request)
 }
 
 record CatalogResponse(string Version, List<PalCatalogItem> Pals, List<PassiveCatalogItem> Passives, List<SkillCatalogItem> ActiveSkills);
-record PalCatalogItem(string Id, string Name);
-record PassiveCatalogItem(string Id, string Name, bool SupportsSurgery, int SurgeryCost);
-record SkillCatalogItem(string Id, string Name);
+record PalCatalogItem(string Id, string Name, string RawName);
+record PassiveCatalogItem(string Id, string Name, string RawName, bool SupportsSurgery, int SurgeryCost);
+record SkillCatalogItem(string Id, string Name, string RawName);
 record SolveRequest(string? RequestId, string SaveFingerprint, List<OwnedPalInput> OwnedPals, TargetInput Target, SolverSettingsInput? Settings, GameSettingsInput? GameSettings, int ResultLimit = 20);
 record OwnedPalInput(string InstanceId, string PalId, string? Nickname, int Level, string OwnerPlayerId, string Gender, List<string> Passives, int Rank, int IvHp, int IvAttack, int IvDefense, string ContainerId, int SlotIndex, string LocationType);
 record TargetInput(string PalId, string? Gender, List<string>? RequiredPassives, List<string>? OptionalPassives, int IvHp, int IvAttack, int IvDefense);
@@ -381,7 +400,7 @@ record SolverSettingsInput(
     List<string>? AllowedSurgeryPassives = null, List<string>? BannedSurgeryPassives = null);
 record GameSettingsInput(int BreedingTimeSeconds = 300, int MassiveEggIncubationMinutes = 120, bool MultipleBreedingFarms = true, bool MultipleIncubators = true);
 record SolveResponse(string SaveFingerprint, List<SolveResult> Results);
-record SolveResult(string PalId, string PalName, string Gender, List<string> Passives, IvRangeDto Ivs, double EffortSeconds, int BreedingSteps, int Eggs, int WildPals, int GoldCost, TreeNodeDto Tree);
+record SolveResult(string PalId, string PalName, string RawPalName, string Gender, List<string> Passives, List<string> RawPassives, IvRangeDto Ivs, double EffortSeconds, int BreedingSteps, int Eggs, int WildPals, int GoldCost, TreeNodeDto Tree);
 record IvValueDto(bool Relevant, int Min, int Max);
 record IvRangeDto(IvValueDto Hp, IvValueDto Attack, IvValueDto Defense);
 
@@ -390,8 +409,10 @@ sealed class TreeNodeDto
     public string Type { get; set; } = "unknown";
     public string PalId { get; set; } = "";
     public string PalName { get; set; } = "";
+    public string RawPalName { get; set; } = "";
     public string Gender { get; set; } = "wildcard";
     public List<string> Passives { get; set; } = [];
+    public List<string> RawPassives { get; set; } = [];
     public IvRangeDto? Ivs { get; set; }
     public double EffortSeconds { get; set; }
     public double SelfEffortSeconds { get; set; }

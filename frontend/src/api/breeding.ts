@@ -87,14 +87,14 @@ const mapCatalog = (raw: unknown): BreedingCatalog => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const items = (value: unknown) => (Array.isArray(value) ? value : []).map((entry) => {
     const item = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
-    return { id: String(item.id || ''), name: String(item.name || item.id || '') };
+    return { id: String(item.id || ''), name: String(item.name || item.id || ''), raw_name: item.raw_name ? String(item.raw_name) : undefined };
   });
   return {
     version: String(data.version || ''),
     pals: items(data.pals),
     passives: (Array.isArray(data.passives) ? data.passives : []).map((entry) => {
       const item = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
-      return { id: String(item.id || ''), name: String(item.name || item.id || ''), supports_surgery: Boolean(item.supports_surgery), surgery_cost: Number(item.surgery_cost || 0) };
+      return { id: String(item.id || ''), name: String(item.name || item.id || ''), raw_name: item.raw_name ? String(item.raw_name) : undefined, supports_surgery: Boolean(item.supports_surgery), surgery_cost: Number(item.surgery_cost || 0) };
     }),
     active_skills: items(data.active_skills),
   };

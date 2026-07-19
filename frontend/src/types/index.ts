@@ -959,6 +959,7 @@ export interface SaveSource {
 export interface BreedingCatalogItem {
   id: string;
   name: string;
+  raw_name?: string;
 }
 
 export interface BreedingPassive extends BreedingCatalogItem {
@@ -977,8 +978,10 @@ export interface BreedingTreeNode {
   type: 'owned' | 'composite_owned' | 'wild' | 'bred' | 'surgery' | string;
   pal_id: string;
   pal_name: string;
+  raw_pal_name?: string;
   gender: string;
   passives: string[];
+  raw_passives?: string[];
   effort_seconds: number;
   self_effort_seconds: number;
   cost: number;
@@ -996,8 +999,10 @@ export interface BreedingTreeNode {
 export interface BreedingSolveResult {
   pal_id: string;
   pal_name: string;
+  raw_pal_name?: string;
   gender: string;
   passives: string[];
+  raw_passives?: string[];
   effort_seconds: number;
   breeding_steps: number;
   eggs: number;

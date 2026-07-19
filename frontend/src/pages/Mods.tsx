@@ -914,6 +914,22 @@ const WorkshopAuthGate: React.FC<{
 
 const localizeSteamAuthMessage = (message?: string | null) => {
   if (!message) return '';
+  const linuxCommand = message.match(/`(palpanelctl steam-login [A-Za-z0-9_]+)`/)?.[1];
+  if (message.startsWith('The Docker/Wine SteamCMD runner image is not built yet.')) {
+    return 'Docker/Wine SteamCMD 运行镜像尚未构建。请先在面板中安装或更新一次服务端，再在 Linux 服务器终端执行 Steam 登录命令。';
+  }
+  if (message.startsWith('Enter a Steam account name. On Linux,')) {
+    return '请输入 Steam 账户名。Linux/Docker 模式只保存并验证 SteamCMD 登录缓存；密码和 Steam Guard 验证码只在服务器本地 SteamCMD 终端中输入。';
+  }
+  if (message.startsWith('SteamCMD cached credentials were verified successfully.')) {
+    return 'SteamCMD 登录缓存验证成功。每次下载 Workshop Mod 前都会再次检查该会话。';
+  }
+  if (linuxCommand && message.includes('Cached SteamCMD credentials are missing or expired.')) {
+    return `SteamCMD 登录缓存不存在或已过期。请在 Linux 服务器终端执行 ${linuxCommand}，完成登录并输入 quit 后再验证。`;
+  }
+  if (linuxCommand && (message.startsWith('Run `palpanelctl') || message.startsWith('interactive SteamCMD login'))) {
+    return `Linux/Docker 登录需在服务器本地终端完成。请执行 ${linuxCommand}，输入密码和 Steam Guard 验证码，登录成功后输入 quit，再回到此处验证。`;
+  }
   if (message === 'Enter the Steam account name used for the local SteamCMD session.') {
     return '请输入本机 SteamCMD 会话使用的 Steam 账户名。';
   }
@@ -957,6 +973,7 @@ const WorkshopLoginDialog: React.FC<{
   const onVerifiedRef = useRef(onVerified);
   const accountAvailable = Boolean(accountName.trim() || status?.account_name);
   const canUseSteamCMD = Boolean(status?.supported && status.steamcmd_installed && canAuthenticate);
+  const linuxDockerLogin = [status?.message, initialError].some((value) => value?.includes('palpanelctl steam-login') || value?.includes('On Linux'));
 
   useEffect(() => {
     if (!accountName && status?.account_name) setAccountName(status.account_name);
@@ -1046,7 +1063,9 @@ const WorkshopLoginDialog: React.FC<{
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div className="min-w-0">
             <h2 id="steam-login-title" className="text-base font-bold text-slate-900">登录 Steam 以使用 Workshop</h2>
-            <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">登录在本机 SteamCMD 窗口完成，验证通过后才会加载 Workshop。</p>
+            <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
+              {linuxDockerLogin ? 'Linux/Docker 登录在服务器本地 SteamCMD 终端完成，验证通过后才会加载 Workshop。' : '登录在本机 SteamCMD 窗口完成，验证通过后才会加载 Workshop。'}
+            </p>
           </div>
           <button type="button" onClick={onClose} disabled={busy !== null} className="shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-40" aria-label="关闭 Steam 登录">
             <X size={17} />
@@ -1056,7 +1075,9 @@ const WorkshopLoginDialog: React.FC<{
         <div className="flex-1 overflow-y-auto px-5 py-5">
           <div className="flex items-start gap-3 border-b border-slate-100 pb-4">
             <ShieldCheck className="mt-0.5 shrink-0 text-emerald-600" size={17} />
-            <p className="text-xs font-semibold leading-5 text-slate-600">此页面只接收 Steam 账户名，不接收密码、Steam Guard 验证码或恢复码。敏感信息只应输入 SteamCMD 窗口。</p>
+            <p className="text-xs font-semibold leading-5 text-slate-600">
+              此页面只接收 Steam 账户名，不接收密码、Steam Guard 验证码或恢复码。{linuxDockerLogin ? '请按提示在 Linux 服务器终端执行 palpanelctl steam-login，敏感信息只输入该 SteamCMD 终端。' : '敏感信息只应输入 SteamCMD 窗口。'}
+            </p>
           </div>
 
           <ol className="divide-y divide-slate-100">
@@ -1079,8 +1100,12 @@ const WorkshopLoginDialog: React.FC<{
             <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">2</span>
               <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-700">在本机 SteamCMD 中完成登录</p>
-                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">点击后会打开带输入输出提示的独立窗口。请只在该窗口输入密码和 Steam Guard 验证码；登录成功后输入 quit 退出。</p>
+                <p className="text-xs font-bold text-slate-700">{linuxDockerLogin ? '生成服务器终端登录命令' : '在本机 SteamCMD 中完成登录'}</p>
+                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
+                  {linuxDockerLogin
+                    ? '点击后会保存账户名并显示 palpanelctl steam-login 命令。请在 Linux 服务器终端执行该命令，只在 SteamCMD 中输入密码和 Steam Guard 验证码，成功后输入 quit。'
+                    : '点击后会打开带输入输出提示的独立窗口。请只在该窗口输入密码和 Steam Guard 验证码；登录成功后输入 quit 退出。'}
+                </p>
                 <button
                   type="button"
                   onClick={() => void startLogin()}
@@ -1088,7 +1113,7 @@ const WorkshopLoginDialog: React.FC<{
                   className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-40"
                 >
                   {busy === 'start' ? <RefreshCw size={14} className="animate-spin" /> : <MonitorUp size={14} />}
-                  {status?.login_in_progress ? 'SteamCMD 登录窗口运行中' : '打开 SteamCMD 登录窗口'}
+                  {status?.login_in_progress ? 'SteamCMD 登录窗口运行中' : linuxDockerLogin ? '保存账号并显示登录命令' : '打开 SteamCMD 登录窗口'}
                 </button>
               </div>
             </li>
@@ -1096,7 +1121,11 @@ const WorkshopLoginDialog: React.FC<{
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">3</span>
               <div className="min-w-0">
                 <p className="text-xs font-bold text-slate-700">验证登录缓存</p>
-                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">SteamCMD 显示登录成功后输入 quit，等待窗口关闭。面板会自动验证；也可以在自动检测结束后手动重试。</p>
+                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
+                  {linuxDockerLogin
+                    ? '终端中的 SteamCMD 登录成功并输入 quit 后，回到此处手动验证缓存。下载 Workshop Mod 前还会再次校验。'
+                    : 'SteamCMD 显示登录成功后输入 quit，等待窗口关闭。面板会自动验证；也可以在自动检测结束后手动重试。'}
+                </p>
                 <button
                   type="button"
                   onClick={() => void verifyLogin()}

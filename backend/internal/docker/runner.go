@@ -231,23 +231,87 @@ func (r Runner) DownloadWorkshop(ctx context.Context, itemID string) error {
 	return r.DownloadWorkshopTo(ctx, itemID, r.cfg.WorkshopModsDir())
 }
 
-func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot string) error {
+func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot string, accountNames ...string) error {
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
 		"-e", "PALPANEL_WORKSHOP_APP_ID=" + r.cfg.WorkshopAppID,
 		"-v", volume(destinationRoot, "/data/workshop"),
 	}
-	if strings.TrimSpace(os.Getenv("STEAM_USERNAME")) != "" && os.Getenv("STEAM_PASSWORD") != "" {
-		// Pass credential names through the Docker CLI environment without placing
-		// secret values in process arguments, job errors, or support logs.
-		args = append(args, "-e", "STEAM_USERNAME", "-e", "STEAM_PASSWORD")
+	accountName := ""
+	if len(accountNames) > 0 {
+		accountName = strings.TrimSpace(accountNames[0])
+	}
+	if accountName != "" {
+		if err := r.ensureWorkshopSteamCMDConfigDir(); err != nil {
+			return err
+		}
+		args = append(args, "-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"))
 	}
 	args = append(args, r.containerProxyEnvArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "workshop", itemID)
+	if accountName != "" {
+		args = append(args, accountName)
+	}
 	_, err := r.run(ctx, args...)
 	return err
+}
+
+// VerifyWorkshopLogin probes the persisted SteamCMD cache without ever
+// prompting for, accepting, or logging a password or Steam Guard code.
+func (r Runner) VerifyWorkshopLogin(ctx context.Context, accountName string) (bool, error) {
+	accountName = strings.TrimSpace(accountName)
+	if accountName == "" {
+		return false, nil
+	}
+	if err := r.ensureWorkshopSteamCMDConfigDir(); err != nil {
+		return false, err
+	}
+	args := []string{
+		"run", "--rm",
+		"--add-host", "host.docker.internal:host-gateway",
+		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"),
+	}
+	args = append(args, r.containerProxyEnvArgs()...)
+	args = append(args, hostOwnerEnvArgs()...)
+	args = append(args, r.cfg.DockerImage, "steam-auth-verify", accountName)
+	_, err := r.run(ctx, args...)
+	if err == nil {
+		return true, nil
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "steam authentication cache is missing or expired") ||
+		strings.Contains(message, "no cached credentials") ||
+		strings.Contains(message, "password required") ||
+		strings.Contains(message, "account logon denied") {
+		return false, nil
+	}
+	return false, err
+}
+
+func (r Runner) WorkshopCredentialsSecure() bool {
+	info, err := os.Stat(r.cfg.WorkshopSteamCMDConfigDir())
+	return err == nil && info.IsDir() && info.Mode().Perm()&0o077 == 0
+}
+
+func (r Runner) ensureWorkshopSteamCMDConfigDir() error {
+	path := r.cfg.WorkshopSteamCMDConfigDir()
+	if strings.TrimSpace(r.cfg.DataDir) == "" {
+		return fmt.Errorf("SteamCMD Workshop cache requires PALPANEL_DATA_DIR")
+	}
+	if r.cfg.RuntimeRoot != "" {
+		if err := r.cfg.ValidateManagedPath(path, false); err != nil {
+			return fmt.Errorf("validate SteamCMD Workshop cache: %w", err)
+		}
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return fmt.Errorf("create SteamCMD Workshop cache: %w", err)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		return fmt.Errorf("secure SteamCMD Workshop cache: %w", err)
+	}
+	return nil
 }
 
 func (r Runner) Start(ctx context.Context) error {

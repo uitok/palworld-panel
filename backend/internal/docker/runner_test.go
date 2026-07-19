@@ -242,7 +242,7 @@ func TestStartPublishesManagementPortsOnLoopback(t *testing.T) {
 	}
 }
 
-func TestWorkshopCredentialsAreNotPlacedInDockerArguments(t *testing.T) {
+func TestWorkshopUsesPersistedSteamCMDCacheWithoutPasswordArguments(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
 	}
@@ -255,10 +255,8 @@ func TestWorkshopCredentialsAreNotPlacedInDockerArguments(t *testing.T) {
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("STEAM_USERNAME", "fixture_user")
-	t.Setenv("STEAM_PASSWORD", "never-log-this-password")
-	runner := NewRunner(appconfig.Config{DockerBinary: fakeDocker, DockerImage: "image", WorkshopAppID: "1623730"})
-	if err := runner.DownloadWorkshopTo(t.Context(), "3625364851", filepath.Join(root, "download")); err != nil {
+	runner := NewRunner(appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", WorkshopAppID: "1623730"})
+	if err := runner.DownloadWorkshopTo(t.Context(), "3625364851", filepath.Join(root, "download"), "fixture_user"); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(commandLog)
@@ -266,13 +264,17 @@ func TestWorkshopCredentialsAreNotPlacedInDockerArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := strings.Split(strings.TrimSpace(string(body)), "\n")
-	for _, name := range []string{"STEAM_USERNAME", "STEAM_PASSWORD"} {
-		if !containsAdjacent(args, "-e", name) {
-			t.Errorf("Docker arguments do not pass %s by environment name:\n%s", name, string(body))
+	if !containsExact(args, "fixture_user") || !containsExact(args, "steam-auth-verify") && !containsExact(args, "workshop") {
+		t.Errorf("Docker arguments do not use the account with the Workshop command:\n%s", string(body))
+	}
+	for _, forbidden := range []string{"STEAM_USERNAME", "STEAM_PASSWORD", "never-log-this-password"} {
+		if strings.Contains(strings.ToLower(string(body)), strings.ToLower(forbidden)) {
+			t.Fatalf("Docker arguments contain forbidden credential material %q:\n%s", forbidden, string(body))
 		}
 	}
-	if strings.Contains(string(body), "never-log-this-password") || strings.Contains(string(body), "STEAM_PASSWORD=") {
-		t.Fatalf("Docker arguments exposed the Workshop password:\n%s", string(body))
+	wantMount := volume(runner.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config")
+	if !containsExact(args, wantMount) {
+		t.Fatalf("Docker arguments do not mount the persistent SteamCMD cache %q:\n%s", wantMount, string(body))
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
 	"palpanel/internal/id"
+	"palpanel/internal/pallocalize"
 	"palpanel/internal/saveindex"
 )
 
@@ -145,7 +146,11 @@ func (s *Service) Status(ctx context.Context) Status {
 }
 
 func (s *Service) Catalog(ctx context.Context) (json.RawMessage, error) {
-	return s.request(ctx, http.MethodGet, "/v1/catalog", nil)
+	raw, err := s.request(ctx, http.MethodGet, "/v1/catalog", nil)
+	if err != nil {
+		return nil, err
+	}
+	return localizeCatalog(raw)
 }
 
 func (s *Service) Submit(ctx context.Context, subject string, input SubmitInput, billing *Billing) (db.Job, error) {
@@ -314,7 +319,15 @@ func (s *Service) Result(ctx context.Context, jobID string) (db.BreedingResult, 
 	if err != nil {
 		return item, nil, err
 	}
-	return item, json.RawMessage(item.ResultJSON), nil
+	raw := json.RawMessage(item.ResultJSON)
+	if len(raw) == 0 {
+		return item, raw, nil
+	}
+	localized, err := localizeBreedingResult(raw)
+	if err != nil {
+		return item, nil, err
+	}
+	return item, localized, nil
 }
 
 func (s *Service) History(ctx context.Context, subject string, limit int) ([]db.BreedingResult, error) {
@@ -409,6 +422,99 @@ func normalizeStatus(status string) string {
 	default:
 		return "running"
 	}
+}
+
+func localizeCatalog(raw json.RawMessage) (json.RawMessage, error) {
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, fmt.Errorf("PalCalc catalog response is invalid: %w", err)
+	}
+	localizeCatalogItems(document["pals"], pallocalize.PalName)
+	localizeCatalogItems(document["passives"], pallocalize.PassiveName)
+	return json.Marshal(document)
+}
+
+func localizeCatalogItems(raw any, lookup func(string) string) {
+	items, _ := raw.([]any)
+	for _, rawItem := range items {
+		item, _ := rawItem.(map[string]any)
+		id := breedingText(item["id"])
+		if id == "" {
+			continue
+		}
+		original := breedingText(item["name"])
+		localized := lookup(id)
+		if localized == "" || localized == id {
+			localized = firstNonEmptyText(original, id)
+		}
+		if breedingText(item["raw_name"]) == "" && original != "" && original != localized {
+			item["raw_name"] = original
+		}
+		item["name"] = localized
+	}
+}
+
+func localizeBreedingResult(raw json.RawMessage) (json.RawMessage, error) {
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, fmt.Errorf("PalCalc result is invalid: %w", err)
+	}
+	localizeBreedingValue(document)
+	return json.Marshal(document)
+}
+
+func localizeBreedingValue(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if palID := breedingText(typed["pal_id"]); palID != "" {
+			original := breedingText(typed["pal_name"])
+			localized := pallocalize.PalName(palID)
+			if localized == "" || localized == palID {
+				localized = firstNonEmptyText(original, palID)
+			}
+			if breedingText(typed["raw_pal_name"]) == "" && original != "" && original != localized {
+				typed["raw_pal_name"] = original
+			}
+			typed["pal_name"] = localized
+		}
+		if rawPassives, ok := typed["passives"].([]any); ok {
+			original := make([]any, 0, len(rawPassives))
+			localized := make([]any, 0, len(rawPassives))
+			changed := false
+			for _, rawPassive := range rawPassives {
+				passiveID := breedingText(rawPassive)
+				original = append(original, passiveID)
+				name := pallocalize.PassiveName(passiveID)
+				localized = append(localized, name)
+				changed = changed || name != passiveID
+			}
+			if changed {
+				typed["raw_passives"] = original
+			}
+			typed["passives"] = localized
+		}
+		for _, child := range typed {
+			localizeBreedingValue(child)
+		}
+	case []any:
+		for _, child := range typed {
+			localizeBreedingValue(child)
+		}
+	}
+}
+
+func firstNonEmptyText(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func breedingText(value any) string {
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
 }
 
 func clamp(value, minimum, maximum, fallback int) int {

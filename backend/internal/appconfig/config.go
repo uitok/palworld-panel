@@ -482,6 +482,13 @@ func (c Config) WorkshopModsDir() string {
 	return filepath.Join(c.ModsDir(), "Workshop")
 }
 
+// WorkshopSteamCMDConfigDir stores only SteamCMD's cached login metadata for
+// Docker/Wine Workshop downloads. It is deliberately separate from the
+// native-Windows SteamCMD installation and from downloaded Workshop content.
+func (c Config) WorkshopSteamCMDConfigDir() string {
+	return filepath.Join(c.DataDir, "steamcmd-workshop-config")
+}
+
 func (c Config) PalModSettingsPath() string {
 	return filepath.Join(c.ModsDir(), "PalModSettings.ini")
 }

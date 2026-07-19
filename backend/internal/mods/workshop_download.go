@@ -60,7 +60,11 @@ func (m Manager) downloadWorkshopTo(ctx context.Context, jobID, itemID, destinat
 		return fmt.Errorf("build wine runner image: %w", err)
 	}
 	m.update(jobID, "running", 50, "downloading Steam Workshop item", "")
-	if err := m.runner.DownloadWorkshopTo(ctx, itemID, destination); err != nil {
+	accountName, _, err := m.store.GetKV(ctx, workshopSteamAccountKey)
+	if err != nil {
+		return fmt.Errorf("read Steam Workshop account: %w", err)
+	}
+	if err := m.runner.DownloadWorkshopTo(ctx, itemID, destination, accountName); err != nil {
 		return fmt.Errorf("Docker/Wine Workshop download: %w", err)
 	}
 	return nil
