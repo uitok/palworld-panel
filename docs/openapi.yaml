@@ -750,6 +750,9 @@ paths:
     parameters: [*idParameter]
     get: {operationId: getPalDefenderGMPals, tags: [security], x-palpanel-permission: read, responses: *readResponses}
     post: {operationId: givePalDefenderGMPals, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGivePalsRequest'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/custom-pal:
+    parameters: [*idParameter]
+    post: {operationId: givePalDefenderGMCustomPal, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPalTemplate'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/pals/release:
     parameters: [*idParameter]
     post: {operationId: releasePalDefenderGMPal, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderReleasePalRequest'}}}}, responses: *writeResponses}
@@ -819,6 +822,15 @@ paths:
   /security/paldefender/gm/catalog/pals:
     get:
       operationId: searchPalDefenderPalCatalog
+      tags: [security]
+      x-palpanel-permission: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+      responses: *readResponses
+  /security/paldefender/gm/catalog/passives:
+    get:
+      operationId: searchPalDefenderPassiveCatalog
       tags: [security]
       x-palpanel-permission: read
       parameters:
@@ -1721,6 +1733,7 @@ components:
         CondensedPals: {type: integer, minimum: 0, maximum: 2147483647}
         UnusedStatusPoints: {type: integer, minimum: 0, maximum: 2147483647}
         FriendshipPoints: {type: integer, format: int64, minimum: 0, maximum: 2147483647}
+        IsAwakening: {type: boolean}
         PhysicalHealth: {type: string}
         WorkerSick: {type: string}
         ImportedCharacter: {type: boolean}

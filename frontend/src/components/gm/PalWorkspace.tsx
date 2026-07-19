@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Download, ExternalLink, FileJson, LoaderCircle, RefreshCw, Save, Search, Send, Sword, Trash2, Upload } from 'lucide-react';
+import { AlertTriangle, Download, ExternalLink, FileJson, LoaderCircle, RefreshCw, Save, Search, Send, Sparkles, Sword, Trash2, Upload, X } from 'lucide-react';
 import { palDefenderGMApi } from '../../api/paldefenderGM';
 import type { Pal, PalDefenderPalCatalogEntry, PalDefenderPalTemplate } from '../../types';
 import { PalIcon } from './PalIcon';
@@ -11,21 +11,27 @@ export const PalWorkspace: React.FC<{
   identifier: string;
   playerName: string;
   canWrite: boolean;
+  canManageTemplates: boolean;
   available: boolean;
   busy: boolean;
   pending: string;
   savePals: Pal[];
   palCatalog: PalDefenderPalCatalogEntry[];
+  passiveCatalog: PalDefenderPalCatalogEntry[];
   onRun: ActionRunner;
   onRelease: (pal: Pal) => Promise<boolean>;
-}> = ({ identifier, playerName, canWrite, available, busy, pending, savePals, palCatalog, onRun, onRelease }) => {
+}> = ({ identifier, playerName, canWrite, canManageTemplates, available, busy, pending, savePals, palCatalog, passiveCatalog, onRun, onRelease }) => {
   const queryClient = useQueryClient();
   const [palID, setPalID] = useState('');
   const [palLevel, setPalLevel] = useState('1');
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [selectedExport, setSelectedExport] = useState('');
   const [editor, setEditor] = useState<TemplateEditor>(() => emptyTemplateEditor());
+  const [templateBase, setTemplateBase] = useState<PalDefenderPalTemplate | null>(null);
+  const [templateImportMessage, setTemplateImportMessage] = useState('');
+  const [templateImportError, setTemplateImportError] = useState('');
   const [palSearch, setPalSearch] = useState('');
+  const [passiveSearch, setPassiveSearch] = useState('');
   const [releaseTarget, setReleaseTarget] = useState<Pal | null>(null);
   const [releaseConfirmation, setReleaseConfirmation] = useState('');
 
@@ -33,6 +39,13 @@ export const PalWorkspace: React.FC<{
     const needle = palSearch.trim().toLowerCase();
     return !needle || pal.id.toLowerCase().includes(needle) || pal.name.toLowerCase().includes(needle);
   }).slice(0, 80);
+  const selectedPassiveIDs = textList(editor.passives);
+  const passiveByID = new Map(passiveCatalog.map((passive) => [passive.id.toLowerCase(), passive]));
+  const filteredPassiveCatalog = passiveCatalog.filter((passive) => {
+    const needle = passiveSearch.trim().toLowerCase();
+    return !selectedPassiveIDs.some((id) => id.toLowerCase() === passive.id.toLowerCase())
+      && (!needle || passive.id.toLowerCase().includes(needle) || passive.name.toLowerCase().includes(needle));
+  }).slice(0, 60);
 
   const palsQuery = useQuery({
     queryKey: ['paldefender-gm', 'pals', identifier],
@@ -77,6 +90,7 @@ export const PalWorkspace: React.FC<{
   const loadManagedTemplate = async () => {
     if (!selectedTemplate) return;
     const template = await palDefenderGMApi.template(selectedTemplate);
+    setTemplateBase(template);
     setEditor(editorFromTemplate(selectedTemplate, template));
   };
 
@@ -84,13 +98,43 @@ export const PalWorkspace: React.FC<{
     if (!selectedExport) return;
     const template = await palDefenderGMApi.exportedPalTemplate(identifier, selectedExport);
     const defaultName = selectedExport.replace(/\.json$/i, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64);
+    setTemplateBase(template);
     setEditor(editorFromTemplate(defaultName || 'exported_pal', template));
+  };
+
+  const importTemplateFile = async (file?: File) => {
+    setTemplateImportMessage('');
+    setTemplateImportError('');
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      setTemplateImportError('模板文件不能超过 1 MB');
+      return;
+    }
+    try {
+      const raw = JSON.parse(await file.text()) as unknown;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('模板必须是单个 JSON 对象');
+      const template = raw as PalDefenderPalTemplate;
+      if (typeof template.PalID !== 'string' || !template.PalID.trim()) throw new Error('模板缺少 PalID');
+      const defaultName = file.name.replace(/\.json$/i, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64);
+      setTemplateBase(template);
+      setEditor(editorFromTemplate(defaultName || 'imported_pal', template));
+      setTemplateImportMessage(`已导入 ${file.name}，可继续编辑、直接发放或另存模板`);
+    } catch (error) {
+      setTemplateImportError(error instanceof Error ? error.message : '模板解析失败');
+    }
+  };
+
+  const resetTemplateEditor = () => {
+    setTemplateBase(null);
+    setEditor(emptyTemplateEditor());
+    setTemplateImportMessage('');
+    setTemplateImportError('');
   };
 
   const saveTemplate = async () => {
     const name = editor.name.trim();
-    const template = templateFromEditor(editor);
-    if (!name || !template.PalID) return;
+    const template = templateFromEditor(editor, templateBase);
+    if (!canManageTemplates || !name || !template.PalID) return;
     await onRun('save-template', async () => {
       await palDefenderGMApi.putTemplate(name, template);
       setSelectedTemplate(name.endsWith('.json') ? name : `${name}.json`);
@@ -98,12 +142,31 @@ export const PalWorkspace: React.FC<{
     }, `模板 ${name} 已保存`);
   };
 
+  const giveCustomPal = async () => {
+    const template = templateFromEditor(editor, templateBase);
+    if (!template.PalID) return;
+    await onRun('give-custom-pal', async () => {
+      await palDefenderGMApi.giveCustomPal(identifier, template);
+      await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'pals', identifier] });
+    }, `已向 ${playerName} 发放自定义 ${template.PalID}${template.Passives?.length ? `（${template.Passives.length} 个指定词条）` : ''}`);
+  };
+
+  const addPassive = (id: string) => {
+    setEditor({ ...editor, passives: [...selectedPassiveIDs, id].join(', ') });
+    setPassiveSearch('');
+  };
+
+  const removePassive = (id: string) => setEditor({
+    ...editor,
+    passives: selectedPassiveIDs.filter((entry) => entry.toLowerCase() !== id.toLowerCase()).join(', '),
+  });
+
   const disabled = !canWrite || !available || busy;
   return (
     <div className="space-y-5 p-4 sm:p-5">
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><Sword size={16} className="text-sky-500" />按 ID 发放帕鲁</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">适合普通帕鲁；需要 IV、魂强化、技能和被动时使用右侧模板。</p></div>
+          <div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><Sword size={16} className="text-sky-500" />按 ID 发放帕鲁</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">适合普通帕鲁；需要指定词条、IV、魂强化或工作适性时使用下方自定义编辑器。</p></div>
           <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
             <label className="text-xs font-bold text-slate-600">PalID<input aria-label="帕鲁 ID" value={palID} onChange={(event) => setPalID(event.target.value)} placeholder="例如 Anubis" className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
             <label className="text-xs font-bold text-slate-600">等级<input aria-label="帕鲁等级" type="number" min={1} max={255} value={palLevel} onChange={(event) => setPalLevel(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
@@ -139,26 +202,53 @@ export const PalWorkspace: React.FC<{
       </div>
 
       <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><Save size={16} className="text-emerald-500" />PalTemplate 属性编辑器</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">保存会写入 PalDefender/Pals/Templates，不会直接覆盖玩家已有帕鲁。</p></div><a href="https://paldeck.cc/creator" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600">打开模板生成器 <ExternalLink size={12} /></a></div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><Save size={16} className="text-emerald-500" />PalTemplate 属性编辑器</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">可直接发放当前配置；持久保存模板需要 security:write 权限，且不会覆盖玩家已有帕鲁。</p></div><a href="https://paldeck.cc/creator" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600">打开模板生成器 <ExternalLink size={12} /></a></div>
+        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-sky-100 bg-sky-50/50 p-3">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-sky-600 px-3 py-2.5 text-xs font-bold text-white"><Upload size={14} />导入 JSON 模板<input aria-label="导入帕鲁模板文件" type="file" accept=".json,application/json" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; void importTemplateFile(file); event.target.value = ''; }} /></label>
+          <button type="button" onClick={resetTemplateEditor} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600">新建空白模板</button>
+          <span className="text-[10px] font-semibold text-slate-400">推荐：</span>
+          <a href="https://paldeck.cc/creator" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-700">Paldeck 模板生成器 <ExternalLink size={11} /></a>
+          <a href="https://paldeck.cc/passives" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700">词条表 <ExternalLink size={11} /></a>
+          <a href="https://paldeck.cc/skills" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">技能表 <ExternalLink size={11} /></a>
+        </div>
+        {templateImportMessage && <p role="status" className="mt-2 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-semibold text-emerald-700">{templateImportMessage}</p>}
+        {templateImportError && <p role="alert" className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">导入失败：{templateImportError}</p>}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <TextField label="模板名称" value={editor.name} onChange={(value) => setEditor({ ...editor, name: value })} placeholder="reward_anubis" />
           <TextField label="PalID" value={editor.palID} onChange={(value) => setEditor({ ...editor, palID: value })} placeholder="Anubis" />
           <TextField label="昵称" value={editor.nickname} onChange={(value) => setEditor({ ...editor, nickname: value })} placeholder="可选" />
+          <TextField label="皮肤 ID" value={editor.skinID} onChange={(value) => setEditor({ ...editor, skinID: value })} placeholder="可选" />
           <label className="text-xs font-bold text-slate-600">性别<select aria-label="性别" value={editor.gender} onChange={(event) => setEditor({ ...editor, gender: event.target.value })} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700"><option value="">默认</option><option value="Male">Male</option><option value="Female">Female</option><option value="None">None</option></select></label>
           <NumberEditor label="等级" value={editor.level} onChange={(value) => setEditor({ ...editor, level: value })} />
           <NumberEditor label="伙伴技能等级" value={editor.partnerSkillLevel} onChange={(value) => setEditor({ ...editor, partnerSkillLevel: value })} />
+          <NumberEditor label="浓缩数量 / 星级进度" value={editor.condensedPals} onChange={(value) => setEditor({ ...editor, condensedPals: value })} />
           <NumberEditor label="IV 生命" value={editor.ivHealth} onChange={(value) => setEditor({ ...editor, ivHealth: value })} />
+          <NumberEditor label="IV 近战攻击" value={editor.ivAttackMelee} onChange={(value) => setEditor({ ...editor, ivAttackMelee: value })} />
           <NumberEditor label="IV 远程攻击" value={editor.ivAttackShot} onChange={(value) => setEditor({ ...editor, ivAttackShot: value })} />
           <NumberEditor label="IV 防御" value={editor.ivDefense} onChange={(value) => setEditor({ ...editor, ivDefense: value })} />
           <NumberEditor label="魂强化 生命" value={editor.soulHealth} onChange={(value) => setEditor({ ...editor, soulHealth: value })} />
           <NumberEditor label="魂强化 攻击" value={editor.soulAttack} onChange={(value) => setEditor({ ...editor, soulAttack: value })} />
           <NumberEditor label="魂强化 防御" value={editor.soulDefense} onChange={(value) => setEditor({ ...editor, soulDefense: value })} />
+          <NumberEditor label="魂强化 作业速度" value={editor.soulCraftSpeed} onChange={(value) => setEditor({ ...editor, soulCraftSpeed: value })} />
+          <CheckboxEditor label="稀有 / 闪光" checked={editor.shiny} onChange={(checked) => setEditor({ ...editor, shiny: checked })} />
+          <CheckboxEditor label="觉醒个体" checked={editor.isAwakening} onChange={(checked) => setEditor({ ...editor, isAwakening: checked })} />
         </div>
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <TextArea label="被动词条" value={editor.passives} onChange={(value) => setEditor({ ...editor, passives: value })} placeholder="Legend, CraftSpeed_up3" />
+        <section className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/40 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2"><div><h4 className="flex items-center gap-2 text-xs font-black text-violet-800"><Sparkles size={14} />指定被动词条</h4><p className="mt-1 text-[10px] font-semibold text-violet-500">支持中文名或内部 ID 搜索；提交给 PalDefender 时自动使用准确的内部 ID。</p></div><span className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-violet-600">已选 {selectedPassiveIDs.length}</span></div>
+          <label className="relative mt-3 block"><Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input aria-label="搜索被动词条" value={passiveSearch} onChange={(event) => setPassiveSearch(event.target.value)} placeholder="例如 传说、卓绝技艺、Legend" className="w-full rounded-xl border border-violet-100 bg-white py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 focus:border-violet-400 focus:outline-none" /></label>
+          {selectedPassiveIDs.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{selectedPassiveIDs.map((id) => { const entry = passiveByID.get(id.toLowerCase()); return <button type="button" key={id} onClick={() => removePassive(id)} aria-label={`移除词条 ${entry?.name || id}`} className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-violet-700"><span>{entry?.name || id}</span>{entry && <span className="font-mono text-[9px] text-violet-400">{id}</span>}<X size={11} /></button>; })}</div>}
+          <div className="mt-3 grid max-h-44 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">{filteredPassiveCatalog.map((passive) => <button type="button" key={passive.id} onClick={() => addPassive(passive.id)} className="rounded-xl border border-violet-100 bg-white p-2.5 text-left hover:border-violet-300"><span className="block truncate text-[11px] font-bold text-slate-700">{passive.name}</span><span className="mt-1 block truncate font-mono text-[9px] text-slate-400">{passive.id}</span></button>)}</div>
+        </section>
+        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          <TextArea label="被动词条 ID（高级编辑）" value={editor.passives} onChange={(value) => setEditor({ ...editor, passives: value })} placeholder="Legend, CraftSpeed_up3" />
           <TextArea label="主动技能（最多 3 个）" value={editor.activeSkills} onChange={(value) => setEditor({ ...editor, activeSkills: value })} placeholder="SandTornado, RockLance" />
+          <TextArea label="已学习技能" value={editor.learntSkills} onChange={(value) => setEditor({ ...editor, learntSkills: value })} placeholder="技能内部 ID，逗号分隔" />
         </div>
-        <button type="button" onClick={() => void saveTemplate()} disabled={disabled || !editor.name.trim() || !editor.palID.trim()} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'save-template' ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}保存模板</button>
+        <section className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/60 p-3"><h4 className="text-xs font-black text-slate-700">额外工作适性</h4><p className="mt-1 text-[10px] font-semibold text-slate-400">仅填写需要额外覆盖的等级；留空不会修改。</p><div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">{WORK_SUITABILITY_FIELDS.map(([key, label]) => <NumberEditor key={key} label={label} value={editor.workSuitabilities[key] || ''} onChange={(value) => setEditor({ ...editor, workSuitabilities: { ...editor.workSuitabilities, [key]: value } })} />)}</div></section>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" onClick={() => void giveCustomPal()} disabled={disabled || !editor.palID.trim()} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'give-custom-pal' ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}直接发放当前配置</button>
+          <button type="button" onClick={() => void saveTemplate()} disabled={busy || !available || !canManageTemplates || !editor.name.trim() || !editor.palID.trim()} title={canManageTemplates ? '保存为持久模板' : '需要 security:write 权限'} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'save-template' ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}保存模板</button>
+        </div>
       </section>
 
       <section className="rounded-2xl border border-slate-100 bg-white">
@@ -171,40 +261,77 @@ export const PalWorkspace: React.FC<{
 };
 
 interface TemplateEditor {
-  name: string; palID: string; nickname: string; gender: string; level: string; partnerSkillLevel: string;
-  ivHealth: string; ivAttackShot: string; ivDefense: string; soulHealth: string; soulAttack: string; soulDefense: string;
-  passives: string; activeSkills: string;
+  name: string; palID: string; nickname: string; skinID: string; gender: string; level: string; partnerSkillLevel: string; condensedPals: string;
+  shiny: boolean; isAwakening: boolean;
+  ivHealth: string; ivAttackMelee: string; ivAttackShot: string; ivDefense: string;
+  soulHealth: string; soulAttack: string; soulDefense: string; soulCraftSpeed: string;
+  passives: string; activeSkills: string; learntSkills: string;
+  workSuitabilities: Record<string, string>;
 }
 
-const emptyTemplateEditor = (): TemplateEditor => ({ name: '', palID: '', nickname: '', gender: '', level: '1', partnerSkillLevel: '1', ivHealth: '', ivAttackShot: '', ivDefense: '', soulHealth: '', soulAttack: '', soulDefense: '', passives: '', activeSkills: '' });
+const WORK_SUITABILITY_FIELDS = [
+  ['BaseCampBattle', '基地战斗'], ['EmitFlame', '生火'], ['Watering', '浇水'], ['Seeding', '播种'], ['GenerateElectricity', '发电'],
+  ['Handcraft', '手工作业'], ['Collection', '采集'], ['Deforest', '伐木'], ['Mining', '采矿'], ['OilExtraction', '采油'],
+  ['ProductMedicine', '制药'], ['Cool', '冷却'], ['Transport', '搬运'], ['MonsterFarm', '牧场'], ['Anyone', '任意工作'],
+] as const;
+
+const emptyTemplateEditor = (): TemplateEditor => ({
+  name: '', palID: '', nickname: '', skinID: '', gender: '', level: '1', partnerSkillLevel: '1', condensedPals: '', shiny: false, isAwakening: false,
+  ivHealth: '', ivAttackMelee: '', ivAttackShot: '', ivDefense: '', soulHealth: '', soulAttack: '', soulDefense: '', soulCraftSpeed: '',
+  passives: '', activeSkills: '', learntSkills: '', workSuitabilities: {},
+});
 const textList = (value: string) => [...new Set(value.split(/[\n,，;；]+/).map((item) => item.trim()).filter(Boolean))];
 const optionalNumber = (value: string) => value.trim() === '' ? undefined : Number(value);
 const compactMap = (values: Record<string, string>) => Object.fromEntries(Object.entries(values).flatMap(([key, value]) => value.trim() === '' ? [] : [[key, Number(value)]]));
 
-const templateFromEditor = (editor: TemplateEditor): PalDefenderPalTemplate => {
-  const ivs = compactMap({ Health: editor.ivHealth, AttackShot: editor.ivAttackShot, Defense: editor.ivDefense });
-  const souls = compactMap({ Health: editor.soulHealth, Attack: editor.soulAttack, Defense: editor.soulDefense });
-  const template: PalDefenderPalTemplate = { PalID: editor.palID.trim() };
+const templateFromEditor = (editor: TemplateEditor, base: PalDefenderPalTemplate | null = null): PalDefenderPalTemplate => {
+  const ivs = compactMap({ Health: editor.ivHealth, AttackMelee: editor.ivAttackMelee, AttackShot: editor.ivAttackShot, Defense: editor.ivDefense });
+  const souls = compactMap({ Health: editor.soulHealth, Attack: editor.soulAttack, Defense: editor.soulDefense, CraftSpeed: editor.soulCraftSpeed });
+  const workSuitabilities = compactMap(editor.workSuitabilities);
+  const template: PalDefenderPalTemplate = { ...(base ?? {}), PalID: editor.palID.trim() };
+  delete template.Nickname;
+  delete template.SkinId;
+  delete template.Gender;
+  delete template.Level;
+  delete template.PartnerSkillLevel;
+  delete template.CondensedPals;
+  delete template.Shiny;
+  delete template.IsAwakening;
+  delete template.IVs;
+  delete template.PalSouls;
+  delete template.Passives;
+  delete template.ActiveSkills;
+  delete template.LearntSkills;
+  delete template.ExtraWorkSuitabilities;
   if (editor.nickname.trim()) template.Nickname = editor.nickname.trim();
+  if (editor.skinID.trim()) template.SkinId = editor.skinID.trim();
   if (editor.gender) template.Gender = editor.gender as 'Male' | 'Female' | 'None';
   if (optionalNumber(editor.level) !== undefined) template.Level = optionalNumber(editor.level);
   if (optionalNumber(editor.partnerSkillLevel) !== undefined) template.PartnerSkillLevel = optionalNumber(editor.partnerSkillLevel);
+  if (optionalNumber(editor.condensedPals) !== undefined) template.CondensedPals = optionalNumber(editor.condensedPals);
+  if (editor.shiny) template.Shiny = true;
+  if (editor.isAwakening) template.IsAwakening = true;
   if (Object.keys(ivs).length > 0) template.IVs = ivs;
   if (Object.keys(souls).length > 0) template.PalSouls = souls;
   if (textList(editor.passives).length > 0) template.Passives = textList(editor.passives);
   if (textList(editor.activeSkills).length > 0) template.ActiveSkills = textList(editor.activeSkills).slice(0, 3);
+  if (textList(editor.learntSkills).length > 0) template.LearntSkills = textList(editor.learntSkills);
+  if (Object.keys(workSuitabilities).length > 0) template.ExtraWorkSuitabilities = workSuitabilities;
   return template;
 };
 
 const editorFromTemplate = (name: string, template: PalDefenderPalTemplate): TemplateEditor => ({
-  name: name.replace(/\.json$/i, ''), palID: template.PalID || '', nickname: template.Nickname || '', gender: template.Gender || '',
-  level: template.Level == null ? '' : String(template.Level), partnerSkillLevel: template.PartnerSkillLevel == null ? '' : String(template.PartnerSkillLevel),
-  ivHealth: template.IVs?.Health == null ? '' : String(template.IVs.Health), ivAttackShot: template.IVs?.AttackShot == null ? '' : String(template.IVs.AttackShot), ivDefense: template.IVs?.Defense == null ? '' : String(template.IVs.Defense),
-  soulHealth: template.PalSouls?.Health == null ? '' : String(template.PalSouls.Health), soulAttack: template.PalSouls?.Attack == null ? '' : String(template.PalSouls.Attack), soulDefense: template.PalSouls?.Defense == null ? '' : String(template.PalSouls.Defense),
-  passives: (template.Passives ?? []).join(', '), activeSkills: (template.ActiveSkills ?? []).join(', '),
+  name: name.replace(/\.json$/i, ''), palID: template.PalID || '', nickname: template.Nickname || '', skinID: template.SkinId || '', gender: template.Gender || '',
+  level: template.Level == null ? '' : String(template.Level), partnerSkillLevel: template.PartnerSkillLevel == null ? '' : String(template.PartnerSkillLevel), condensedPals: template.CondensedPals == null ? '' : String(template.CondensedPals),
+  shiny: Boolean(template.Shiny), isAwakening: Boolean(template.IsAwakening),
+  ivHealth: template.IVs?.Health == null ? '' : String(template.IVs.Health), ivAttackMelee: template.IVs?.AttackMelee == null ? '' : String(template.IVs.AttackMelee), ivAttackShot: template.IVs?.AttackShot == null ? '' : String(template.IVs.AttackShot), ivDefense: template.IVs?.Defense == null ? '' : String(template.IVs.Defense),
+  soulHealth: template.PalSouls?.Health == null ? '' : String(template.PalSouls.Health), soulAttack: template.PalSouls?.Attack == null ? '' : String(template.PalSouls.Attack), soulDefense: template.PalSouls?.Defense == null ? '' : String(template.PalSouls.Defense), soulCraftSpeed: template.PalSouls?.CraftSpeed == null ? '' : String(template.PalSouls.CraftSpeed),
+  passives: (template.Passives ?? []).join(', '), activeSkills: (template.ActiveSkills ?? []).join(', '), learntSkills: (template.LearntSkills ?? []).join(', '),
+  workSuitabilities: Object.fromEntries(Object.entries(template.ExtraWorkSuitabilities ?? {}).map(([key, value]) => [key, String(value)])),
 });
 
 const SmallCount: React.FC<{ label: string; value: number }> = ({ label, value }) => <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-center"><p className="text-[9px] font-bold text-slate-400">{label}</p><p className="mt-1 text-sm font-black text-slate-700">{value}</p></div>;
 const TextField: React.FC<{ label: string; value: string; onChange: (value: string) => void; placeholder: string }> = ({ label, value, onChange, placeholder }) => <label className="text-xs font-bold text-slate-600">{label}<input aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>;
 const NumberEditor: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => <label className="text-xs font-bold text-slate-600">{label}<input aria-label={label} type="number" min={0} max={255} value={value} onChange={(event) => onChange(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>;
+const CheckboxEditor: React.FC<{ label: string; checked: boolean; onChange: (checked: boolean) => void }> = ({ label, checked, onChange }) => <label className="flex min-h-[62px] items-center justify-between rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600"><span>{label}</span><input aria-label={label} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-violet-600" /></label>;
 const TextArea: React.FC<{ label: string; value: string; onChange: (value: string) => void; placeholder: string }> = ({ label, value, onChange, placeholder }) => <label className="text-xs font-bold text-slate-600">{label}<textarea aria-label={label} rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 p-3 font-mono text-xs text-slate-700 focus:border-sky-500 focus:outline-none" /></label>;

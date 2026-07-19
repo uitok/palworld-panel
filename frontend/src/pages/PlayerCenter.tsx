@@ -166,6 +166,12 @@ export const PlayerCenter: React.FC = () => {
     enabled: activeTab === 'pals',
     staleTime: 30 * 60 * 1000,
   });
+  const passiveCatalogQuery = useQuery({
+    queryKey: ['paldefender-gm', 'catalog', 'passives'],
+    queryFn: () => palDefenderGMApi.passiveCatalog('', 5000),
+    enabled: activeTab === 'pals',
+    staleTime: 30 * 60 * 1000,
+  });
 
   const selectedGM = gmPlayerQuery.data ?? selected?.gm;
   const selectedSave = saveDetailQuery.data?.player ?? selected?.save;
@@ -317,7 +323,7 @@ export const PlayerCenter: React.FC = () => {
             {activeTab === 'profile' && <PlayerOverview player={overview} progression={progressionQuery.data} savePals={savePalsQuery.data?.items ?? []} saveInventory={saveInventoryQuery.data?.containers ?? []} saveLoading={savePalsQuery.isLoading || saveInventoryQuery.isLoading} />}
             {activeTab === 'items' && <><ItemWorkspace catalog={catalogQuery.data?.items ?? []} inventory={liveInventoryQuery.data?.Inventory} inventoryLoading={liveInventoryQuery.isLoading || liveInventoryQuery.isFetching} canWrite={canWrite} online={selectedOnline && liveReady} busy={busy} pending={pending} onRefresh={() => void liveInventoryQuery.refetch()} onGive={giveItems} onAdjust={adjustItemTotal} /><SaveInventoryPanel containers={saveInventoryQuery.data?.containers ?? []} catalog={catalogQuery.data?.items ?? []} loading={saveInventoryQuery.isLoading} /></>}
             {activeTab === 'progression' && <ProgressionWorkspace identifier={gmIdentifier} canWrite={canWrite} available={liveReady} busy={busy} pending={pending} progression={progressionQuery.data} techs={techsQuery.data} catalog={localTechnologyCatalogQuery.data?.items ?? []} runtimeTechnologyIDs={runtimeTechnologyCatalogQuery.data?.catalog.entries ?? []} loading={progressionQuery.isFetching || techsQuery.isFetching} onRun={runAction} onRefresh={async () => { await Promise.all([progressionQuery.refetch(), techsQuery.refetch()]); }} />}
-            {activeTab === 'pals' && <PalWorkspace identifier={gmIdentifier} playerName={selectedName} canWrite={canWrite} available={liveReady} busy={busy} pending={pending} savePals={savePalsQuery.data?.items ?? []} palCatalog={palCatalogQuery.data?.items ?? []} onRun={runAction} onRelease={releasePal} />}
+            {activeTab === 'pals' && <PalWorkspace identifier={gmIdentifier} playerName={selectedName} canWrite={canWrite} canManageTemplates={canSecurityWrite} available={liveReady} busy={busy} pending={pending} savePals={savePalsQuery.data?.items ?? []} palCatalog={palCatalogQuery.data?.items ?? []} passiveCatalog={passiveCatalogQuery.data?.items ?? []} onRun={runAction} onRelease={releasePal} />}
             {activeTab === 'message' && <MessageWorkspace mode={messageMode} onModeChange={setMessageMode} messageType={messageType} onMessageTypeChange={setMessageType} message={message} onMessageChange={setMessage} canWrite={canWrite && liveReady} online={selectedOnline} busy={busy} onSubmit={() => void submitMessage()} />}
             {activeTab === 'access' && <><AccessWorkspace identifier={gmIdentifier} playerName={selectedName} canSecurityWrite={canSecurityWrite} busy={busy} pending={pending} onRun={runAction} /><ModerationWorkspace reason={reason} onReasonChange={setReason} banIP={banIP} onBanIPChange={setBanIP} canWrite={canWrite && liveReady} busy={busy} online={selectedOnline} pending={pending} onAction={(action) => void moderate(action)} /></>}
           </> : <div className="flex min-h-[720px] flex-col items-center justify-center px-6 text-center text-xs font-semibold text-slate-400"><UserRound size={30} className="mb-3 text-slate-300" />请先从左侧选择玩家</div>}

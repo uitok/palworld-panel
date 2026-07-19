@@ -11,9 +11,10 @@ func TestPalTemplateWriteReadListOverwriteAndDelete(t *testing.T) {
 	defer cleanup()
 	level := 50
 	partner := 3
+	awakening := true
 	template := PalTemplate{
 		PalID: "Anubis", Nickname: "Arena Anubis", Gender: "none", Level: &level,
-		PartnerSkillLevel: &partner, Shiny: boolPointer(true),
+		PartnerSkillLevel: &partner, Shiny: boolPointer(true), IsAwakening: &awakening,
 		IVs:          map[string]int{"Health": 100, "AttackShot": 90, "Defense": 80},
 		PalSouls:     map[string]int{"Health": 10, "Attack": 10},
 		ActiveSkills: []string{"SandTornado", "RockLance"}, Passives: []string{"Legend", "CraftSpeed_up3"},
@@ -23,7 +24,7 @@ func TestPalTemplateWriteReadListOverwriteAndDelete(t *testing.T) {
 		t.Fatalf("WritePalTemplate = %#v, %v", info, err)
 	}
 	read, err := manager.ReadPalTemplate("reward_anubis.json")
-	if err != nil || read.Gender != "None" || read.Level == nil || *read.Level != 50 || len(read.Passives) != 2 {
+	if err != nil || read.Gender != "None" || read.Level == nil || *read.Level != 50 || read.IsAwakening == nil || !*read.IsAwakening || len(read.Passives) != 2 {
 		t.Fatalf("ReadPalTemplate = %#v, %v", read, err)
 	}
 	read.Nickname = "Updated"

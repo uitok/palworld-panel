@@ -31,7 +31,7 @@ func TestPalDefenderTemplateAccessAndCatalogRoutes(t *testing.T) {
 		return recorder
 	}
 
-	template := `{"PalID":"Anubis","Nickname":"Arena Anubis","Gender":"None","Level":50,"PartnerSkillLevel":3,"IVs":{"Health":100,"AttackShot":90,"Defense":80},"PalSouls":{"Health":10,"Attack":10},"ActiveSkills":["SandTornado","RockLance"],"Passives":["Legend","CraftSpeed_up3"]}`
+	template := `{"PalID":"Anubis","Nickname":"Arena Anubis","Gender":"None","Level":50,"PartnerSkillLevel":3,"IsAwakening":true,"IVs":{"Health":100,"AttackMelee":95,"AttackShot":90,"Defense":80},"PalSouls":{"Health":10,"Attack":10,"CraftSpeed":10},"ActiveSkills":["SandTornado","RockLance"],"Passives":["Legend","CraftSpeed_up3"],"ExtraWorkSuitabilities":{"Mining":5}}`
 	if recorder := request(http.MethodPut, "/api/security/paldefender/gm/pal-templates/reward_anubis", template); recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"reward_anubis.json"`) {
 		t.Fatalf("put template = %d %s", recorder.Code, recorder.Body.String())
 	}

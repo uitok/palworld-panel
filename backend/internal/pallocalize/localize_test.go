@@ -46,6 +46,10 @@ func TestSearchPalAndTechnologyCatalogs(t *testing.T) {
 	if len(pals) < 1 || pals[0].ID != "Anubis" {
 		t.Fatalf("Pal search = %#v", pals)
 	}
+	passives := SearchPassives("卓绝技艺", 10)
+	if len(passives) != 1 || passives[0].ID != "CraftSpeed_up3" || passives[0].Name != "卓绝技艺" {
+		t.Fatalf("passive search = %#v", passives)
+	}
 	technologies := SearchTechnologies("原始的作业台", 10)
 	if len(technologies) != 1 || technologies[0].ID != "Workbench" || technologies[0].Level != 1 || technologies[0].IconURL == "" {
 		t.Fatalf("technology search = %#v", technologies)

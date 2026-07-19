@@ -21,12 +21,13 @@ type catalog struct {
 }
 
 type normalizedCatalog struct {
-	pals     map[string]string
-	items    map[string]string
-	passives map[string]string
-	itemList []ItemEntry
-	palList  []PalEntry
-	techList []TechnologyEntry
+	pals        map[string]string
+	items       map[string]string
+	passives    map[string]string
+	itemList    []ItemEntry
+	palList     []PalEntry
+	passiveList []PassiveEntry
+	techList    []TechnologyEntry
 }
 
 type ItemEntry struct {
@@ -36,6 +37,11 @@ type ItemEntry struct {
 }
 
 type PalEntry struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type PassiveEntry struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
@@ -72,6 +78,14 @@ func loadCatalog() normalizedCatalog {
 			palList = append(palList, PalEntry{ID: id, Name: name})
 		}
 	}
+	passiveList := make([]PassiveEntry, 0, len(source.Passives))
+	for id, name := range source.Passives {
+		id = strings.TrimSpace(id)
+		name = strings.TrimSpace(name)
+		if id != "" && name != "" {
+			passiveList = append(passiveList, PassiveEntry{ID: id, Name: name})
+		}
+	}
 	var techList []TechnologyEntry
 	if err := json.Unmarshal(technologyCatalogJSON, &techList); err != nil {
 		panic("decode embedded Palworld technology catalog: " + err.Error())
@@ -83,13 +97,17 @@ func loadCatalog() normalizedCatalog {
 	sort.Slice(palList, func(i, j int) bool {
 		return strings.ToLower(palList[i].ID) < strings.ToLower(palList[j].ID)
 	})
+	sort.Slice(passiveList, func(i, j int) bool {
+		return strings.ToLower(passiveList[i].ID) < strings.ToLower(passiveList[j].ID)
+	})
 	return normalizedCatalog{
-		pals:     normalizeKeys(source.Pals),
-		items:    normalizeKeys(source.Items),
-		passives: normalizeKeys(source.Passives),
-		itemList: itemList,
-		palList:  palList,
-		techList: techList,
+		pals:        normalizeKeys(source.Pals),
+		items:       normalizeKeys(source.Items),
+		passives:    normalizeKeys(source.Passives),
+		itemList:    itemList,
+		palList:     palList,
+		passiveList: passiveList,
+		techList:    techList,
 	}
 }
 
@@ -182,6 +200,22 @@ func SearchPals(query string, limit int) []PalEntry {
 			continue
 		}
 		results = append(results, pal)
+		if len(results) == limit {
+			break
+		}
+	}
+	return results
+}
+
+func SearchPassives(query string, limit int) []PassiveEntry {
+	limit = normalizeSearchLimit(limit)
+	query = normalize(query)
+	results := make([]PassiveEntry, 0, min(limit, len(names.passiveList)))
+	for _, passive := range names.passiveList {
+		if query != "" && !strings.Contains(normalize(passive.ID), query) && !strings.Contains(normalize(passive.Name), query) {
+			continue
+		}
+		results = append(results, passive)
 		if len(results) == limit {
 			break
 		}

@@ -84,6 +84,17 @@ func (s Server) palDefenderGMGivePals(c *gin.Context) {
 	})
 }
 
+func (s Server) palDefenderGMGiveCustomPal(c *gin.Context) {
+	var request paldefender.PalTemplate
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RESTGiveCustomPal(ctx, c.Param("id"), request)
+	})
+}
+
 func (s Server) palDefenderGMReleasePal(c *gin.Context) {
 	var request paldefender.ReleasePalRequest
 	if err := bindPalDefenderGMJSON(c, &request); err != nil {
@@ -180,6 +191,16 @@ func (s Server) palDefenderGMPalCatalog(c *gin.Context) {
 		return
 	}
 	items := pallocalize.SearchPals(c.Query("q"), limit)
+	ok(c, gin.H{"items": items, "returned": len(items)})
+}
+
+func (s Server) palDefenderGMPassiveCatalog(c *gin.Context) {
+	limit, err := parseGMCatalogLimit(c)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	items := pallocalize.SearchPassives(c.Query("q"), limit)
 	ok(c, gin.H{"items": items, "returned": len(items)})
 }
 

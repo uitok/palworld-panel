@@ -405,6 +405,13 @@ export const palDefenderGMApi = {
       { quiet: true, fallbackOnError: false },
     ),
 
+  giveCustomPal: (identifier: string, request: PalDefenderPalTemplate, idempotencyKey?: string) =>
+    handleRequest<unknown, PalDefenderGivePalTemplatesResult>(
+      () => apiClient.post(`${playerPath(identifier)}/custom-pal`, request, idempotencyConfig(idempotencyKey)),
+      { Granted: { PalTemplates: 0 } },
+      { quiet: true, fallbackOnError: false },
+    ),
+
   releasePal: (identifier: string, request: PalDefenderReleasePalRequest, idempotencyKey?: string) =>
     handleRequest<unknown, PalDefenderRCONResult>(
       () => apiClient.post(`${playerPath(identifier)}/pals/release`, request, idempotencyConfig(idempotencyKey)),
@@ -531,6 +538,17 @@ export const palDefenderGMApi = {
     params.set('limit', String(limit));
     return handleRequest<unknown, PalDefenderPalCatalog>(
       () => apiClient.get(`/security/paldefender/gm/catalog/pals?${params.toString()}`),
+      { items: [], returned: 0 },
+      { map: mapPalCatalog, quiet: true, fallbackOnError: false },
+    );
+  },
+
+  passiveCatalog: (query = '', limit = 5000) => {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    params.set('limit', String(limit));
+    return handleRequest<unknown, PalDefenderPalCatalog>(
+      () => apiClient.get(`/security/paldefender/gm/catalog/passives?${params.toString()}`),
       { items: [], returned: 0 },
       { map: mapPalCatalog, quiet: true, fallbackOnError: false },
     );

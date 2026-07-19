@@ -543,6 +543,7 @@ export interface components {
       "Hunger"?: number;
       "IVs"?: Record<string, number>;
       "ImportedCharacter"?: boolean;
+      "IsAwakening"?: boolean;
       "LearntSkills"?: Array<string>;
       "Level"?: number;
       "MP"?: number;

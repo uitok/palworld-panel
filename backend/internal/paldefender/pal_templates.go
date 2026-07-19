@@ -1,6 +1,7 @@
 package paldefender
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -35,6 +36,7 @@ type PalTemplate struct {
 	CondensedPals          *int           `json:"CondensedPals,omitempty"`
 	UnusedStatusPoints     *int           `json:"UnusedStatusPoints,omitempty"`
 	FriendshipPoints       *int64         `json:"FriendshipPoints,omitempty"`
+	IsAwakening            *bool          `json:"IsAwakening,omitempty"`
 	PhysicalHealth         string         `json:"PhysicalHealth,omitempty"`
 	WorkerSick             string         `json:"WorkerSick,omitempty"`
 	ImportedCharacter      *bool          `json:"ImportedCharacter,omitempty"`
@@ -313,6 +315,21 @@ func (m Manager) DeletePalTemplate(name string) error {
 		return err
 	}
 	return os.Remove(path)
+}
+
+// RESTGiveCustomPal creates a short-lived PalDefender template so callers can
+// grant a fully configured Pal without first creating a persistent template.
+// Passwords or player data are never written to the template; only the
+// validated Pal attributes supplied by the administrator are persisted, and
+// the file is removed after PalDefender has processed the request.
+func (m Manager) RESTGiveCustomPal(ctx context.Context, identifier string, template PalTemplate) (GivePalTemplatesResponse, error) {
+	name := id.New("palpanel_grant")
+	info, err := m.WritePalTemplate(name, template)
+	if err != nil {
+		return GivePalTemplatesResponse{}, err
+	}
+	defer func() { _ = m.DeletePalTemplate(info.Name) }()
+	return m.RESTGivePalTemplates(ctx, identifier, GivePalTemplatesRequest{PalTemplates: []string{info.Name}})
 }
 
 func validatePalTemplate(template *PalTemplate) error {

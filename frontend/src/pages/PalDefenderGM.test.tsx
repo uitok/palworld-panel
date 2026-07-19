@@ -11,9 +11,9 @@ const mocks = vi.hoisted(() => ({
   palsApi: { getPalsList: vi.fn() },
   gmApi: {
     status: vi.fn(), players: vi.fn(), player: vi.fn(), items: vi.fn(), inventory: vi.fn(),
-    removeItems: vi.fn(), teleport: vi.fn(), localTechnologyCatalog: vi.fn(), technologyCatalog: vi.fn(), palCatalog: vi.fn(),
+    removeItems: vi.fn(), teleport: vi.fn(), localTechnologyCatalog: vi.fn(), technologyCatalog: vi.fn(), palCatalog: vi.fn(), passiveCatalog: vi.fn(),
     progression: vi.fn(), giveProgression: vi.fn(), techs: vi.fn(), learnTech: vi.fn(), forgetTech: vi.fn(),
-    pals: vi.fn(), givePals: vi.fn(), releasePal: vi.fn(), templates: vi.fn(), template: vi.fn(), putTemplate: vi.fn(),
+    pals: vi.fn(), givePals: vi.fn(), giveCustomPal: vi.fn(), releasePal: vi.fn(), templates: vi.fn(), template: vi.fn(), putTemplate: vi.fn(),
     givePalTemplates: vi.fn(), exportPals: vi.fn(), exportedPalTemplates: vi.fn(), exportedPalTemplate: vi.fn(),
     accessSettings: vi.fn(), putAccessSettings: vi.fn(), whitelist: vi.fn(), whitelistAdd: vi.fn(),
     whitelistRemove: vi.fn(), toggleAdmin: vi.fn(), giveItems: vi.fn(), sendMessage: vi.fn(),
@@ -106,6 +106,7 @@ describe('PalDefender player center', () => {
     mocks.gmApi.localTechnologyCatalog.mockResolvedValue({ items: [{ id: 'Technology_1', name: '原始作业台', level: 1, category: '建筑', boss: false }, { id: 'Technology_2', name: '石斧', level: 1, category: '科技', boss: false }], returned: 2 });
     mocks.gmApi.technologyCatalog.mockResolvedValue({ catalog: { command: '/gettechids', output: '', entries: ['Technology_1', 'Technology_2'] }, reference_url: '' });
     mocks.gmApi.palCatalog.mockResolvedValue({ items: [{ id: 'Anubis', name: '阿努比斯' }, { id: 'PinkCat', name: '捣蛋猫' }], returned: 2 });
+    mocks.gmApi.passiveCatalog.mockResolvedValue({ items: [{ id: 'Legend', name: '传说' }, { id: 'CraftSpeed_up3', name: '卓绝技艺' }], returned: 2 });
     mocks.gmApi.pals.mockResolvedValue({ Meta: { Player: 'steam_1', PlayerUID: 'uid_1', TeamCount: 1, PalboxCount: 10, BaseCampCount: 2 }, Pals: {} });
     mocks.gmApi.templates.mockResolvedValue({ templates: [{ name: 'starter.json', path: 'starter.json', size: 10, modified_at: '' }], reference_url: '' });
     mocks.gmApi.exportedPalTemplates.mockResolvedValue({ player_id: 'steam_1', templates: [{ name: 'anubis.json', path: 'anubis.json', size: 20, modified_at: '' }], reference_url: '' });
@@ -113,7 +114,7 @@ describe('PalDefender player center', () => {
     mocks.gmApi.exportedPalTemplate.mockResolvedValue({ PalID: 'Anubis', Level: 50, IVs: { Health: 100 } });
     mocks.gmApi.accessSettings.mockResolvedValue({ use_whitelist: false, whitelist_message: 'Not allowed', use_admin_whitelist: false, admin_auto_login: false, admin_ips: ['127.0.0.1'], reload_required: false, reference_url: '' });
     mocks.gmApi.whitelist.mockResolvedValue({ command: '/whitelist_get', output: '', entries: [] });
-    for (const name of ['removeItems', 'teleport', 'giveProgression', 'learnTech', 'forgetTech', 'givePals', 'releasePal', 'givePalTemplates', 'exportPals', 'putTemplate', 'putAccessSettings', 'whitelistAdd', 'whitelistRemove', 'toggleAdmin', 'sendMessage', 'broadcast', 'kick', 'ban', 'unban'] as const) {
+    for (const name of ['removeItems', 'teleport', 'giveProgression', 'learnTech', 'forgetTech', 'givePals', 'giveCustomPal', 'releasePal', 'givePalTemplates', 'exportPals', 'putTemplate', 'putAccessSettings', 'whitelistAdd', 'whitelistRemove', 'toggleAdmin', 'sendMessage', 'broadcast', 'kick', 'ban', 'unban'] as const) {
       mocks.gmApi[name].mockResolvedValue({ Success: true });
     }
     mocks.gmApi.giveItems.mockResolvedValue({ Granted: { Items: 5 } });
@@ -212,6 +213,42 @@ describe('PalDefender player center', () => {
     await waitFor(() => expect(mocks.gmApi.exportedPalTemplate).toHaveBeenCalledWith('steam_1', 'anubis.json'));
     expect(screen.getByLabelText('模板名称')).toHaveValue('anubis');
     expect(screen.getByLabelText('IV 生命')).toHaveValue(100);
+
+    fireEvent.click(await screen.findByRole('button', { name: /卓绝技艺/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '觉醒个体' }));
+    fireEvent.change(screen.getByLabelText('IV 近战攻击'), { target: { value: '95' } });
+    fireEvent.change(screen.getByLabelText('魂强化 作业速度'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('采矿'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: '直接发放当前配置' }));
+    await waitFor(() => expect(mocks.gmApi.giveCustomPal).toHaveBeenCalledWith('steam_1', expect.objectContaining({
+      PalID: 'Anubis', IsAwakening: true, Passives: ['CraftSpeed_up3'],
+      IVs: expect.objectContaining({ Health: 100, AttackMelee: 95 }),
+      PalSouls: expect.objectContaining({ CraftSpeed: 10 }),
+      ExtraWorkSuitabilities: { Mining: 5 },
+    })));
+  });
+
+  it('imports a JSON Pal template and preserves supported fields outside the visual editor', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+
+    const payload = JSON.stringify({
+      PalID: 'Anubis', Level: 55, Exp: 123456, Passives: ['Legend'],
+      DisableWorkPreferences: ['Mining'], PhysicalHealth: 'Healthful', IsAwakening: true,
+    });
+    const file = new File([payload], 'legend-anubis.json', { type: 'application/json' });
+    if (typeof file.text !== 'function') Object.defineProperty(file, 'text', { value: vi.fn().mockResolvedValue(payload) });
+    fireEvent.change(screen.getByLabelText('导入帕鲁模板文件'), { target: { files: [file] } });
+
+    expect(await screen.findByText(/已导入 legend-anubis.json/)).toBeInTheDocument();
+    const templatePalID = screen.getAllByRole('textbox').find((input) => input.getAttribute('aria-label') === 'PalID');
+    expect(templatePalID).toHaveValue('Anubis');
+    expect(screen.getByRole('checkbox', { name: '觉醒个体' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: '直接发放当前配置' }));
+    await waitFor(() => expect(mocks.gmApi.giveCustomPal).toHaveBeenCalledWith('steam_1', expect.objectContaining({
+      PalID: 'Anubis', Level: 55, Exp: 123456, Passives: ['Legend'], IsAwakening: true,
+      DisableWorkPreferences: ['Mining'], PhysicalHealth: 'Healthful',
+    })));
   });
 
   it('requires typed confirmation before releasing one matching pal', async () => {

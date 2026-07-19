@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -76,11 +78,18 @@ func TestExtendedRESTReadsAndWritesOfficialContracts(t *testing.T) {
 	if _, err := manager.RESTGivePalTemplates(context.Background(), "steam_1", GivePalTemplatesRequest{PalTemplates: []string{"reward_anubis"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := manager.RESTGiveCustomPal(context.Background(), "steam_1", PalTemplate{PalID: "Anubis", Passives: []string{"Legend", "CraftSpeed_up3"}}); err != nil {
+		t.Fatal(err)
+	}
 	if captured["/v1/pdapi/give/progression/steam_1"]["TechnologyPoints"] != float64(10) {
 		t.Fatalf("progression request = %#v", captured["/v1/pdapi/give/progression/steam_1"])
 	}
-	if captured["/v1/pdapi/give/paltemplate/steam_1"]["PalTemplates"].([]any)[0] != "reward_anubis.json" {
+	customTemplate := captured["/v1/pdapi/give/paltemplate/steam_1"]["PalTemplates"].([]any)[0].(string)
+	if !strings.HasPrefix(customTemplate, "palpanel_grant_") || !strings.HasSuffix(customTemplate, ".json") {
 		t.Fatalf("template request = %#v", captured["/v1/pdapi/give/paltemplate/steam_1"])
+	}
+	if _, err := os.Stat(filepath.Join(manager.palTemplatesDir(), customTemplate)); !os.IsNotExist(err) {
+		t.Fatalf("temporary custom Pal template was not removed: %v", err)
 	}
 }
 

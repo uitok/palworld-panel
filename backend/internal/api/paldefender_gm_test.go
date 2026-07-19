@@ -92,6 +92,7 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1", "", `"UserId":"steam_1"`},
 		{http.MethodGet, "/api/security/paldefender/gm/items?q=Money", "", `"id":"Money"`},
 		{http.MethodGet, "/api/security/paldefender/gm/catalog/pals?q=Anubis", "", `"name":"阿努比斯"`},
+		{http.MethodGet, "/api/security/paldefender/gm/catalog/passives?q=CraftSpeed_up3", "", `"name":"卓绝技艺"`},
 		{http.MethodGet, "/api/security/paldefender/gm/catalog/technologies?q=Workbench", "", `"name":"原始的作业台"`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/inventory", "", `"ItemID":"Money"`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":10}]}`, `"Items":10`},
@@ -102,6 +103,7 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/techs/forget", `{"Technology":"Technology_ElecBaton"}`, `"ForgottenCount":1`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/pals", "", `"PalID":"Anubis"`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/pals", `{"Pals":[{"PalID":"Anubis","Level":50}]}`, `"Pals":1`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/custom-pal", `{"PalID":"Anubis","Level":50,"Passives":["Legend","CraftSpeed_up3"],"IsAwakening":true}`, `"PalTemplates":1`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/pal-templates", `{"PalTemplates":["reward_anubis"]}`, `"PalTemplates":1`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/message", `{"SendType":"PlayerChat","Message":"hello"}`, `"Success":true`},
 		{http.MethodPost, "/api/security/paldefender/gm/broadcast", `{"message":"maintenance","alert":false}`, `"Success":true`},
@@ -136,7 +138,7 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 			gmWrites++
 		}
 	}
-	if gmWrites != 11 {
+	if gmWrites != 12 {
 		t.Fatalf("successful GM write audits = %d: %#v", gmWrites, audits)
 	}
 }
