@@ -251,6 +251,21 @@ test('server center keeps the main branch grouping and community servers stay av
   await expect(navigation.locator('a.pp-nav__item[href="/community-servers"]')).toBeVisible();
 });
 
+test('header navigation button stays visible and toggles the desktop sidebar', async ({ page }) => {
+  await installFakeBackend(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/dashboard');
+
+  const toggle = page.getByRole('button', { name: '切换导航栏' });
+  const rail = page.locator('.pp-rail').first();
+  await expect(toggle).toBeVisible();
+  await expect(rail).toHaveCSS('width', '236px');
+  await toggle.click();
+  await expect(rail).toHaveCSS('width', '72px');
+  await toggle.click();
+  await expect(rail).toHaveCSS('width', '236px');
+});
+
 test('backup download is handled as a browser attachment without navigation', async ({ page }) => {
   const payload = Buffer.from('streamed-backup-contents');
   const downloadServer = createServer((request, response) => {

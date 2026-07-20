@@ -166,6 +166,9 @@ func TestExplicitLoginFailureRequiresAnActualSteamGuardError(t *testing.T) {
 	if err := explicitLoginFailure([]byte("Please confirm the login in the Steam Mobile app on your phone.\nLogged in OK")); err != nil {
 		t.Fatalf("approved mobile confirmation was rejected: %v", err)
 	}
+	if err := explicitLoginFailure([]byte("Please confirm the login in the Steam Mobile app on your phone.\nWaiting for user info...\x1b[0mOK\n")); err != nil {
+		t.Fatalf("approved mobile confirmation with ANSI output was rejected: %v", err)
+	}
 }
 
 func TestCachedLoginFailureRequiresReauthorizationWithoutCache(t *testing.T) {
@@ -174,6 +177,9 @@ func TestCachedLoginFailureRequiresReauthorizationWithoutCache(t *testing.T) {
 	}
 	if err := cachedLoginFailure([]byte("Logging in using cached credentials.\nLogged in OK")); err != nil {
 		t.Fatalf("cached login success = %v", err)
+	}
+	if err := cachedLoginFailure([]byte("Logging in using cached credentials.\x1b[0mOK\nWaiting for user info...\x1b[0mOK")); err != nil {
+		t.Fatalf("cached login success with ANSI output = %v", err)
 	}
 }
 

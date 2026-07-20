@@ -395,7 +395,7 @@ func steamScriptArg(value string) string {
 }
 
 func explicitLoginFailure(output []byte) error {
-	lower := strings.ToLower(string(output))
+	lower := normalizedSteamOutput(output)
 	if strings.Contains(lower, "logged in ok") || strings.Contains(lower, "waiting for user info...ok") {
 		return nil
 	}
@@ -442,7 +442,7 @@ func explicitLoginFailure(output []byte) error {
 }
 
 func cachedLoginFailure(output []byte) error {
-	lower := strings.ToLower(string(output))
+	lower := normalizedSteamOutput(output)
 	for _, marker := range []string{
 		"cached credentials not found",
 		"no cached credentials",

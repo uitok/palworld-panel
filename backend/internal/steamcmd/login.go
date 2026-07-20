@@ -15,6 +15,7 @@ var (
 	ErrSteamGuardRequired              = errors.New("Steam Guard verification code is required")
 	ErrSteamMobileConfirmationRequired = errors.New("Steam Mobile login confirmation is required")
 	steamAccountNameRegex              = regexp.MustCompile(`^[A-Za-z0-9_]{3,64}$`)
+	steamANSISequenceRegex             = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 )
 
 // LoginStatus contains only non-secret account and verification metadata.
@@ -55,4 +56,10 @@ func ValidateAccountName(accountName string) error {
 		return fmt.Errorf("%w: account name must contain 3-64 ASCII letters, digits, or underscores", ErrInvalidAccountName)
 	}
 	return nil
+}
+
+func normalizedSteamOutput(output []byte) string {
+	text := steamANSISequenceRegex.ReplaceAllString(string(output), "")
+	text = strings.ReplaceAll(text, "\r", "")
+	return strings.ToLower(text)
 }

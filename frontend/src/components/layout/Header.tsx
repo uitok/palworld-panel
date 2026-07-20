@@ -18,17 +18,25 @@ const groupLabels: Record<string, TranslationKey> = { setup: 'header.setup', wor
 
 export const Header: React.FC<HeaderProps> = ({ onMenuClick, onAnnounceClick, onSaveClick, onRestartClick }) => {
   const { t } = useI18n();
-  const { autoRefresh, setAutoRefresh, triggerRefresh } = useServerStore();
+  const { autoRefresh, setAutoRefresh, triggerRefresh, isSidebarCollapsed, setIsSidebarCollapsed } = useServerStore();
   const location = useLocation();
   const routeMeta = getRouteMetaByPathname(location.pathname);
   const title = routeMeta ? t(routeMeta.titleKey) : t('route.panel');
   const groupLabel = routeMeta ? t(groupLabels[routeMeta.navGroup]) : appConfig.brand.toUpperCase();
 
+  const handleNavigationClick = () => {
+    if (window.matchMedia('(min-width: 1024px)').matches) {
+      setIsSidebarCollapsed(!isSidebarCollapsed);
+      return;
+    }
+    onMenuClick();
+  };
+
   return (
     <header className="pp-topbar">
       <div className="pp-topbar__inner">
         <div className="pp-row pp-grow">
-          <button type="button" onClick={onMenuClick} className="pp-button lg:!hidden" aria-label={t('header.openNavigation')}><Menu size={17} /></button>
+          <button type="button" onClick={handleNavigationClick} className="pp-button" aria-label={t('header.toggleNavigation')}><Menu size={17} /></button>
           <div className="pp-grow">
             <div className="pp-topbar__eyebrow">{groupLabel}</div>
             <h2 className="pp-topbar__title pp-truncate">{title}</h2>
