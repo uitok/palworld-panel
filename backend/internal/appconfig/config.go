@@ -482,9 +482,11 @@ func (c Config) WorkshopModsDir() string {
 	return filepath.Join(c.ModsDir(), "Workshop")
 }
 
-// WorkshopSteamCMDConfigDir stores only SteamCMD's cached login metadata for
-// Docker/Wine Workshop downloads. It is deliberately separate from the
-// native-Windows SteamCMD installation and from downloaded Workshop content.
+// WorkshopSteamCMDConfigDir stores the Linux SteamCMD user-data directory used
+// for Docker/Wine Workshop downloads. SteamCMD keeps its machine authorization
+// under $HOME/Steam (not beside /opt/steamcmd), and some authorization files
+// live outside its config subdirectory, so the complete user-data tree must be
+// persisted between short-lived containers.
 func (c Config) WorkshopSteamCMDConfigDir() string {
 	return filepath.Join(c.DataDir, "steamcmd-workshop-config")
 }

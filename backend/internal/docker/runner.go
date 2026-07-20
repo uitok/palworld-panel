@@ -48,6 +48,7 @@ type ProxyContainerTestResult struct {
 const (
 	wineBaseImageBuildArg = "PALPANEL_WINE_BASE_IMAGE"
 	wineDLLOverrides      = "dwmapi=n,b;d3d9=n,b"
+	workshopSteamHomePath = "/root/Steam"
 )
 
 func NewRunner(cfg appconfig.Config) Runner {
@@ -289,7 +290,7 @@ func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot 
 		if err := r.ensureWorkshopSteamCMDConfigDir(); err != nil {
 			return err
 		}
-		args = append(args, "-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"))
+		args = append(args, "-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), workshopSteamHomePath))
 	}
 	args = append(args, session.containerArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
@@ -338,7 +339,7 @@ func (r Runner) AuthenticateWorkshop(ctx context.Context, request steamcmd.Login
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
-		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"),
+		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), workshopSteamHomePath),
 		"-v", volume(scriptPath, containerScript) + ":ro",
 	}
 	args = append(args, session.containerArgs()...)
@@ -421,7 +422,7 @@ func (r Runner) VerifyWorkshopLogin(ctx context.Context, accountName string) (bo
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
-		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"),
+		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), workshopSteamHomePath),
 	}
 	args = append(args, session.containerArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)

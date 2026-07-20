@@ -26,7 +26,14 @@ interface SidebarEntry {
 
 const sidebarGroups: Array<{ id: string; titleKey: TranslationKey; entries: SidebarEntry[] }> = [
   { id: 'setup', titleKey: 'nav.setupGroup', entries: [{ id: 'setup', labelKey: 'nav.setup', routeIDs: ['setup'] }] },
-  { id: 'workspace', titleKey: 'nav.workspaceGroup', entries: [{ id: 'server-center', labelKey: 'nav.serverCenter', routeIDs: ['dashboard', 'monitor', 'community-servers'] }] },
+  {
+    id: 'workspace',
+    titleKey: 'nav.workspaceGroup',
+    entries: [
+      { id: 'server-center', labelKey: 'nav.serverCenter', routeIDs: ['dashboard', 'monitor'] },
+      { id: 'community-servers', labelKey: 'route.communityServers', routeIDs: ['community-servers'] },
+    ],
+  },
   {
     id: 'world',
     titleKey: 'nav.worldGroup',

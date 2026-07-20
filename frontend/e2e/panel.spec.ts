@@ -235,6 +235,22 @@ test('desktop shell follows the main branch layout without horizontal overflow',
   }
 });
 
+test('server center keeps the main branch grouping and community servers stay available', async ({ page }) => {
+  await installFakeBackend(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/dashboard');
+
+  const navigation = page.getByRole('navigation', { name: '主导航' });
+  const serverCenter = navigation.getByRole('button', { name: '服务器中心' });
+  await expect(serverCenter).toHaveAttribute('aria-expanded', 'true');
+  const serverSubmenu = serverCenter.locator('xpath=following-sibling::*[1]');
+  await expect(serverSubmenu.getByRole('link')).toHaveCount(2);
+  await expect(serverSubmenu.getByRole('link', { name: '服务器总览' })).toBeVisible();
+  await expect(serverSubmenu.getByRole('link', { name: '实时监控' })).toBeVisible();
+  await expect(serverSubmenu.getByRole('link', { name: '社区服务器' })).toHaveCount(0);
+  await expect(navigation.locator('a.pp-nav__item[href="/community-servers"]')).toBeVisible();
+});
+
 test('backup download is handled as a browser attachment without navigation', async ({ page }) => {
   const payload = Buffer.from('streamed-backup-contents');
   const downloadServer = createServer((request, response) => {

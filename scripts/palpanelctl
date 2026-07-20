@@ -410,7 +410,7 @@ steam_login() {
     --add-host host.docker.internal:host-gateway \
     -e "PALPANEL_HOST_UID=$owner_uid" \
     -e "PALPANEL_HOST_GID=$owner_gid" \
-    -v "$auth_dir:/opt/steamcmd/config" \
+    -v "$auth_dir:/root/Steam" \
     "${proxy_args[@]}" \
     "$image" steam-auth-login "$account_name"
   local docker_status="$?"

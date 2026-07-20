@@ -278,9 +278,12 @@ func TestWorkshopUsesPersistedSteamCMDCacheWithoutPasswordArguments(t *testing.T
 			t.Fatalf("Docker arguments contain forbidden credential material %q:\n%s", forbidden, string(body))
 		}
 	}
-	wantMount := volume(runner.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config")
+	wantMount := volume(runner.cfg.WorkshopSteamCMDConfigDir(), workshopSteamHomePath)
 	if !containsExact(args, wantMount) {
 		t.Fatalf("Docker arguments do not mount the persistent SteamCMD cache %q:\n%s", wantMount, string(body))
+	}
+	if containsExact(args, volume(runner.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config")) {
+		t.Fatalf("Docker arguments still mount the cache beside the SteamCMD installation:\n%s", string(body))
 	}
 }
 
@@ -314,6 +317,9 @@ func TestWorkshopAuthenticationUsesTemporaryRunscriptWithoutSecretArguments(t *t
 	}
 	if strings.Contains(string(arguments), password) || strings.Contains(string(arguments), guard) {
 		t.Fatalf("Docker arguments exposed Steam secrets: %s", arguments)
+	}
+	if !strings.Contains(string(arguments), volume(cfg.WorkshopSteamCMDConfigDir(), workshopSteamHomePath)) {
+		t.Fatalf("Docker login does not persist the Linux Steam home: %s", arguments)
 	}
 	runscript, err := os.ReadFile(scriptLog)
 	if err != nil {
@@ -597,6 +603,12 @@ func TestWineRunnerEntrypointUsesUnixLineEndings(t *testing.T) {
 	}
 	if strings.Contains(string(body), "\r\n") {
 		t.Fatal("Wine runner entrypoint contains CRLF line endings")
+	}
+	if strings.Contains(string(body), "/opt/steamcmd/config") {
+		t.Fatal("Wine runner persists login state beside the SteamCMD installation instead of under $HOME/Steam")
+	}
+	if !strings.Contains(string(body), `steam_home="${HOME:-/root}/Steam"`) {
+		t.Fatal("Wine runner does not define the persistent Linux Steam home")
 	}
 }
 

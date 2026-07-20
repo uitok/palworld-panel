@@ -44,8 +44,9 @@ process or player session.
 6. In Mod Management, submit the Steam account/password and an optional transient
    Steam Guard code, approve Steam Mobile if requested, and download one disposable
    Workshop item. Confirm `data/secrets/steam-workshop-credentials.json` is mode
-   0600, no temporary `steamcmd-docker-login-*.txt` remains, Docker arguments and
-   redacted logs do not contain the password or code, and a later download reuses
+   0600, `data/steamcmd-workshop-config` is mounted at `/root/Steam`, no temporary
+   `steamcmd-docker-login-*.txt` remains, Docker arguments and redacted logs do not
+   contain the password or code, and a later download in a new container reuses
    the approved cache without asking for the password again.
 7. Scan Workshop, Pak, and UE4SS Mod layouts. Exercise only non-destructive
    actions unless the target is disposable.

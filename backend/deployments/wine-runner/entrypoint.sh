@@ -3,6 +3,7 @@
 # Windows worktrees cannot produce an unusable /usr/bin/env "bash\\r" shebang.
 set -euo pipefail
 export LC_ALL=C
+steam_home="${HOME:-/root}/Steam"
 
 cmd="${1:-start}"
 shift || true
@@ -124,7 +125,7 @@ download_workshop() {
     +quit
   local steam_status=$?
   set -e
-  restore_host_ownership /data/workshop /opt/steamcmd/config
+  restore_host_ownership /data/workshop "$steam_home"
   if [[ "$steam_status" -ne 0 ]]; then
     return "$steam_status"
   fi
@@ -155,12 +156,12 @@ steam_auth_login() {
     echo "invalid Steam account name" >&2
     return 64
   fi
-  mkdir -p /opt/steamcmd/config
+  mkdir -p "$steam_home"
   set +e
   /opt/steamcmd/steamcmd.sh +login "$account_name"
   local status=$?
   set -e
-  restore_host_ownership /opt/steamcmd/config
+  restore_host_ownership "$steam_home"
   return "$status"
 }
 
@@ -176,7 +177,7 @@ steam_auth_verify() {
     +quit
   local status=$?
   set -e
-  restore_host_ownership /opt/steamcmd/config
+  restore_host_ownership "$steam_home"
 
   if [[ "$status" -eq 0 ]] && grep -Eqi \
     'Waiting for user info\.\.\.OK|Logged in OK|Login Successful|Logging in using cached credentials' \
@@ -201,7 +202,7 @@ steam_auth_runscript() {
   /opt/steamcmd/steamcmd.sh +runscript "$script_path"
   local status=$?
   set -e
-  restore_host_ownership /opt/steamcmd/config
+  restore_host_ownership "$steam_home"
   return "$status"
 }
 

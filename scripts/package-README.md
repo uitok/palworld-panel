@@ -99,9 +99,12 @@ stores the password in the private `data/secrets/steam-workshop-credentials.json
 file (mode 0600 on Linux) and keeps Guard codes transient. Linux passes a private
 temporary runscript into the Docker/Wine runner read-only, so credentials never
 enter Docker process arguments or support logs. Downloads reuse the approved
-SteamCMD cache without embedding the saved password and request reauthorization
-when the machine grant expires. `palpanelctl steam-login` remains a recovery
-fallback for administrators who need to repair the cache manually.
+SteamCMD cache from `data/steamcmd-workshop-config`, mounted as the Linux
+SteamCMD home at `/root/Steam`, without embedding the saved password. Persisting
+the complete Steam home is required because Steam stores machine authorization
+outside `/opt/steamcmd`. Reauthorization is requested when the machine grant
+expires. `palpanelctl steam-login` remains a recovery fallback for administrators
+who need to repair the cache manually.
 
 Server installation/update and community-server discovery proxies can be managed
 independently from System Settings > Network & proxy. The managed configuration is
