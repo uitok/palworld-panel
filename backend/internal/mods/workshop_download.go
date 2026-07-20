@@ -52,9 +52,16 @@ func (m Manager) downloadWorkshopTo(ctx context.Context, jobID, itemID, destinat
 		return nil
 	}
 
-	m.update(jobID, "running", 10, "building wine runner image", "")
-	if err := m.runner.BuildImage(ctx); err != nil {
-		return fmt.Errorf("build wine runner image: %w", err)
+	m.update(jobID, "running", 10, "checking wine runner image", "")
+	imageExists, err := m.runner.ImageExists(ctx)
+	if err != nil {
+		return fmt.Errorf("check wine runner image: %w", err)
+	}
+	if !imageExists {
+		m.update(jobID, "running", 20, "building wine runner image", "")
+		if err := m.runner.BuildImage(ctx); err != nil {
+			return fmt.Errorf("build wine runner image: %w", err)
+		}
 	}
 	m.update(jobID, "running", 50, "downloading Steam Workshop item", "")
 	accountName, _, err := m.store.GetKV(ctx, workshopSteamAccountKey)

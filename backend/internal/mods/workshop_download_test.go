@@ -10,6 +10,7 @@ import (
 
 	"palpanel/internal/db"
 	"palpanel/internal/server"
+	"palpanel/internal/steamcmd"
 )
 
 type fakeNativeWorkshopDownloader struct {
@@ -18,6 +19,35 @@ type fakeNativeWorkshopDownloader struct {
 	ensureErr     error
 	downloadErr   error
 	download      func(appID, itemID, destination string) error
+}
+
+type fakeWorkshopDownloadRunner struct {
+	imageExists   bool
+	imageErr      error
+	buildErr      error
+	downloadErr   error
+	inspectCalls  int
+	buildCalls    int
+	downloadCalls int
+}
+
+func (f *fakeWorkshopDownloadRunner) ImageExists(context.Context) (bool, error) {
+	f.inspectCalls++
+	return f.imageExists, f.imageErr
+}
+
+func (f *fakeWorkshopDownloadRunner) BuildImage(context.Context) error {
+	f.buildCalls++
+	return f.buildErr
+}
+
+func (f *fakeWorkshopDownloadRunner) DownloadWorkshopTo(context.Context, string, string, ...string) error {
+	f.downloadCalls++
+	return f.downloadErr
+}
+
+func (f *fakeWorkshopDownloadRunner) AuthenticateWorkshop(context.Context, steamcmd.LoginRequest) ([]byte, error) {
+	return nil, nil
 }
 
 func (f *fakeNativeWorkshopDownloader) Ensure(context.Context) error {
@@ -110,11 +140,45 @@ func TestRunWorkshopImportKeepsDockerWineBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if failed.Status != "failed" || !strings.Contains(failed.Error, "build wine runner image") {
+	if failed.Status != "failed" || !strings.Contains(failed.Error, "check wine runner image") {
 		t.Fatalf("job = %#v", failed)
 	}
 	if fake.ensureCalls != 0 || fake.downloadCalls != 0 {
 		t.Fatalf("native path ran in Wine mode: %#v", fake)
+	}
+}
+
+func TestDownloadWorkshopReusesExistingWineRunnerImage(t *testing.T) {
+	manager, store := newImportTestManager(t)
+	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeWorkshopDownloadRunner{imageExists: true}
+	manager.runner = runner
+	job, directory := newWorkshopImportJob(t, manager, store, "reuse-wine-runner")
+
+	if err := manager.downloadWorkshopTo(t.Context(), job.ID, "123456789", directory); err != nil {
+		t.Fatalf("downloadWorkshopTo returned error: %v", err)
+	}
+	if runner.inspectCalls != 1 || runner.buildCalls != 0 || runner.downloadCalls != 1 {
+		t.Fatalf("runner calls = inspect %d, build %d, download %d", runner.inspectCalls, runner.buildCalls, runner.downloadCalls)
+	}
+}
+
+func TestDownloadWorkshopBuildsMissingWineRunnerImage(t *testing.T) {
+	manager, store := newImportTestManager(t)
+	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeWorkshopDownloadRunner{}
+	manager.runner = runner
+	job, directory := newWorkshopImportJob(t, manager, store, "build-wine-runner")
+
+	if err := manager.downloadWorkshopTo(t.Context(), job.ID, "123456789", directory); err != nil {
+		t.Fatalf("downloadWorkshopTo returned error: %v", err)
+	}
+	if runner.inspectCalls != 1 || runner.buildCalls != 1 || runner.downloadCalls != 1 {
+		t.Fatalf("runner calls = inspect %d, build %d, download %d", runner.inspectCalls, runner.buildCalls, runner.downloadCalls)
 	}
 }
 
