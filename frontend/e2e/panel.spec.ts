@@ -199,36 +199,37 @@ test('pages remain renderable while the backend temporarily returns 502', async 
   expect(pageErrors).toEqual([]);
 });
 
-test('route content and header stay aligned without horizontal overflow', async ({ page }) => {
+test('desktop shell follows the main branch layout without horizontal overflow', async ({ page }) => {
   test.setTimeout(120_000);
   await installFakeBackend(page);
-  const routes = [
-    ['/setup', 'compact'],
-    ['/dashboard', 'standard'],
-    ['/player-center', 'wide'],
-    ['/backups', 'compact'],
-  ] as const;
+  const routes = ['/setup', '/dashboard', '/player-center', '/backups'] as const;
   for (const width of [757, 1024, 1440, 1864]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const [path, contentWidth] of routes) {
+    for (const path of routes) {
       await page.goto(path);
-      await page.locator('.pp-route-frame').waitFor({ state: 'attached' });
+      await page.locator('#app-main > div').waitFor({ state: 'attached' });
       const layout = await page.evaluate(() => {
         const header = document.querySelector('.pp-topbar__inner')?.getBoundingClientRect();
-        const frame = document.querySelector('.pp-route-frame')?.getBoundingClientRect();
-        const shell = document.querySelector('.pp-shell__content');
+        const content = document.querySelector('#app-main > div')?.getBoundingClientRect();
+        const shell = document.querySelector('.pp-shell__content')?.getBoundingClientRect();
+        const rail = document.querySelector('.pp-rail')?.getBoundingClientRect();
         return {
           header: header && { x: header.x, width: header.width },
-          frame: frame && { x: frame.x, width: frame.width },
-          contentWidth: shell?.getAttribute('data-content-width'),
+          content: content && { x: content.x, width: content.width },
+          shell: shell && { x: shell.x, width: shell.width },
+          rail: rail && { right: rail.right },
           overflow: document.documentElement.scrollWidth - window.innerWidth,
         };
       });
-      expect(layout.contentWidth).toBe(contentWidth);
       expect(layout.header).not.toBeNull();
-      expect(layout.frame).not.toBeNull();
-      expect(Math.abs((layout.header?.x ?? 0) - (layout.frame?.x ?? 0))).toBeLessThanOrEqual(1);
-      expect(Math.abs((layout.header?.width ?? 0) - (layout.frame?.width ?? 0))).toBeLessThanOrEqual(1);
+      expect(layout.content).not.toBeNull();
+      expect(layout.shell).not.toBeNull();
+      if (width >= 1024) {
+        expect(layout.rail).not.toBeNull();
+        expect(Math.abs((layout.rail?.right ?? 0) - (layout.shell?.x ?? 0))).toBeLessThanOrEqual(1);
+      }
+      expect((layout.header?.width ?? 0)).toBeLessThanOrEqual((layout.shell?.width ?? 0) + 1);
+      expect((layout.content?.width ?? 0)).toBeLessThanOrEqual((layout.shell?.width ?? 0) + 1);
       expect(layout.overflow).toBeLessThanOrEqual(1);
     }
   }

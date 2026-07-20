@@ -175,9 +175,9 @@ a[href] {
 
 #app-main::before { content: none; }
 
-.pp-route-frame {
+#app-main > div {
   width: 100%;
-  max-width: var(--pp-route-content-max);
+  max-width: 1600px;
   margin-inline: auto;
   animation: page-enter 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }

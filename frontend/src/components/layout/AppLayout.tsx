@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
 import { AlertTriangle, CheckCircle, Info, Megaphone, Save, Send, ServerCrash, X } from 'lucide-react';
 import { getErrorMessage } from '../../api/client';
 import { serverApi } from '../../api/server';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { useI18n } from '../../i18n';
-import { getRouteMetaByPathname } from '../../routes';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -16,8 +14,6 @@ type Toast = { text: string; type: 'success' | 'error' | 'info' };
 
 export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const { t } = useI18n();
-  const location = useLocation();
-  const contentWidth = getRouteMetaByPathname(location.pathname)?.contentWidth || 'standard';
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [announceOpen, setAnnounceOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
@@ -85,7 +81,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           <Sidebar />
         </div>
 
-        <div className="pp-shell__content" data-content-width={contentWidth}>
+        <div className="pp-shell__content">
           <Header
             onMenuClick={() => setMobileNavOpen(true)}
             onAnnounceClick={() => setAnnounceOpen(true)}
@@ -93,9 +89,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             onRestartClick={() => setRestartOpen(true)}
           />
 
-          <main id="app-main">
-            <div className="pp-route-frame">{children}</div>
-          </main>
+          <main id="app-main">{children}</main>
 
           <div className="pp-mobile-actions shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 lg:hidden">
             <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
