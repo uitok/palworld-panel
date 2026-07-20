@@ -45,6 +45,27 @@ func TestNormalizePlayerSavesAssociatesInventoryContainers(t *testing.T) {
 	}
 }
 
+func TestNormalizePlayerSavesSupportsCurrentFriendshipMap(t *testing.T) {
+	playersDir := t.TempDir()
+	writePlayerSaveFixture(t, playersDir, fixturePlayerID, map[string]string{
+		"CommonContainerId": fixtureContainerID,
+	})
+	index := Index{
+		Players:    []Player{{PlayerUID: fixturePlayerID}},
+		Containers: []Container{{ContainerID: fixtureContainerID}},
+		Warnings:   []string{},
+	}
+
+	normalizePlayerSaves(&index, playersDir)
+
+	if len(index.Warnings) != 0 {
+		t.Fatalf("current player friendship map produced warnings: %#v", index.Warnings)
+	}
+	if index.Containers[0].OwnerID != fixturePlayerID {
+		t.Fatalf("player inventory was not parsed after friendship map: %#v", index.Containers[0])
+	}
+}
+
 func TestNormalizePlayerSavesWarnsAndContinuesForMissingAndCorruptSaves(t *testing.T) {
 	playersDir := t.TempDir()
 	validPlayerID := fixturePlayerID
@@ -194,6 +215,13 @@ func playerGVASFixture(t *testing.T, containers map[string]string) []byte {
 	writeFString(t, &body, "/Script/Pal.PalWorldPlayerSaveGame")
 
 	writeStructProperty(t, &body, "SaveData", "PalPlayerSaveData", func() {
+		writeStructMapProperty(t, &body, "Local_MaxFriendshipPalIds", func() {
+			writeGUIDProperty(t, &body, "PlayerUId", fixturePlayerID)
+			writeFString(t, &body, "None")
+		}, func() {
+			writeGUIDProperty(t, &body, "InstanceId", fixtureBaseID)
+			writeFString(t, &body, "None")
+		})
 		writeStructProperty(t, &body, "InventoryInfo", "PalPlayerInventoryInfo", func() {
 			for _, field := range playerInventoryContainerFields {
 				containerID, ok := containers[field]
@@ -211,6 +239,20 @@ func playerGVASFixture(t *testing.T, containers map[string]string) []byte {
 	})
 	writeFString(t, &body, "None")
 	return body.Bytes()
+}
+
+func writeStructMapProperty(t *testing.T, body *bytes.Buffer, name string, key, value func()) {
+	t.Helper()
+	writeFString(t, body, name)
+	writeFString(t, body, "MapProperty")
+	writeU64(t, body, 0)
+	writeFString(t, body, "StructProperty")
+	writeFString(t, body, "StructProperty")
+	body.WriteByte(0)
+	writeU32(t, body, 0)
+	writeU32(t, body, 1)
+	key()
+	value()
 }
 
 func writeStructProperty(t *testing.T, body *bytes.Buffer, name, structType string, value func()) {

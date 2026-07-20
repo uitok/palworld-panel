@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,47 @@ func TestAuthenticatePersistsPasswordWithoutSteamGuardAndCleansScript(t *testing
 	}
 }
 
+func TestAuthenticateUsesManagedLinuxLoginRunnerAndPersistsCredentials(t *testing.T) {
+	client, cfg := newTestClient(t)
+	client.goos = "linux"
+	if err := os.Remove(cfg.SteamWorkshopCredentialsPath()); err != nil {
+		t.Fatal(err)
+	}
+	var received LoginRequest
+	client.SetCredentialLoginRunner(func(_ context.Context, request LoginRequest) ([]byte, error) {
+		received = request
+		return []byte("Logging in using password and Steam Guard code...OK\nLogged in OK"), nil
+	})
+	status, err := client.Authenticate(t.Context(), LoginRequest{
+		AccountName: "fixture_user", Password: "linux fixture password", SteamGuardCode: "654321",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received.Password != "linux fixture password" || received.SteamGuardCode != "654321" {
+		t.Fatalf("managed login request = %#v", received)
+	}
+	if !status.Supported || !status.SteamCMDInstalled || !status.LoggedIn || !status.PasswordConfigured {
+		t.Fatalf("managed Linux credential status = %#v", status)
+	}
+	body, err := os.ReadFile(cfg.SteamWorkshopCredentialsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "654321") || !strings.Contains(string(body), "linux fixture password") {
+		t.Fatalf("persisted Linux credentials contain the wrong fields: %s", body)
+	}
+	if runtime.GOOS != "windows" {
+		info, statErr := os.Stat(cfg.SteamWorkshopCredentialsPath())
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("Linux credential permissions = %v", info.Mode().Perm())
+		}
+	}
+}
+
 func TestAuthenticateSteamGuardFailureDoesNotPersistPassword(t *testing.T) {
 	client, cfg := newTestClient(t)
 	if err := os.Remove(cfg.SteamWorkshopCredentialsPath()); err != nil {
@@ -87,7 +129,7 @@ func TestVerifyCredentialsUsesSavedPasswordAndDoesNotPersistGuard(t *testing.T) 
 	var scriptBody string
 	client.runCommand = func(_ context.Context, _, _ string, args ...string) ([]byte, error) {
 		scriptBody = credentialScript(t, args)
-		return []byte("Logged in OK"), nil
+		return []byte("Logging in using password and Steam Guard code...OK\nWaiting for user info...OK"), nil
 	}
 	status, err := client.VerifyCredentials(t.Context(), "fixture_user", "654321")
 	if err != nil || !status.LoggedIn {
@@ -102,6 +144,36 @@ func TestVerifyCredentialsUsesSavedPasswordAndDoesNotPersistGuard(t *testing.T) 
 	}
 	if strings.Contains(string(body), "654321") {
 		t.Fatalf("Steam Guard code was persisted: %s", body)
+	}
+}
+
+func TestExplicitLoginFailureRequiresAnActualSteamGuardError(t *testing.T) {
+	if err := explicitLoginFailure([]byte("Logging in using password and Steam Guard code...OK\nLogged in OK")); err != nil {
+		t.Fatalf("successful Steam Guard login was rejected: %v", err)
+	}
+	for _, output := range []string{
+		"Login Failure: Two-factor code mismatch (88)",
+		"FAILED (Invalid Login Auth Code)",
+		"Account logon denied, need two-factor code",
+	} {
+		if err := explicitLoginFailure([]byte(output)); !errors.Is(err, ErrSteamGuardRequired) {
+			t.Errorf("explicitLoginFailure(%q) = %v", output, err)
+		}
+	}
+	if err := explicitLoginFailure([]byte("Please confirm the login in the Steam Mobile app on your phone.\nTimed out waiting for confirmation.")); !errors.Is(err, ErrSteamMobileConfirmationRequired) {
+		t.Fatalf("mobile confirmation timeout = %v", err)
+	}
+	if err := explicitLoginFailure([]byte("Please confirm the login in the Steam Mobile app on your phone.\nLogged in OK")); err != nil {
+		t.Fatalf("approved mobile confirmation was rejected: %v", err)
+	}
+}
+
+func TestCachedLoginFailureRequiresReauthorizationWithoutCache(t *testing.T) {
+	if err := cachedLoginFailure([]byte("Cached credentials not found. FAILED (No cached credentials and @NoPromptForPassword is set)")); !errors.Is(err, ErrLoginRequired) {
+		t.Fatalf("cached login failure = %v", err)
+	}
+	if err := cachedLoginFailure([]byte("Logging in using cached credentials.\nLogged in OK")); err != nil {
+		t.Fatalf("cached login success = %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -35,8 +36,7 @@ type workshopDockerRunner interface {
 	BuildImage(context.Context) error
 	DownloadWorkshopTo(context.Context, string, string, ...string) error
 	ImageExists(context.Context) (bool, error)
-	VerifyWorkshopLogin(context.Context, string) (bool, error)
-	WorkshopCredentialsSecure() bool
+	AuthenticateWorkshop(context.Context, steamcmd.LoginRequest) ([]byte, error)
 }
 
 func NewManager(cfg appconfig.Config, store *db.Store, runner workshopDockerRunner, executors ...*jobs.Executor) Manager {
@@ -45,6 +45,9 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner workshopDockerRunn
 		executor = executors[0]
 	}
 	nativeClient := steamcmd.New(cfg)
+	if runtime.GOOS != "windows" {
+		nativeClient.SetCredentialLoginRunner(runner.AuthenticateWorkshop)
+	}
 	return Manager{
 		cfg: cfg, store: store, runner: runner, native: nativeClient, steamAuth: nativeClient,
 		workshop: NewWorkshopService(cfg), jobs: executor, imports: newImportRegistry(cfg), local: &localActionState{},

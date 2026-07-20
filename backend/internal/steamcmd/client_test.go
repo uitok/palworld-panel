@@ -77,6 +77,12 @@ func TestDownloadWorkshopToActivatesOnlyVerifiedResult(t *testing.T) {
 	if scriptArgumentAfter(t, captured, "workshop_download_item") != "1623730" {
 		t.Fatalf("command script = %q", captured)
 	}
+	if strings.Contains(captured, "fixture password") {
+		t.Fatalf("Workshop download script exposed the saved password: %q", captured)
+	}
+	if strings.Index(captured, "force_install_dir") > strings.Index(captured, "login ") {
+		t.Fatalf("force_install_dir must be configured before cached login: %q", captured)
+	}
 	stages, err := filepath.Glob(filepath.Join(destination, ".steamcmd-workshop-*"))
 	if err != nil || len(stages) != 0 {
 		t.Fatalf("command staging was retained: %#v, %v", stages, err)
@@ -277,6 +283,78 @@ func TestLiveDownloadWorkshop(t *testing.T) {
 	}
 	if err := client.validateDownloadedTree(filepath.Join(fixtureRoot, "3625364851")); err != nil {
 		t.Fatalf("live Workshop result validation failed: %v", err)
+	}
+}
+
+// TestLiveAuthenticate exercises only the native SteamCMD login flow so a
+// developer can approve a Steam Mobile confirmation without a second login
+// being triggered immediately by a Workshop download.
+func TestLiveAuthenticate(t *testing.T) {
+	if os.Getenv("PALPANEL_LIVE_STEAMCMD") != "1" {
+		t.Skip("set PALPANEL_LIVE_STEAMCMD=1 to run the live SteamCMD login check")
+	}
+	if runtime.GOOS != "windows" {
+		t.Skip("native SteamCMD live check requires Windows")
+	}
+	cfg, err := appconfig.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	accountName := strings.TrimSpace(os.Getenv("PALPANEL_LIVE_STEAM_ACCOUNT"))
+	password := os.Getenv("PALPANEL_LIVE_STEAM_PASSWORD")
+	if err := ValidateAccountName(accountName); err != nil || password == "" {
+		t.Fatalf("set PALPANEL_LIVE_STEAM_ACCOUNT and PALPANEL_LIVE_STEAM_PASSWORD for explicit login: %v", err)
+	}
+	client := New(cfg)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	status, err := client.Authenticate(ctx, LoginRequest{
+		AccountName:    accountName,
+		Password:       password,
+		SteamGuardCode: os.Getenv("PALPANEL_LIVE_STEAM_GUARD_CODE"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.LoggedIn {
+		t.Fatalf("SteamCMD login completed without a verified status: %#v", status)
+	}
+}
+
+func TestLiveCachedDownloadWorkshop(t *testing.T) {
+	if os.Getenv("PALPANEL_LIVE_STEAMCMD") != "1" {
+		t.Skip("set PALPANEL_LIVE_STEAMCMD=1 to run the cached Workshop download check")
+	}
+	if runtime.GOOS != "windows" {
+		t.Skip("native SteamCMD live check requires Windows")
+	}
+	cfg, err := appconfig.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	client := New(cfg)
+	status, err := client.CredentialStatus("")
+	if err != nil || !status.PasswordConfigured {
+		t.Fatalf("configure and approve Steam credentials before the cached download check: %#v, %v", status, err)
+	}
+	fixtureRoot := filepath.Join(cfg.RuntimeRoot, "mods", "fixtures", "live-steamcmd-cached-"+time.Now().UTC().Format("20060102T150405"))
+	if err := client.validateManaged(fixtureRoot); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.removeManagedDirectory(fixtureRoot) }()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
+	defer cancel()
+	if err := client.DownloadWorkshopTo(ctx, cfg.WorkshopAppID, "3625364851", fixtureRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.validateDownloadedTree(filepath.Join(fixtureRoot, "3625364851")); err != nil {
+		t.Fatalf("cached Workshop result validation failed: %v", err)
 	}
 }
 

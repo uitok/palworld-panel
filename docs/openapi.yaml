@@ -499,7 +499,7 @@ paths:
             schema: {$ref: '#/components/schemas/SteamWorkshopAuthRequest'}
       responses:
         '200':
-          description: Explicit SteamCMD login succeeded and the native-Windows account/password were saved locally.
+          description: Explicit SteamCMD login succeeded and the Windows or Linux/Docker account/password were saved locally with private host permissions.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
@@ -537,7 +537,7 @@ paths:
       x-palpanel-permission: 'security:write'
       responses:
         '200':
-          description: Saved native-Windows Steam Workshop credentials were removed.
+          description: Saved Steam Workshop credentials were removed from the current host.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}

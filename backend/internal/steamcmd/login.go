@@ -8,12 +8,13 @@ import (
 )
 
 var (
-	ErrLoginRequired      = errors.New("Steam credentials are required before downloading Workshop Mods")
-	ErrInteractiveLogin   = errors.New("interactive SteamCMD login is supported only on a Windows host")
-	ErrInvalidAccountName = errors.New("invalid Steam account name")
-	ErrInvalidCredentials = errors.New("invalid Steam credentials")
-	ErrSteamGuardRequired = errors.New("Steam Guard verification code is required")
-	steamAccountNameRegex = regexp.MustCompile(`^[A-Za-z0-9_]{3,64}$`)
+	ErrLoginRequired                   = errors.New("Steam credentials are required before downloading Workshop Mods")
+	ErrInteractiveLogin                = errors.New("explicit SteamCMD login is unavailable for the current runtime")
+	ErrInvalidAccountName              = errors.New("invalid Steam account name")
+	ErrInvalidCredentials              = errors.New("invalid Steam credentials")
+	ErrSteamGuardRequired              = errors.New("Steam Guard verification code is required")
+	ErrSteamMobileConfirmationRequired = errors.New("Steam Mobile login confirmation is required")
+	steamAccountNameRegex              = regexp.MustCompile(`^[A-Za-z0-9_]{3,64}$`)
 )
 
 // LoginStatus contains only non-secret account and verification metadata.

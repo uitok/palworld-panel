@@ -141,6 +141,7 @@ func TestSteamAuthCredentialErrorsHaveStableCodes(t *testing.T) {
 		code   string
 	}{
 		{err: steamcmd.ErrSteamGuardRequired, status: http.StatusConflict, code: "steam_guard_required"},
+		{err: steamcmd.ErrSteamMobileConfirmationRequired, status: http.StatusConflict, code: "steam_mobile_confirmation_required"},
 		{err: steamcmd.ErrInvalidCredentials, status: http.StatusUnauthorized, code: "invalid_steam_credentials"},
 	} {
 		recorder := httptest.NewRecorder()

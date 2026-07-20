@@ -17,7 +17,7 @@ import type {
 import { createFallbackJob, mapJob } from './tasks';
 import { AI_OPERATION_TIMEOUT_MS } from './requestTimeouts';
 
-const STEAM_AUTH_OPERATION_TIMEOUT_MS = 60_000;
+const STEAM_AUTH_OPERATION_TIMEOUT_MS = 180_000;
 
 const stringArray = (raw: unknown): string[] => {
   if (!Array.isArray(raw)) return [];

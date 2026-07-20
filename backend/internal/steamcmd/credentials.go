@@ -28,18 +28,19 @@ type storedCredentials struct {
 	LastVerifiedAt string `json:"last_verified_at,omitempty"`
 }
 
-// CredentialStatus reports whether explicit native-Windows credentials are
-// available. It does not contact Steam; every Workshop download performs its
-// own explicit login and is therefore the authoritative validity check.
+// CredentialStatus reports whether managed Workshop credentials are available.
+// It does not contact Steam; Workshop downloads validate the locally approved
+// SteamCMD cached session and request reauthorization when that cache expires.
 func (c *Client) CredentialStatus(accountName string) (LoginStatus, error) {
 	accountName = strings.TrimSpace(accountName)
+	supported := c.goos == "windows" || c.loginRunner != nil
 	status := LoginStatus{
-		Supported:         c.goos == "windows",
-		SteamCMDInstalled: c.validateInstalled() == nil,
+		Supported:         supported,
+		SteamCMDInstalled: supported && (c.goos != "windows" || c.validateInstalled() == nil),
 		LoginInProgress:   false,
 		AccountName:       accountName,
 	}
-	if !status.Supported {
+	if !supported {
 		status.VerificationRequired = true
 		status.Message = ErrInteractiveLogin.Error()
 		return status, nil
@@ -71,7 +72,7 @@ func (c *Client) CredentialStatus(accountName string) (LoginStatus, error) {
 	case status.SteamGuardRequired:
 		status.Message = ErrSteamGuardRequired.Error()
 	case status.LoggedIn:
-		status.Message = "Steam credentials are configured. Workshop downloads will log in explicitly before use."
+		status.Message = "Steam credentials are configured and the local SteamCMD session is authorized for Workshop downloads."
 	default:
 		status.Message = "Verify the saved Steam credentials before downloading Workshop Mods."
 	}
@@ -86,7 +87,7 @@ func (c *Client) Authenticate(ctx context.Context, request LoginRequest) (LoginS
 	defer c.credentialMu.Unlock()
 	request.AccountName = strings.TrimSpace(request.AccountName)
 	request.SteamGuardCode = strings.TrimSpace(request.SteamGuardCode)
-	if c.goos != "windows" {
+	if c.goos != "windows" && c.loginRunner == nil {
 		status, _ := c.CredentialStatus(request.AccountName)
 		return status, ErrInteractiveLogin
 	}
@@ -94,11 +95,11 @@ func (c *Client) Authenticate(ctx context.Context, request LoginRequest) (LoginS
 		status, _ := c.CredentialStatus(request.AccountName)
 		return status, err
 	}
-	if err := c.Ensure(ctx); err != nil {
+	if err := c.ensureCredentialRuntime(ctx); err != nil {
 		status, _ := c.CredentialStatus(request.AccountName)
 		return status, err
 	}
-	if err := c.runExplicitLogin(ctx, request, nil); err != nil {
+	if err := c.executeExplicitLogin(ctx, request); err != nil {
 		c.setSteamGuardRequired(errors.Is(err, ErrSteamGuardRequired))
 		status, _ := c.CredentialStatus(request.AccountName)
 		return status, err
@@ -144,11 +145,11 @@ func (c *Client) VerifyCredentials(ctx context.Context, accountName, steamGuardC
 		status, _ := c.CredentialStatus(credentials.AccountName)
 		return status, err
 	}
-	if err := c.Ensure(ctx); err != nil {
+	if err := c.ensureCredentialRuntime(ctx); err != nil {
 		status, _ := c.CredentialStatus(credentials.AccountName)
 		return status, err
 	}
-	if err := c.runExplicitLogin(ctx, request, nil); err != nil {
+	if err := c.executeExplicitLogin(ctx, request); err != nil {
 		c.setSteamGuardRequired(errors.Is(err, ErrSteamGuardRequired))
 		_ = c.markCredentialsUnverified(ctx)
 		status, _ := c.CredentialStatus(credentials.AccountName)
@@ -224,6 +225,32 @@ func validateLoginRequest(request LoginRequest, passwordRequired bool) error {
 	return nil
 }
 
+func (c *Client) ensureCredentialRuntime(ctx context.Context) error {
+	if c.loginRunner != nil {
+		return nil
+	}
+	return c.Ensure(ctx)
+}
+
+func (c *Client) executeExplicitLogin(ctx context.Context, request LoginRequest) error {
+	if c.loginRunner == nil {
+		return c.runExplicitLogin(ctx, request, nil)
+	}
+	commandCtx, cancel := c.commandContext(ctx)
+	defer cancel()
+	out, runErr := c.loginRunner(commandCtx, request)
+	if authErr := explicitLoginFailure(out); authErr != nil {
+		return authErr
+	}
+	if runErr != nil {
+		return c.commandError(commandCtx, runErr, out, request.AccountName, request.Password, request.SteamGuardCode)
+	}
+	if err := commandCtx.Err(); err != nil {
+		return fmt.Errorf("SteamCMD explicit login interrupted: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) runExplicitLogin(ctx context.Context, request LoginRequest, commands []string) error {
 	_, err := c.runExplicitLoginOutput(ctx, request, commands)
 	return err
@@ -262,6 +289,36 @@ func (c *Client) runExplicitLoginOutput(ctx context.Context, request LoginReques
 	}
 	if err := commandCtx.Err(); err != nil {
 		return out, fmt.Errorf("SteamCMD explicit login interrupted: %w", err)
+	}
+	return out, nil
+}
+
+func (c *Client) runCachedLoginOutput(ctx context.Context, accountName string, beforeLogin, commands []string) ([]byte, error) {
+	release, err := c.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if err := c.validateInstalled(); err != nil {
+		return nil, fmt.Errorf("revalidate SteamCMD before cached login: %w", err)
+	}
+	commandCtx, cancel := c.commandContext(ctx)
+	defer cancel()
+
+	lines := []string{"@ShutdownOnFailedCommand 1", "@NoPromptForPassword 1", "@sSteamCmdForcePlatformType windows"}
+	lines = append(lines, beforeLogin...)
+	lines = append(lines, "login "+steamScriptArg(accountName))
+	lines = append(lines, commands...)
+	lines = append(lines, "quit")
+	out, runErr := c.runCredentialScript(commandCtx, lines)
+	if cachedErr := cachedLoginFailure(out); cachedErr != nil {
+		return out, cachedErr
+	}
+	if runErr != nil {
+		return out, c.commandError(commandCtx, runErr, out, accountName)
+	}
+	if err := commandCtx.Err(); err != nil {
+		return out, fmt.Errorf("SteamCMD cached login interrupted: %w", err)
 	}
 	return out, nil
 }
@@ -339,11 +396,29 @@ func steamScriptArg(value string) string {
 
 func explicitLoginFailure(output []byte) error {
 	lower := strings.ToLower(string(output))
+	if strings.Contains(lower, "logged in ok") || strings.Contains(lower, "waiting for user info...ok") {
+		return nil
+	}
+	mobileConfirmationMarkers := []string{
+		"please confirm the login in the steam mobile app",
+		"wait for confirmation timed out",
+		"timed out waiting for confirmation",
+	}
+	for _, marker := range mobileConfirmationMarkers {
+		if strings.Contains(lower, marker) {
+			return ErrSteamMobileConfirmationRequired
+		}
+	}
 	guardMarkers := []string{
 		"need two-factor code",
-		"steam guard code",
 		"two-factor code mismatch",
 		"invalid authenticator code",
+		"invalid login auth code",
+		"invalid auth code",
+		"steam guard code is invalid",
+		"steam guard code is incorrect",
+		"steam guard code required",
+		"requires steam guard",
 		"account logon denied, need two-factor",
 	}
 	for _, marker := range guardMarkers {
@@ -364,6 +439,26 @@ func explicitLoginFailure(output []byte) error {
 		}
 	}
 	return nil
+}
+
+func cachedLoginFailure(output []byte) error {
+	lower := strings.ToLower(string(output))
+	for _, marker := range []string{
+		"cached credentials not found",
+		"no cached credentials",
+		"cached credentials are missing or expired",
+	} {
+		if strings.Contains(lower, marker) {
+			return ErrLoginRequired
+		}
+	}
+	return explicitLoginFailure(output)
+}
+
+// CachedLoginFailure classifies stable authentication failures in SteamCMD
+// output produced by either the native process or the Docker/Wine runner.
+func CachedLoginFailure(output []byte) error {
+	return cachedLoginFailure(output)
 }
 
 func (c *Client) readCredentials() (storedCredentials, bool, error) {

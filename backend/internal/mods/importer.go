@@ -547,6 +547,9 @@ func (m Manager) runWorkshopImport(ctx context.Context, jobID, itemID string, en
 		errorCode := ""
 		message := "Workshop download failed"
 		switch {
+		case errors.Is(err, steamcmd.ErrSteamMobileConfirmationRequired):
+			errorCode = "steam_mobile_confirmation_required"
+			message = "Steam Mobile login confirmation is required"
 		case errors.Is(err, steamcmd.ErrSteamGuardRequired):
 			errorCode = "steam_guard_required"
 			message = "Steam Guard verification is required"

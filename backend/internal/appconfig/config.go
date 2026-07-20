@@ -558,8 +558,8 @@ func (c Config) SteamCMDProxyRestorePath() string {
 	return filepath.Join(c.DataDir, "secrets", "steamcmd-proxy-restore.json")
 }
 
-// SteamWorkshopCredentialsPath stores the native-Windows Steam account and
-// password used for explicit SteamCMD Workshop authentication. The file is
+// SteamWorkshopCredentialsPath stores the Steam account and password used for
+// explicit SteamCMD Workshop authentication on native Windows and Linux/Docker. The file is
 // deliberately kept outside the SteamCMD installation so SteamCMD updates do
 // not replace it and so PalPanel can apply the same private-file policy used by
 // other managed secrets.

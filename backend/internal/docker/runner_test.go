@@ -11,6 +11,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/networkproxy"
+	"palpanel/internal/steamcmd"
 )
 
 func TestPalServerPortUsesStartupArg(t *testing.T) {
@@ -275,6 +276,93 @@ func TestWorkshopUsesPersistedSteamCMDCacheWithoutPasswordArguments(t *testing.T
 	wantMount := volume(runner.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config")
 	if !containsExact(args, wantMount) {
 		t.Fatalf("Docker arguments do not mount the persistent SteamCMD cache %q:\n%s", wantMount, string(body))
+	}
+}
+
+func TestWorkshopAuthenticationUsesTemporaryRunscriptWithoutSecretArguments(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	scriptLog := filepath.Join(root, "script.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
+		"if [ \"${1:-}\" = image ]; then exit 0; fi\n" +
+		"for arg in \"$@\"; do case \"$arg\" in *:/run/palpanel/steam-login.txt:ro) host=${arg%:/run/palpanel/steam-login.txt:ro}; cp \"$host\" " + shellQuote(scriptLog) + ";; esac; done\n" +
+		"printf 'Logged in OK\\n'\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image"}
+	runner := NewRunner(cfg)
+	password := `space quote" slash\linux-secret`
+	guard := "654321"
+	out, err := runner.AuthenticateWorkshop(t.Context(), steamcmd.LoginRequest{AccountName: "fixture_user", Password: password, SteamGuardCode: guard})
+	if err != nil || !strings.Contains(string(out), "Logged in OK") {
+		t.Fatalf("AuthenticateWorkshop output = %q, error = %v", out, err)
+	}
+	arguments, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(arguments), password) || strings.Contains(string(arguments), guard) {
+		t.Fatalf("Docker arguments exposed Steam secrets: %s", arguments)
+	}
+	runscript, err := os.ReadFile(scriptLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(runscript), steamScriptArgument(password)) || !strings.Contains(string(runscript), steamScriptArgument(guard)) {
+		t.Fatalf("temporary runscript did not safely quote credentials: %s", runscript)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(cfg.SteamWorkshopCredentialsPath()), "steamcmd-docker-login-*.txt"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary Docker login scripts remain: %#v, %v", leftovers, err)
+	}
+}
+
+func TestWorkshopAuthenticationCleansTemporaryRunscriptAfterDockerFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"if [ \"${1:-}\" = image ]; then exit 0; fi\n" +
+		"printf 'transport failed\\n'\n" +
+		"exit 7\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image"}
+	runner := NewRunner(cfg)
+	if _, err := runner.AuthenticateWorkshop(t.Context(), steamcmd.LoginRequest{AccountName: "fixture_user", Password: "failure secret"}); err == nil {
+		t.Fatal("AuthenticateWorkshop unexpectedly succeeded")
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(cfg.SteamWorkshopCredentialsPath()), "steamcmd-docker-login-*.txt"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary Docker login scripts remain after failure: %#v, %v", leftovers, err)
+	}
+}
+
+func TestWorkshopDownloadClassifiesExpiredDockerCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf 'FAILED (No cached credentials and @NoPromptForPassword is set)\\n'\n" +
+		"exit 3\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", WorkshopAppID: "1623730"})
+	err := runner.DownloadWorkshopTo(t.Context(), "3625364851", filepath.Join(root, "download"), "fixture_user")
+	if !errors.Is(err, steamcmd.ErrLoginRequired) {
+		t.Fatalf("expired Docker cache error = %v", err)
 	}
 }
 

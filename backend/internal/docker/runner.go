@@ -15,6 +15,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/networkproxy"
+	"palpanel/internal/steamcmd"
 )
 
 type Runner struct {
@@ -254,8 +255,98 @@ func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot 
 	if accountName != "" {
 		args = append(args, accountName)
 	}
-	_, err := r.run(ctx, args...)
+	out, err := r.run(ctx, args...)
+	if err != nil {
+		combined := append(append([]byte(nil), out...), []byte("\n"+err.Error())...)
+		if authErr := steamcmd.CachedLoginFailure(combined); authErr != nil {
+			return authErr
+		}
+	}
 	return err
+}
+
+// AuthenticateWorkshop performs a non-interactive SteamCMD login using a
+// private, short-lived runscript. Secrets are mounted into the container and
+// never included in Docker process arguments.
+func (r Runner) AuthenticateWorkshop(ctx context.Context, request steamcmd.LoginRequest) ([]byte, error) {
+	exists, err := r.ImageExists(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("check Docker/Wine SteamCMD runner: %w", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("Docker/Wine SteamCMD runner image is not built")
+	}
+	if err := r.ensureWorkshopSteamCMDConfigDir(); err != nil {
+		return nil, err
+	}
+	scriptPath, cleanup, err := r.writeWorkshopLoginScript(request)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	const containerScript = "/run/palpanel/steam-login.txt"
+	args := []string{
+		"run", "--rm",
+		"--add-host", "host.docker.internal:host-gateway",
+		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"),
+		"-v", volume(scriptPath, containerScript) + ":ro",
+	}
+	args = append(args, r.containerProxyEnvArgs()...)
+	args = append(args, hostOwnerEnvArgs()...)
+	args = append(args, r.cfg.DockerImage, "steam-auth-runscript", containerScript)
+	return r.runSensitive(ctx, args...)
+}
+
+func (r Runner) writeWorkshopLoginScript(request steamcmd.LoginRequest) (string, func(), error) {
+	directory := filepath.Dir(r.cfg.SteamWorkshopCredentialsPath())
+	if r.cfg.RuntimeRoot != "" {
+		if err := r.cfg.ValidateManagedPath(directory, false); err != nil {
+			return "", func() {}, fmt.Errorf("validate Steam credential directory: %w", err)
+		}
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return "", func() {}, fmt.Errorf("create Steam credential directory: %w", err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return "", func() {}, fmt.Errorf("secure Steam credential directory: %w", err)
+	}
+	script, err := os.CreateTemp(directory, "steamcmd-docker-login-*.txt")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create Docker SteamCMD login script: %w", err)
+	}
+	path := script.Name()
+	cleanup := func() {
+		_ = script.Close()
+		_ = os.Remove(path)
+	}
+	if err := script.Chmod(0o600); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("secure Docker SteamCMD login script: %w", err)
+	}
+	login := "login " + steamScriptArgument(request.AccountName) + " " + steamScriptArgument(request.Password)
+	if request.SteamGuardCode != "" {
+		login += " " + steamScriptArgument(request.SteamGuardCode)
+	}
+	body := "@ShutdownOnFailedCommand 1\n@NoPromptForPassword 1\n" + login + "\nquit\n"
+	if _, err := script.WriteString(body); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("write Docker SteamCMD login script: %w", err)
+	}
+	if err := script.Sync(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("sync Docker SteamCMD login script: %w", err)
+	}
+	if err := script.Close(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("close Docker SteamCMD login script: %w", err)
+	}
+	return path, cleanup, nil
+}
+
+func steamScriptArgument(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return `"` + value + `"`
 }
 
 // VerifyWorkshopLogin probes the persisted SteamCMD cache without ever
@@ -413,6 +504,22 @@ func (r Runner) Status(ctx context.Context) (ContainerStatus, error) {
 
 func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 	return runCommandWithEnvironment(ctx, r.cfg.DockerBinary, r.commandEnvironment(), args...)
+}
+
+func (r Runner) runSensitive(ctx context.Context, args ...string) ([]byte, error) {
+	binary := dockerBinary(r.cfg.DockerBinary)
+	environment := r.commandEnvironment()
+	out, err := runDockerCommand(ctx, binary, args, false, environment)
+	if err == nil {
+		return out, nil
+	}
+	if dockerPermissionDenied(err, out) && canUseDockerGroupShell() {
+		out, err = runDockerCommand(ctx, binary, args, true, environment)
+		if err == nil {
+			return out, nil
+		}
+	}
+	return out, fmt.Errorf("Docker credential command failed: %w", err)
 }
 
 func RunCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {

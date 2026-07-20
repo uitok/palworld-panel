@@ -86,20 +86,16 @@ Runtime Debug logging can be toggled from the Monitor page. It writes bounded,
 rotated diagnostics to `/var/lib/palpanel/logs/palpanel-debug.log` without
 recording credentials, authorization headers, or request bodies.
 
-On Linux/Docker, private Workshop downloads continue to use SteamCMD's persisted
-login cache. Build the runner once by installing or updating the server, then run:
-
-```text
-palpanelctl steam-login your_account_name
-```
-
-Enter the password and Steam Guard code only in that SteamCMD terminal, enter
-`quit` after login succeeds, then click Verify login in Mod Management. PalPanel
-stores only the mode-0700 SteamCMD cache and re-verifies it before downloads;
-passwords and Guard codes never enter the API, environment file, Docker command
-arguments, or support logs. Native Windows instead stores an explicitly submitted
-account/password in its local ACL-restricted secrets file and logs in again for
-each Workshop download; Steam Guard codes remain transient.
+Windows and Linux/Docker use the same Workshop login form in Mod Management.
+Build the Linux runner once by installing or updating the server, then enter the
+Steam account, password, and optional Steam Guard code in the panel. PalPanel
+stores the password in the private `data/secrets/steam-workshop-credentials.json`
+file (mode 0600 on Linux) and keeps Guard codes transient. Linux passes a private
+temporary runscript into the Docker/Wine runner read-only, so credentials never
+enter Docker process arguments or support logs. Downloads reuse the approved
+SteamCMD cache without embedding the saved password and request reauthorization
+when the machine grant expires. `palpanelctl steam-login` remains a recovery
+fallback for administrators who need to repair the cache manually.
 
 Server installation/update and community-server discovery proxies can be managed
 independently from System Settings > Network & proxy. The managed configuration is

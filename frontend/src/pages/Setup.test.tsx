@@ -189,6 +189,34 @@ describe('Setup', () => {
     await waitFor(() => expect(screen.getByText('bootstrap completed')).toBeInTheDocument());
   });
 
+  it('automatically checks the latest Build when an installed server has no cached result', async () => {
+    const versionCheck: Job = {
+      id: 'job_version_check',
+      type: 'version_check',
+      status: 'waiting',
+      progress: 0,
+      message: 'queued version check',
+      created_at: '2026-07-20T00:00:00Z',
+    };
+    serverApiMock.getStatus.mockResolvedValue({
+      ...baseStatus(),
+      installed: true,
+      config_exists: true,
+      setup_step: 'ready',
+    });
+    serverApiMock.getVersion
+      .mockResolvedValueOnce({ ...baseVersion(), installed: true, current_build_id: '24088465' })
+      .mockResolvedValue({ ...baseVersion(), installed: true, current_build_id: '24088465', latest_build_id: '24088465' });
+    serverApiMock.checkVersion.mockResolvedValue(versionCheck);
+    tasksApiMock.waitForJob.mockResolvedValue({ ...versionCheck, status: 'success', progress: 100 });
+
+    render(<Setup />);
+
+    await waitFor(() => expect(serverApiMock.checkVersion).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(tasksApiMock.waitForJob).toHaveBeenCalledWith('job_version_check', expect.any(Function), expect.any(Function)));
+    await waitFor(() => expect(serverApiMock.getVersion).toHaveBeenCalledTimes(3));
+  });
+
   it('shows the SteamCMD primary action and hides the Docker install flow on Windows', async () => {
     setupApiMock.getRuntime.mockResolvedValue({ mode: 'windows_steamcmd' as RuntimeMode });
     setupApiMock.getPrerequisites.mockResolvedValue([

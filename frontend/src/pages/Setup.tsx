@@ -125,9 +125,11 @@ export const Setup: React.FC = () => {
   const [existingServerPath, setExistingServerPath] = useState('');
   const [importingServer, setImportingServer] = useState(false);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
+  const [jobRecoveryComplete, setJobRecoveryComplete] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const trackedJobIdRef = useRef<string | null>(null);
+  const automaticVersionCheckAttemptedRef = useRef(false);
 
   const refreshAdvanced = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -250,6 +252,8 @@ export const Setup: React.FC = () => {
         await trackJob(job);
       } catch {
         // Job recovery is opportunistic; the regular status refresh still drives the setup page.
+      } finally {
+        if (!cancelled && mountedRef.current) setJobRecoveryComplete(true);
       }
     };
 
@@ -258,6 +262,28 @@ export const Setup: React.FC = () => {
       cancelled = true;
     };
   }, [trackJob]);
+
+  useEffect(() => {
+    if (
+      !jobRecoveryComplete
+      || loading
+      || !status?.installed
+      || !versionInfo?.current_build_id
+      || versionInfo.latest_build_id
+      || (activeJob && !isJobDone(activeJob))
+      || automaticVersionCheckAttemptedRef.current
+    ) return;
+
+    automaticVersionCheckAttemptedRef.current = true;
+    void (async () => {
+      try {
+        const job = await serverApi.checkVersion();
+        await trackJob(job);
+      } catch (error) {
+        if (mountedRef.current) setMessage(getErrorMessage(error));
+      }
+    })();
+  }, [activeJob, jobRecoveryComplete, loading, status?.installed, trackJob, versionInfo?.current_build_id, versionInfo?.latest_build_id]);
 
   const runJob = async (start: () => Promise<Job>) => {
     try {

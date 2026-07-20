@@ -130,6 +130,8 @@ func failSteamAuth(c *gin.Context, operation string, err error) {
 		fail(c, http.StatusBadRequest, "invalid_steam_account", err.Error())
 	case errors.Is(err, steamcmd.ErrSteamGuardRequired):
 		fail(c, http.StatusConflict, "steam_guard_required", steamcmd.ErrSteamGuardRequired.Error())
+	case errors.Is(err, steamcmd.ErrSteamMobileConfirmationRequired):
+		fail(c, http.StatusConflict, "steam_mobile_confirmation_required", steamcmd.ErrSteamMobileConfirmationRequired.Error())
 	case errors.Is(err, steamcmd.ErrInvalidCredentials):
 		fail(c, http.StatusUnauthorized, "invalid_steam_credentials", steamcmd.ErrInvalidCredentials.Error())
 	case errors.Is(err, mods.ErrSteamAccountRequired):

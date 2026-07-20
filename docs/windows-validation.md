@@ -217,16 +217,19 @@ developer or self-hosted run.
 
 Workshop search, details, and translation are available without Steam authentication. A
 Workshop download requires a local administrator to configure a Steam account and password
-through the panel. PalPanel verifies them with an explicit SteamCMD login and stores them in
-the ACL-restricted `data\secrets\steam-workshop-credentials.json` file. This is an explicit
-security tradeoff: the password is stored as local plaintext. Steam Guard codes are accepted
-only for one verification attempt and are never persisted.
+through the panel. PalPanel verifies them with an explicit SteamCMD login; Steam Guard codes
+or Steam Mobile approval authorize the managed SteamCMD installation. The account and password
+are stored in the ACL-restricted `data\secrets\steam-workshop-credentials.json` file. This is
+an explicit security tradeoff: the password is stored as local plaintext. Steam Guard codes
+are accepted only for one verification attempt and are never persisted.
 
-Each download creates a private temporary SteamCMD runscript containing the login and
-download commands, invokes SteamCMD with only the script path in its process arguments, and
-deletes the script afterward. Stale scripts from an interrupted process are removed before
-the next attempt. Starting, verifying, or clearing credentials requires `security:write`
-and a real loopback TCP client; forwarded client-IP headers do not satisfy this restriction.
+Each download creates a private temporary SteamCMD runscript, configures `force_install_dir`
+before login, and uses the locally approved cached account without putting the saved password
+in the download script. Missing or expired machine authorization requires reauthorization.
+The script is deleted afterward, and stale scripts from interrupted processes are removed
+before the next attempt. Starting, verifying, or clearing credentials requires
+`security:write` and a real loopback TCP client; forwarded client-IP headers do not satisfy
+this restriction.
 
 Do not copy or publish `data\secrets`, SteamCMD logs, or Workshop staging directories. The
 repository's development runtime is ignored by Git, but evidence and support bundles still

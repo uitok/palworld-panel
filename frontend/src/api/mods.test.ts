@@ -184,9 +184,9 @@ describe('mods api mapping', () => {
     await modsApi.startWorkshopAuth({ accountName: '  steam_account  ', password: 'fixture password', steamGuardCode: ' 123456 ' });
     await modsApi.verifyWorkshopAuth('steam_account', '654321');
 
-    expect(get).toHaveBeenCalledWith('/mods/workshop/auth/status', { timeout: 60_000 });
-    expect(post).toHaveBeenNthCalledWith(1, '/mods/workshop/auth/start', { account_name: 'steam_account', password: 'fixture password', steam_guard_code: '123456' }, { timeout: 60_000 });
-    expect(post).toHaveBeenNthCalledWith(2, '/mods/workshop/auth/verify', { account_name: 'steam_account', steam_guard_code: '654321' }, { timeout: 60_000 });
+    expect(get).toHaveBeenCalledWith('/mods/workshop/auth/status', { timeout: 180_000 });
+    expect(post).toHaveBeenNthCalledWith(1, '/mods/workshop/auth/start', { account_name: 'steam_account', password: 'fixture password', steam_guard_code: '123456' }, { timeout: 180_000 });
+    expect(post).toHaveBeenNthCalledWith(2, '/mods/workshop/auth/verify', { account_name: 'steam_account', steam_guard_code: '654321' }, { timeout: 180_000 });
   });
 
   it('posts Workshop install requests with item_id and enable fields', async () => {

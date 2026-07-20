@@ -40,11 +40,19 @@ type Client struct {
 	goos         string
 	timeout      time.Duration
 	runCommand   commandRunner
+	loginRunner  func(context.Context, LoginRequest) ([]byte, error)
 	now          func() time.Time
 	network      *networkproxy.Service
 	credentialMu sync.Mutex
 	loginMu      sync.Mutex
 	login        loginState
+}
+
+// SetCredentialLoginRunner supplies the runtime-specific SteamCMD login
+// executor used when SteamCMD runs in a managed container instead of natively.
+// The callback must keep credentials out of process arguments.
+func (c *Client) SetCredentialLoginRunner(runner func(context.Context, LoginRequest) ([]byte, error)) {
+	c.loginRunner = runner
 }
 
 type commandGate struct {
@@ -259,15 +267,16 @@ func (c *Client) DownloadWorkshopTo(ctx context.Context, appID, itemID, destinat
 		return err
 	}
 
-	request := LoginRequest{AccountName: credentials.AccountName, Password: credentials.Password}
-	commands := []string{
+	beforeLogin := []string{
 		"force_install_dir " + steamScriptArg(stageRoot),
+	}
+	commands := []string{
 		"workshop_download_item " + appID + " " + itemID + " validate",
 	}
-	out, runErr := c.runExplicitLoginOutput(ctx, request, commands)
+	out, runErr := c.runCachedLoginOutput(ctx, credentials.AccountName, beforeLogin, commands)
 	if runErr != nil {
 		c.setSteamGuardRequired(errors.Is(runErr, ErrSteamGuardRequired))
-		if errors.Is(runErr, ErrSteamGuardRequired) || errors.Is(runErr, ErrInvalidCredentials) {
+		if errors.Is(runErr, ErrLoginRequired) || errors.Is(runErr, ErrSteamGuardRequired) || errors.Is(runErr, ErrInvalidCredentials) {
 			_ = c.markCredentialsUnverified(ctx)
 		}
 		return runErr

@@ -54,6 +54,7 @@ const sortOptions = [
 const isSteamLoginRequired = (error: unknown) => error instanceof ApiError && [
   'steam_login_required',
   'steam_guard_required',
+  'steam_mobile_confirmation_required',
   'invalid_steam_credentials',
 ].includes(error.code || '');
 
@@ -278,7 +279,7 @@ export const Mods: React.FC = () => {
     setActiveJob(job);
     const done = await tasksApi.waitForJob(job.id, setActiveJob);
     setMessage(done.status === 'success' ? '任务已完成，重启后生效' : done.error || '任务失败');
-    if (done.error_code && ['steam_login_required', 'steam_guard_required', 'invalid_steam_credentials'].includes(done.error_code)) {
+    if (done.error_code && ['steam_login_required', 'steam_guard_required', 'steam_mobile_confirmation_required', 'invalid_steam_credentials'].includes(done.error_code)) {
       setWorkshopAuth((current) => current ? {
         ...current,
         logged_in: false,
@@ -861,15 +862,8 @@ const InstalledRuntimeComponents: React.FC<{
 
 const localizeSteamAuthMessage = (message?: string | null) => {
   if (!message) return '';
-  const linuxCommand = message.match(/`(palpanelctl steam-login [A-Za-z0-9_]+)`/)?.[1];
-  if (message.startsWith('The Docker/Wine SteamCMD runner image is not built yet.')) {
-    return 'Docker/Wine SteamCMD 运行镜像尚未构建。请先在面板中安装或更新一次服务端，再在 Linux 服务器终端执行 Steam 登录命令。';
-  }
-  if (message.startsWith('Enter a Steam account name. On Linux,')) {
-    return '请输入 Steam 账户名。Linux/Docker 模式只保存并验证 SteamCMD 登录缓存；密码和 Steam Guard 验证码只在服务器本地 SteamCMD 终端中输入。';
-  }
-  if (message.startsWith('SteamCMD cached credentials were verified successfully.')) {
-    return 'SteamCMD 登录缓存验证成功。每次下载 Workshop Mod 前都会再次检查该会话。';
+  if (message === 'Install or update the server before configuring Workshop credentials.') {
+    return '请先安装或更新一次服务端以构建 SteamCMD 运行环境，然后再配置 Workshop 登录。';
   }
   if (message === 'Enter the Steam account name and password used for Workshop downloads.') {
     return '请输入用于 Workshop 下载的 Steam 账户名和密码。';
@@ -877,20 +871,20 @@ const localizeSteamAuthMessage = (message?: string | null) => {
   if (message === 'Steam credentials are configured. Workshop downloads will log in explicitly before use.') {
     return 'Steam 凭据已配置；每次 Workshop 下载都会显式登录，不再依赖登录缓存。';
   }
+  if (message === 'Steam credentials are configured and the local SteamCMD session is authorized for Workshop downloads.') {
+    return 'Steam 凭据和本机授权已配置；Workshop 下载会复用已批准的 SteamCMD 会话。';
+  }
   if (message === 'Verify the saved Steam credentials before downloading Workshop Mods.') {
     return '请验证已保存的 Steam 凭据后再下载 Workshop Mod。';
   }
   if (message === 'Steam Guard verification code is required') {
     return 'Steam 要求新的 Steam Guard 验证码，请输入后重新验证。';
   }
+  if (message === 'Steam Mobile login confirmation is required') {
+    return 'Steam 要求在手机 App 中确认本次登录。请重新提交，并立即在 Steam 手机 App 中批准新登录。';
+  }
   if (message === 'invalid Steam credentials') {
     return 'Steam 拒绝了账号或密码，请重新输入。';
-  }
-  if (linuxCommand && message.includes('Cached SteamCMD credentials are missing or expired.')) {
-    return `SteamCMD 登录缓存不存在或已过期。请在 Linux 服务器终端执行 ${linuxCommand}，完成登录并输入 quit 后再验证。`;
-  }
-  if (linuxCommand && (message.startsWith('Run `palpanelctl') || message.startsWith('interactive SteamCMD login'))) {
-    return `Linux/Docker 登录需在服务器本地终端完成。请执行 ${linuxCommand}，输入密码和 Steam Guard 验证码，登录成功后输入 quit，再回到此处验证。`;
   }
   if (message === 'Enter the Steam account name used for the local SteamCMD session.') {
     return '请输入本机 SteamCMD 会话使用的 Steam 账户名。';
@@ -930,12 +924,11 @@ const WorkshopLoginDialog: React.FC<{
   const [accountName, setAccountName] = useState(status?.account_name || '');
   const [password, setPassword] = useState('');
   const [steamGuardCode, setSteamGuardCode] = useState('');
-  const [busy, setBusy] = useState<'login' | 'verify' | 'clear' | null>(null);
+  const [busy, setBusy] = useState<'login' | 'clear' | null>(null);
   const [error, setError] = useState(localizeSteamAuthMessage(initialError));
   const [notice, setNotice] = useState(initialError ? '' : localizeSteamAuthMessage(status?.message));
   const accountAvailable = Boolean(accountName.trim() || status?.account_name);
   const canUseSteamCMD = Boolean(status?.supported && status.steamcmd_installed && canAuthenticate);
-  const linuxDockerLogin = [status?.message, initialError].some((value) => value?.includes('palpanelctl steam-login') || value?.includes('On Linux'));
 
   useEffect(() => {
     if (!accountName && status?.account_name) setAccountName(status.account_name);
@@ -946,19 +939,17 @@ const WorkshopLoginDialog: React.FC<{
       setError('请输入 Steam 账户名。');
       return;
     }
-    if (!linuxDockerLogin && !password && !status?.password_configured) {
+    if (!password && !status?.password_configured) {
       setError('请输入 Steam 密码。');
       return;
     }
     setBusy('login');
     setError('');
-    setNotice('');
+    setNotice('提交后请留意 Steam 手机 App；如果出现新登录确认，请在 90 秒内批准。');
     try {
-      const next = linuxDockerLogin
-        ? await modsApi.startWorkshopAuth({ accountName: accountName.trim(), password: '' })
-        : password
-          ? await modsApi.startWorkshopAuth({ accountName: accountName.trim(), password, steamGuardCode })
-          : await modsApi.verifyWorkshopAuth(accountName.trim(), steamGuardCode);
+      const next = password
+        ? await modsApi.startWorkshopAuth({ accountName: accountName.trim(), password, steamGuardCode })
+        : await modsApi.verifyWorkshopAuth(accountName.trim(), steamGuardCode);
       onStatusChange(next);
       if (next.logged_in) {
         setPassword('');
@@ -991,28 +982,6 @@ const WorkshopLoginDialog: React.FC<{
     }
   };
 
-  const verifyLogin = async () => {
-    if (!accountAvailable) {
-      setError('请输入 Steam 账户名。');
-      return;
-    }
-    setBusy('verify');
-    setError('');
-    try {
-      const next = await modsApi.verifyWorkshopAuth(accountName.trim() || undefined, steamGuardCode);
-      onStatusChange(next);
-      if (!next.logged_in) {
-        setError(localizeSteamAuthMessage(next.message) || '尚未检测到有效的 Steam 登录缓存。');
-        return;
-      }
-      await onVerified(next);
-    } catch (verifyError) {
-      setError(localizeSteamAuthMessage(getErrorMessage(verifyError)));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const clearLogin = async () => {
     if (!window.confirm('删除 PalPanel 本机保存的 Steam 账号和密码？')) return;
     setBusy('clear');
@@ -1039,7 +1008,7 @@ const WorkshopLoginDialog: React.FC<{
           <div className="min-w-0">
             <h2 id="steam-login-title" className="text-base font-bold text-slate-900">登录 Steam 以使用 Workshop</h2>
             <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
-              {linuxDockerLogin ? 'Linux/Docker 登录继续在服务器本地 SteamCMD 终端完成。' : 'Windows 会保存账号和密码，并在每次 Workshop 下载时显式登录。'}
+              Windows 与 Linux/Docker 均会保存账号和密码，并通过 Steam Guard 或手机批准建立本机授权。
             </p>
           </div>
           <button type="button" onClick={onClose} disabled={busy !== null} className="shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-40" aria-label="关闭 Steam 登录">
@@ -1051,9 +1020,7 @@ const WorkshopLoginDialog: React.FC<{
           <div className="flex items-start gap-3 border-b border-slate-100 pb-4">
             <ShieldCheck className="mt-0.5 shrink-0 text-emerald-600" size={17} />
             <p className="text-xs font-semibold leading-5 text-slate-600">
-              {linuxDockerLogin
-                ? '密码和 Steam Guard 验证码仍只输入服务器本地 SteamCMD 终端。'
-                : '安全提示：Steam 密码会以明文保存在 PalPanel 本机受限 secrets 文件中；Steam Guard 验证码仅用于本次验证，不会保存。'}
+              安全提示：Steam 密码会以明文保存在 PalPanel 本机受限 secrets 文件中；Steam Guard 验证码仅用于本次验证，不会保存。
             </p>
           </div>
 
@@ -1074,7 +1041,6 @@ const WorkshopLoginDialog: React.FC<{
                 />
               </label>
             </li>
-            {!linuxDockerLogin && (
             <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">2</span>
               <div className="grid min-w-0 gap-3">
@@ -1088,15 +1054,12 @@ const WorkshopLoginDialog: React.FC<{
                 </label>
               </div>
             </li>
-            )}
             <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">{linuxDockerLogin ? '2' : '3'}</span>
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">3</span>
               <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-700">{linuxDockerLogin ? '生成终端命令并验证缓存' : '保存并验证显式登录'}</p>
+                <p className="text-xs font-bold text-slate-700">保存凭据并授权本机 SteamCMD</p>
                 <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
-                  {linuxDockerLogin
-                    ? '终端中的 SteamCMD 登录成功并输入 quit 后，回到此处手动验证缓存。下载 Workshop Mod 前还会再次校验。'
-                    : '验证成功后保存账号和密码；后续下载会在同一 SteamCMD 命令中显式登录并下载。'}
+                  验证成功后保存账号和密码，并复用已批准的本机 SteamCMD 会话下载；授权过期时会要求重新批准。
                 </p>
                 <button
                   type="button"
@@ -1105,20 +1068,9 @@ const WorkshopLoginDialog: React.FC<{
                   className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-40"
                 >
                   {busy === 'login' ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                  {linuxDockerLogin ? '保存账号并显示登录命令' : status?.password_configured && !password ? '使用已保存密码验证' : '保存并验证登录'}
+                  {status?.password_configured && !password ? '使用已保存密码验证' : '保存并验证登录'}
                 </button>
-                {linuxDockerLogin && (
-                <button
-                  type="button"
-                  onClick={() => void verifyLogin()}
-                  disabled={busy !== null || !canUseSteamCMD || !accountAvailable}
-                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
-                >
-                  {busy === 'verify' ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                  我已完成终端登录，验证缓存
-                </button>
-                )}
-                {!linuxDockerLogin && status?.password_configured && (
+                {status?.password_configured && (
                   <button type="button" onClick={() => void clearLogin()} disabled={busy !== null} className="ml-2 mt-3 inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-40">
                     {busy === 'clear' ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
                     删除已保存凭据

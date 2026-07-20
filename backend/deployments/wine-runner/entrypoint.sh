@@ -191,6 +191,20 @@ steam_auth_verify() {
   return 3
 }
 
+steam_auth_runscript() {
+  local script_path="${1:?SteamCMD runscript path is required}"
+  if [[ "$script_path" != /run/palpanel/* || ! -f "$script_path" ]]; then
+    echo "invalid SteamCMD runscript path" >&2
+    return 64
+  fi
+  set +e
+  /opt/steamcmd/steamcmd.sh +runscript "$script_path"
+  local status=$?
+  set -e
+  restore_host_ownership /opt/steamcmd/config
+  return "$status"
+}
+
 rotate_server_log() {
   local log_path="${1:?log path is required}"
   local keep="${2:?backup count is required}"
@@ -315,6 +329,9 @@ case "$cmd" in
     ;;
   steam-auth-verify)
     steam_auth_verify "$@"
+    ;;
+  steam-auth-runscript)
+    steam_auth_runscript "$@"
     ;;
   start)
     start_server "$@"
