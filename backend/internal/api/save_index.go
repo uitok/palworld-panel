@@ -582,7 +582,11 @@ func overlayOnlinePlayers(players []saveindex.Player, online map[string]onlinePl
 }
 
 func normalizedPlayerKey(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
+	key := strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(key, "steam_") && len(key) > len("steam_") {
+		return key[len("steam_"):]
+	}
+	return key
 }
 
 func markOnlinePlayerSeen(seen map[string]bool, player onlinePlayer) {
@@ -670,7 +674,7 @@ func onlinePlayersFromPalDefender(response paldefender.RESTPlayersResponse) map[
 			IP:        player.IP,
 		}
 		for _, key := range []string{player.PlayerUID, player.UserID} {
-			key = strings.ToLower(strings.TrimSpace(key))
+			key = normalizedPlayerKey(key)
 			if key != "" {
 				out[key] = item
 			}
@@ -735,7 +739,7 @@ func parseOnlinePlayers(bodyValue any) map[string]onlinePlayer {
 			IP:   stringFromAny(player["ip"]),
 		}
 		for _, key := range []string{steamID, playerUID, stringFromAny(player["userId"], player["userid"])} {
-			key = strings.ToLower(strings.TrimSpace(key))
+			key = normalizedPlayerKey(key)
 			if key != "" {
 				out[key] = online
 			}

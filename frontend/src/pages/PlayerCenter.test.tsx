@@ -3,6 +3,24 @@ import type { PalDefenderGMPlayer, Player } from '../types';
 import { mergePlayers } from './playerCenterMerge';
 
 describe('PlayerCenter player merging', () => {
+  it('deduplicates a save snapshot and an online-only save record with Steam prefix differences', () => {
+    const saves = [
+      {
+        player_uid: 'save-player-uid', steam_id: '76561198370732375', nickname: '玛卡巴卡', level: 37,
+        guild_name: '无名公会', is_online: false, x: 1, y: 2, z: 3, last_online_time: '',
+      },
+      {
+        player_uid: 'live-player-uid', steam_id: 'steam_76561198370732375', nickname: '玛卡巴卡', level: 0,
+        guild_name: '', is_online: true, x: 10, y: 20, z: 30, last_online_time: '',
+      },
+    ] as Player[];
+
+    const merged = mergePlayers(saves, []);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ name: '玛卡巴卡', online: true, level: 37, guildName: '无名公会' });
+  });
+
   it('merges save and live records across Steam and GUID formatting differences', () => {
     const saves = [
       {

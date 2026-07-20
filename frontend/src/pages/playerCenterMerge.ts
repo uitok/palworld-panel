@@ -26,6 +26,12 @@ export const mergePlayers = (savePlayers: Player[], gmPlayers: PalDefenderGMPlay
     const aliases = playerIdentityAliases(save.player_uid, save.steam_id);
     const existing = result.find((player) => identitiesOverlap(aliases, playerIdentityAliases(player.identifier, player.playerUID, player.save?.steam_id, player.save?.player_uid)));
     if (existing) {
+      existing.online = existing.online || save.is_online;
+      if (save.is_online) {
+        existing.x = save.x;
+        existing.y = save.y;
+        existing.z = save.z;
+      }
       if (!existing.save || save.level >= existing.save.level) {
         existing.save = save;
         existing.name = save.nickname || existing.name;
@@ -33,10 +39,11 @@ export const mergePlayers = (savePlayers: Player[], gmPlayers: PalDefenderGMPlay
         existing.playerUID = save.player_uid || existing.playerUID;
         existing.level = Math.max(existing.level, save.level);
         existing.guildName = save.guild_name || existing.guildName;
-        existing.online = existing.online || save.is_online;
-        existing.x = save.x;
-        existing.y = save.y;
-        existing.z = save.z;
+        if (!existing.online || save.is_online) {
+          existing.x = save.x;
+          existing.y = save.y;
+          existing.z = save.z;
+        }
         existing.lastOnline = save.last_online_time || existing.lastOnline;
       }
       continue;

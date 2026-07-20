@@ -99,6 +99,31 @@ func TestOverlayOnlinePlayersUsesLiveCoordinatesWithoutDuplicates(t *testing.T) 
 	}
 }
 
+func TestOverlayOnlinePlayersMatchesSteamPrefixVariants(t *testing.T) {
+	live := onlinePlayer{
+		PlayerUID: "live-player-uid",
+		SteamID:   "steam_76561198370732375",
+		Nickname:  "玛卡巴卡",
+	}
+	online := map[string]onlinePlayer{
+		normalizedPlayerKey(live.PlayerUID): live,
+		normalizedPlayerKey(live.SteamID):   live,
+	}
+	players := overlayOnlinePlayers([]saveindex.Player{{
+		PlayerUID: "save-player-uid",
+		SteamID:   "76561198370732375",
+		Nickname:  "玛卡巴卡",
+		Level:     37,
+	}}, online)
+
+	if len(players) != 1 {
+		t.Fatalf("Steam prefix variant created a duplicate player: %#v", players)
+	}
+	if !players[0].IsOnline || players[0].Level != 37 || players[0].SteamID != live.SteamID {
+		t.Fatalf("live identity was not overlaid onto the save player: %#v", players[0])
+	}
+}
+
 func TestOverlayOnlinePlayersPreservesSaveCoordinatesWhenRESTHasNone(t *testing.T) {
 	saveLocation := saveindex.Coordinates{X: 11, Y: 22, Z: 33}
 	players := overlayOnlinePlayers([]saveindex.Player{{
