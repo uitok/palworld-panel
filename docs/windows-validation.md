@@ -272,3 +272,15 @@ stage; a blocked Steam CDN fails the game-install job with its retained backend 
 port conflict fails the live start; and a missing translation environment variable fails
 before any API request. Rerun with the same runtime root to reuse valid downloads, or pass a
 new `-TestRoot` to isolate smoke configuration while keeping the shared game cache.
+
+## Process-tree monitoring validation
+
+While the server is running, verify the monitor snapshot reports
+`cpu_available=true` and `memory_available=true`. The reported working set must
+represent the complete managed tree rooted at `PalServer.exe`, including
+`PalServer-Win64-Shipping-Cmd.exe`, rather than the roughly 8 MB bootstrap
+process alone. Compare Task Manager's process tree with `/api/monitor/snapshot`;
+CPU should move under load and memory should be materially above the launcher
+working set. When native collection is unavailable, the dashboard must show
+`不可用`; a genuine zero remains `0.0%`, and a positive value below 0.1% is
+shown as `<0.1%`.

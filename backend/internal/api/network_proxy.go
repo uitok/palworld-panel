@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"palpanel/internal/communityservers"
+	"palpanel/internal/docker"
 	"palpanel/internal/networkproxy"
 )
 
@@ -68,8 +69,28 @@ func (s Server) testNetworkProxy(c *gin.Context) {
 			fail(c, http.StatusBadRequest, "network_proxy_invalid", validationErr.Message)
 			return
 		}
-		fail(c, http.StatusBadGateway, "network_proxy_test_failed", err.Error())
+		result.OK = false
+		result.Message = err.Error()
+		ok(c, result)
 		return
+	}
+	if request.Scope == "install" {
+		container, containerErr := docker.NewRunner(s.cfg).TestInstallProxy(c.Request.Context(), result.Target)
+		result.DockerOK = container.OK
+		result.DockerLatencyMS = container.Latency.Milliseconds()
+		result.HostNetwork = container.HostNetwork
+		result.BridgeEnabled = container.BridgeEnabled
+		result.Diagnostic = container.Diagnostic
+		if containerErr != nil {
+			result.OK = false
+			result.FailureStage = container.FailureStage
+			result.Message = containerErr.Error()
+			ok(c, result)
+			return
+		}
+		result.OK = result.HostOK && result.DockerOK
+		result.LatencyMS += result.DockerLatencyMS
+		result.Message = "host and Docker container proxy tests passed"
 	}
 	ok(c, result)
 }

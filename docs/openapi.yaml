@@ -1194,7 +1194,7 @@ components:
         scope: {type: string, enum: [install, community]}
     NetworkProxyTestResult:
       type: object
-      required: [ok, scope, target, latency_ms, http_status, proxy_scheme, proxy_enabled, message]
+      required: [ok, scope, target, latency_ms, http_status, proxy_scheme, proxy_enabled, message, host_ok, host_latency_ms]
       properties:
         ok: {type: boolean}
         scope: {type: string, enum: [install, community]}
@@ -1204,6 +1204,14 @@ components:
         proxy_scheme: {type: string, enum: [http, https, socks5, socks5h]}
         proxy_enabled: {type: boolean}
         message: {type: string}
+        host_ok: {type: boolean}
+        host_latency_ms: {type: integer, minimum: 0}
+        docker_ok: {type: boolean}
+        docker_latency_ms: {type: integer, minimum: 0}
+        failure_stage: {type: string}
+        diagnostic: {type: string, description: Redacted proxy type, bridge state, host-network state, and failure stage.}
+        host_network: {type: boolean}
+        bridge_enabled: {type: boolean}
     CommunityServer:
       type: object
       required: [id, name, address, port, connect, players, max_players, password, country, status]

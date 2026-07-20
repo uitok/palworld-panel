@@ -7,6 +7,6 @@ import (
 	"errors"
 )
 
-func platformProcessCPUPercent(context.Context, int) (float64, error) {
-	return 0, errors.New("Windows process CPU collection is unavailable on this host")
+func platformProcessTreeStats(context.Context, int) (ProcessStats, error) {
+	return ProcessStats{}, errors.New("Windows process-tree collection is unavailable on this host")
 }

@@ -1,13 +1,16 @@
 package docker
 
 import (
+	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/networkproxy"
@@ -249,9 +252,11 @@ func TestWorkshopUsesPersistedSteamCMDCacheWithoutPasswordArguments(t *testing.T
 	}
 	root := t.TempDir()
 	commandLog := filepath.Join(root, "commands.log")
+	environmentLog := filepath.Join(root, "environment.log")
 	fakeDocker := filepath.Join(root, "docker")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
+		"env > " + shellQuote(environmentLog) + "\n" +
 		"exit 0\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -366,7 +371,7 @@ func TestWorkshopDownloadClassifiesExpiredDockerCache(t *testing.T) {
 	}
 }
 
-func TestManagedInstallProxyIsPassedByEnvironmentNameWithoutCredentialArguments(t *testing.T) {
+func TestManagedInstallProxyUsesLoopbackBridgeAndHostNetworkWithoutCredentialArguments(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
 	}
@@ -376,7 +381,7 @@ func TestManagedInstallProxyIsPassedByEnvironmentNameWithoutCredentialArguments(
 	fakeDocker := filepath.Join(root, "docker")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
-		"if [ -n \"${HTTP_PROXY:-}\" ]; then printf 'configured' > " + shellQuote(environmentLog) + "; fi\n" +
+		"env > " + shellQuote(environmentLog) + "\n" +
 		"exit 0\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -395,16 +400,155 @@ func TestManagedInstallProxyIsPassedByEnvironmentNameWithoutCredentialArguments(
 		t.Fatal(err)
 	}
 	args := strings.Split(strings.TrimSpace(string(body)), "\n")
-	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"} {
-		if !containsAdjacent(args, "-e", name) {
-			t.Fatalf("Docker arguments do not pass %s by environment name:\n%s", name, body)
+	if !containsAdjacent(args, "--network", "host") {
+		t.Fatalf("Docker arguments do not enable host networking:\n%s", body)
+	}
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		found := false
+		for _, arg := range args {
+			if strings.HasPrefix(arg, name+"=http://127.0.0.1:") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Docker arguments do not pass bridged %s explicitly:\n%s", name, body)
 		}
 	}
 	if strings.Contains(string(body), "never-log-proxy-password") || strings.Contains(string(body), "proxy-user") {
 		t.Fatalf("Docker arguments exposed proxy credentials:\n%s", body)
 	}
-	if _, err := os.Stat(environmentLog); err != nil {
-		t.Fatalf("managed proxy was not present in Docker command environment: %v", err)
+	environment, err := os.ReadFile(environmentLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(environment), "never-log-proxy-password") || strings.Contains(string(environment), "proxy-user") {
+		t.Fatalf("Docker process environment exposed upstream proxy credentials:\n%s", environment)
+	}
+	bridgeAddress := ""
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "HTTP_PROXY=http://127.0.0.1:") {
+			bridgeAddress = strings.TrimPrefix(arg, "HTTP_PROXY=http://")
+			break
+		}
+	}
+	if bridgeAddress == "" {
+		t.Fatal("bridged proxy address was not captured")
+	}
+	if connection, err := net.DialTimeout("tcp", bridgeAddress, 200*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatalf("temporary proxy bridge %s remained open after Docker command", bridgeAddress)
+	}
+}
+
+func TestWineImageBuildUsesProxyAwareRunDownload(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	fakeDocker := filepath.Join(root, "docker")
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+shellQuote(commandLog)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runnerDir := filepath.Join(root, "runner")
+	if err := os.MkdirAll(runnerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runnerDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", RunnerDir: runnerDir}
+	enabled := true
+	proxyURL := "socks5://proxy-user:never-log-proxy-password@127.0.0.1:10808"
+	if _, err := networkproxy.New(cfg).Update(networkproxy.ConfigUpdate{InstallEnabled: &enabled, InstallProxyURL: &proxyURL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRunner(cfg).BuildImage(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if !containsAdjacent(args, "--network", "host") {
+		t.Fatalf("build did not enable host networking:\n%s", body)
+	}
+	if strings.Contains(string(body), "never-log-proxy-password") || strings.Contains(string(body), "proxy-user") {
+		t.Fatalf("build arguments exposed proxy credentials:\n%s", body)
+	}
+	foundHTTPProxy := false
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "HTTP_PROXY=http://127.0.0.1:") {
+			foundHTTPProxy = true
+		}
+	}
+	if !foundHTTPProxy {
+		t.Fatalf("build did not receive the local HTTP bridge:\n%s", body)
+	}
+
+	dockerfile, err := os.ReadFile(filepath.Join("..", "..", "deployments", "wine-runner", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(dockerfile), "ADD https://") || !strings.Contains(string(dockerfile), "curl --fail") {
+		t.Fatalf("Wine runner Dockerfile must use a proxy-aware RUN download:\n%s", dockerfile)
+	}
+}
+
+func TestCanceledDockerDownloadClosesProxyBridge(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\nwhile :; do sleep 1; done\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", ServerDir: filepath.Join(root, "server"), WinePrefixDir: filepath.Join(root, "wine")}
+	enabled := true
+	proxyURL := "socks5h://proxy-user:never-log-proxy-password@127.0.0.1:10808"
+	if _, err := networkproxy.New(cfg).Update(networkproxy.ConfigUpdate{InstallEnabled: &enabled, InstallProxyURL: &proxyURL}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- NewRunner(cfg).InstallOrUpdate(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(commandLog); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("fake Docker command did not start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("canceled Docker command unexpectedly succeeded")
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridgeAddress := ""
+	for _, arg := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		if strings.HasPrefix(arg, "HTTP_PROXY=http://127.0.0.1:") {
+			bridgeAddress = strings.TrimPrefix(arg, "HTTP_PROXY=http://")
+			break
+		}
+	}
+	if bridgeAddress == "" {
+		t.Fatalf("bridge address missing from canceled command:\n%s", body)
+	}
+	if connection, err := net.DialTimeout("tcp", bridgeAddress, 200*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatalf("temporary proxy bridge %s remained open after cancellation", bridgeAddress)
 	}
 }
 

@@ -381,7 +381,9 @@ export const Settings: React.FC = () => {
     setNetworkBusy(true);
     try {
       const result = await networkProxyApi.test(scope);
-      setMessage(t('settings.proxyTestPassed', { latency: result.latency_ms, status: result.http_status }));
+      setMessage(result.ok
+        ? t('settings.proxyTestPassed', { latency: result.latency_ms, status: result.http_status })
+        : `${result.message || '代理测试失败'}${result.failure_stage ? ` (${result.failure_stage})` : ''}`);
     } catch (error) {
       setMessage(getErrorMessage(error));
     } finally {

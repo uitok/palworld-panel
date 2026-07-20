@@ -10,6 +10,7 @@ Group=palpanel
 UMask=0077
 Environment=PALCALC_BRIDGE_URLS=http://127.0.0.1:8091
 Environment=PALCALC_BRIDGE_CONCURRENCY=1
+Environment=DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 ExecStart=/opt/palpanel/current/bin/palcalc-bridge
 Restart=always
 RestartSec=3s

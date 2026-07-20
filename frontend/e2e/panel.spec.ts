@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createServer } from 'node:http';
 
 type Role = 'admin' | 'viewer';
 
@@ -24,6 +25,18 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
     const request = route.request();
     if (request.headers().authorization) authorization = request.headers().authorization;
     const path = new URL(request.url()).pathname;
+    if (path.startsWith('/api/backups/') && path.endsWith('/download')) {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          'content-type': 'application/zip',
+          'content-disposition': 'attachment; filename="palpanel manual.zip"',
+          'content-length': '24',
+        },
+        body: 'streamed-backup-contents',
+      });
+      return;
+    }
     if (backendUnavailable && path !== '/api/auth/status') {
       await route.fulfill({ status: 502, contentType: 'text/plain', body: 'Bad Gateway' });
       return;
@@ -91,6 +104,9 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
       case '/api/monitor/history':
         data = [];
         break;
+      case '/api/monitor/snapshot':
+        data = { sample: { id: 'sample-1', created_at: '2026-07-20T00:00:00Z', cpu_available: false, cpu_percent: 0, memory_available: false, memory_usage_bytes: 0, memory_limit_bytes: 0, disk_available: true, disk_free_bytes: 1, disk_total_bytes: 2, current_players: 0, max_players: 32, rest_healthy: false, rcon_healthy: false, game_port_healthy: false, query_port_healthy: false } };
+        break;
       case '/api/jobs':
         data = [{ id: 'job-1', type: 'backup', status: 'completed', progress: 100, message: 'backup completed', created_at: '2026-07-14T00:00:00Z', updated_at: '2026-07-14T00:01:00Z' }];
         break;
@@ -99,6 +115,12 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
         break;
       case '/api/alerts':
         data = [];
+        break;
+      case '/api/backups':
+        data = [{ name: 'palpanel manual.zip', path: '/data/backups/palpanel manual.zip', size_bytes: 24, created_at: '2026-07-20T00:00:00Z', reason: 'manual', status: 'available' }];
+        break;
+      case '/api/backups/webdav/config':
+        data = { enabled: false, base_url: '', username: '', remote_path: 'PalPanel', upload_after_backup: false, password_configured: false };
         break;
       case '/api/config/palworld/schema':
         data = { version: '1.0.0', fields: [{ key: 'ServerName', label: '服务器名称', group: 'server_management', type: 'string', default: 'Palworld Server', description: '' }] };
@@ -175,6 +197,78 @@ test('pages remain renderable while the backend temporarily returns 502', async 
     await expect(page.getByText('页面加载失败')).toHaveCount(0);
   }
   expect(pageErrors).toEqual([]);
+});
+
+test('route content and header stay aligned without horizontal overflow', async ({ page }) => {
+  test.setTimeout(120_000);
+  await installFakeBackend(page);
+  const routes = [
+    ['/setup', 'compact'],
+    ['/dashboard', 'standard'],
+    ['/player-center', 'wide'],
+    ['/backups', 'compact'],
+  ] as const;
+  for (const width of [757, 1024, 1440, 1864]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const [path, contentWidth] of routes) {
+      await page.goto(path);
+      await page.locator('.pp-route-frame').waitFor({ state: 'attached' });
+      const layout = await page.evaluate(() => {
+        const header = document.querySelector('.pp-topbar__inner')?.getBoundingClientRect();
+        const frame = document.querySelector('.pp-route-frame')?.getBoundingClientRect();
+        const shell = document.querySelector('.pp-shell__content');
+        return {
+          header: header && { x: header.x, width: header.width },
+          frame: frame && { x: frame.x, width: frame.width },
+          contentWidth: shell?.getAttribute('data-content-width'),
+          overflow: document.documentElement.scrollWidth - window.innerWidth,
+        };
+      });
+      expect(layout.contentWidth).toBe(contentWidth);
+      expect(layout.header).not.toBeNull();
+      expect(layout.frame).not.toBeNull();
+      expect(Math.abs((layout.header?.x ?? 0) - (layout.frame?.x ?? 0))).toBeLessThanOrEqual(1);
+      expect(Math.abs((layout.header?.width ?? 0) - (layout.frame?.width ?? 0))).toBeLessThanOrEqual(1);
+      expect(layout.overflow).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
+test('backup download is handled as a browser attachment without navigation', async ({ page }) => {
+  const payload = Buffer.from('streamed-backup-contents');
+  const downloadServer = createServer((request, response) => {
+    if (request.url?.startsWith('/api/backups/') && request.url.endsWith('/download')) {
+      response.writeHead(200, {
+        'content-type': 'application/zip',
+        'content-disposition': 'attachment; filename="palpanel manual.zip"',
+        'content-length': payload.length,
+      });
+      response.end(payload);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    downloadServer.once('error', reject);
+    downloadServer.listen(64217, '127.0.0.1', resolve);
+  });
+  try {
+    await installFakeBackend(page);
+    await page.goto('/backups');
+    const before = page.url();
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('a[title="下载"]:visible').first().click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('palpanel manual.zip');
+    expect(await download.createReadStream().then(async (stream) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+      return Buffer.concat(chunks).toString('utf8');
+    })).toBe('streamed-backup-contents');
+    expect(page.url()).toBe(before);
+  } finally {
+    await new Promise<void>((resolve) => downloadServer.close(() => resolve()));
+  }
 });
 
 test('Workshop credential dialog uses the full viewport instead of the transformed page container', async ({ page }) => {

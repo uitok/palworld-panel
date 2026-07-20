@@ -252,3 +252,11 @@ python -m unittest discover -s astrbot_plugin_palpanel/tests
 ## 许可证
 
 PalPanel 使用 [GPL-3.0-or-later](LICENSE)。PalCalc v1.17.6 保留 MIT 许可证；其余第三方组件与地图素材见 [`THIRD_PARTY_LICENSES.txt`](THIRD_PARTY_LICENSES.txt)。
+
+## 发布包运行时说明
+
+- Windows 与 Linux 发布包都包含自包含的 PalCalc/.NET 9 运行时，不需要另行安装系统 .NET。
+- Linux 压缩包以 invariant globalization 发布并在便携启动器、systemd 服务中显式启用，因此不依赖系统 ICU；中文存档数据和 JSON 协议保持 UTF-8。
+- Windows 的 CPU 与内存指标汇总 PalPanel 托管的完整 `PalServer.exe` 进程树，包括实际承载游戏负载的 `PalServer-Win64-Shipping-Cmd.exe`。
+- 备份下载使用浏览器原生附件流，不会先把整个 ZIP 读入页面内存。
+- Linux Docker/Wine 的 SteamCMD 下载代理会在任务期间创建仅监听宿主机 `127.0.0.1` 的临时 HTTP 桥接器，并通过 host network 供容器访问。Docker 基础镜像首次拉取仍由 Docker daemon 负责，需要单独配置 daemon proxy 或镜像加速。

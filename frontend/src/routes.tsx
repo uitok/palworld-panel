@@ -30,6 +30,7 @@ const Setup = lazyPage(() => import('./pages/Setup'), 'Setup');
 const TaskQueue = lazyPage(() => import('./pages/TaskQueue'), 'TaskQueue');
 
 export type NavGroup = 'setup' | 'workspace' | 'world' | 'system';
+export type ContentWidth = 'compact' | 'standard' | 'wide';
 
 export interface AppRoute {
   id: string;
@@ -40,31 +41,32 @@ export interface AppRoute {
   navGroup: NavGroup;
   navVisible?: boolean;
   activePaths?: string[];
+  contentWidth?: ContentWidth;
   icon: React.ReactNode;
   element: React.ReactElement;
 }
 
 export const appRoutes: AppRoute[] = [
-  { id: 'setup', path: '/setup', title: '开服向导', navLabel: '开服向导', titleKey: 'route.setup', navGroup: 'setup', icon: <Sparkles size={18} />, element: <Setup /> },
+  { id: 'setup', path: '/setup', title: '开服向导', navLabel: '开服向导', titleKey: 'route.setup', navGroup: 'setup', contentWidth: 'compact', icon: <Sparkles size={18} />, element: <Setup /> },
   { id: 'dashboard', path: '/dashboard', title: '服务器总览', navLabel: '服务器总览', titleKey: 'route.dashboard', navGroup: 'workspace', icon: <LayoutDashboard size={18} />, element: <Dashboard /> },
   { id: 'monitor', path: '/monitor', title: '实时监控', navLabel: '实时监控', titleKey: 'route.monitor', navGroup: 'workspace', icon: <Activity size={18} />, element: <Monitor /> },
   { id: 'community-servers', path: '/community-servers', title: '社区服务器', navLabel: '社区服务器', titleKey: 'route.communityServers', navGroup: 'workspace', icon: <Globe2 size={18} />, element: <CommunityServers /> },
-  { id: 'player-center', path: '/player-center', title: '玩家中心', navLabel: '玩家中心', titleKey: 'route.playerCenter', navGroup: 'world', activePaths: ['/gm'], icon: <UserCog size={18} />, element: <PalDefenderGM /> },
+  { id: 'player-center', path: '/player-center', title: '玩家中心', navLabel: '玩家中心', titleKey: 'route.playerCenter', navGroup: 'world', activePaths: ['/gm'], contentWidth: 'wide', icon: <UserCog size={18} />, element: <PalDefenderGM /> },
   { id: 'save-sources', path: '/save-sources', title: '存档中心', navLabel: '存档中心', titleKey: 'route.saveSources', navGroup: 'world', icon: <FolderArchive size={18} />, element: <SaveSources /> },
   { id: 'world-archive', path: '/world', title: '世界档案', navLabel: '世界档案', titleKey: 'route.worldArchive', navGroup: 'world', activePaths: ['/players', '/guilds', '/bases'], icon: <Database size={18} />, element: <Players /> },
   { id: 'pal-inventory', path: '/pal-inventory', title: '帕鲁仓库', navLabel: '帕鲁仓库', titleKey: 'route.palInventory', navGroup: 'world', activePaths: ['/pals'], icon: <Dna size={18} />, element: <Pals /> },
   { id: 'breeding', path: '/breeding', title: '配种实验室', navLabel: '配种实验室', titleKey: 'route.breeding', navGroup: 'world', icon: <Dna size={18} />, element: <BreedingLab /> },
-  { id: 'live-map', path: '/map', title: '实时地图', navLabel: '实时地图', titleKey: 'route.liveMap', navGroup: 'world', icon: <MapIcon size={18} />, element: <LiveMap /> },
-  { id: 'mods', path: '/mods', title: 'Mod 管理', navLabel: 'Mod 管理', titleKey: 'route.mods', navGroup: 'world', icon: <Puzzle size={18} />, element: <Mods /> },
-  { id: 'backups', path: '/backups', title: '备份与恢复', navLabel: '备份与恢复', titleKey: 'route.backups', navGroup: 'system', icon: <Archive size={18} />, element: <Backups /> },
+  { id: 'live-map', path: '/map', title: '实时地图', navLabel: '实时地图', titleKey: 'route.liveMap', navGroup: 'world', contentWidth: 'wide', icon: <MapIcon size={18} />, element: <LiveMap /> },
+  { id: 'mods', path: '/mods', title: 'Mod 管理', navLabel: 'Mod 管理', titleKey: 'route.mods', navGroup: 'world', contentWidth: 'compact', icon: <Puzzle size={18} />, element: <Mods /> },
+  { id: 'backups', path: '/backups', title: '备份与恢复', navLabel: '备份与恢复', titleKey: 'route.backups', navGroup: 'system', contentWidth: 'compact', icon: <Archive size={18} />, element: <Backups /> },
   { id: 'tasks', path: '/tasks', title: '任务队列', navLabel: '任务队列', titleKey: 'route.tasks', navGroup: 'system', icon: <ListTodo size={18} />, element: <TaskQueue /> },
-  { id: 'security', path: '/security', title: '安全防护', navLabel: '安全防护', titleKey: 'route.security', navGroup: 'system', icon: <Shield size={18} />, element: <Security /> },
+  { id: 'security', path: '/security', title: '安全防护', navLabel: '安全防护', titleKey: 'route.security', navGroup: 'system', contentWidth: 'compact', icon: <Shield size={18} />, element: <Security /> },
   { id: 'banlist', path: '/banlist', title: '封禁列表', navLabel: '封禁列表', titleKey: 'route.banlist', navGroup: 'system', icon: <UserX size={18} />, element: <BanList /> },
   { id: 'audit', path: '/audit', title: '操作审计', navLabel: '操作审计', titleKey: 'route.audit', navGroup: 'system', icon: <ClipboardList size={18} />, element: <AuditLogs /> },
-  { id: 'settings', path: '/settings', title: '系统设置', navLabel: '系统设置', titleKey: 'route.settings', navGroup: 'system', icon: <SettingsIcon size={18} />, element: <Settings /> },
+  { id: 'settings', path: '/settings', title: '系统设置', navLabel: '系统设置', titleKey: 'route.settings', navGroup: 'system', contentWidth: 'compact', icon: <SettingsIcon size={18} />, element: <Settings /> },
 
   // Legacy routes remain directly addressable and are highlighted under their new parent entries.
-  { id: 'legacy-gm', path: '/gm', title: '玩家中心', navLabel: '玩家中心', titleKey: 'route.playerCenter', navGroup: 'world', navVisible: false, icon: <UserCog size={18} />, element: <PalDefenderGM /> },
+  { id: 'legacy-gm', path: '/gm', title: '玩家中心', navLabel: '玩家中心', titleKey: 'route.playerCenter', navGroup: 'world', navVisible: false, contentWidth: 'wide', icon: <UserCog size={18} />, element: <PalDefenderGM /> },
   { id: 'legacy-players', path: '/players', title: '世界档案 · 玩家', navLabel: '玩家', titleKey: 'route.worldArchive', navGroup: 'world', navVisible: false, icon: <Users size={18} />, element: <Players /> },
   { id: 'legacy-guilds', path: '/guilds', title: '世界档案 · 公会', navLabel: '公会', titleKey: 'route.worldArchive', navGroup: 'world', navVisible: false, icon: <Users size={18} />, element: <Guilds /> },
   { id: 'legacy-bases', path: '/bases', title: '世界档案 · 基地', navLabel: '基地', titleKey: 'route.worldArchive', navGroup: 'world', navVisible: false, icon: <Users size={18} />, element: <Bases /> },

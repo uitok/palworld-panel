@@ -56,14 +56,22 @@ type TestRequest struct {
 }
 
 type TestResult struct {
-	OK           bool   `json:"ok"`
-	Scope        string `json:"scope"`
-	Target       string `json:"target"`
-	LatencyMS    int64  `json:"latency_ms"`
-	HTTPStatus   int    `json:"http_status"`
-	ProxyScheme  string `json:"proxy_scheme"`
-	ProxyEnabled bool   `json:"proxy_enabled"`
-	Message      string `json:"message"`
+	OK              bool   `json:"ok"`
+	Scope           string `json:"scope"`
+	Target          string `json:"target"`
+	LatencyMS       int64  `json:"latency_ms"`
+	HTTPStatus      int    `json:"http_status"`
+	ProxyScheme     string `json:"proxy_scheme"`
+	ProxyEnabled    bool   `json:"proxy_enabled"`
+	Message         string `json:"message"`
+	HostOK          bool   `json:"host_ok"`
+	HostLatencyMS   int64  `json:"host_latency_ms"`
+	DockerOK        bool   `json:"docker_ok,omitempty"`
+	DockerLatencyMS int64  `json:"docker_latency_ms,omitempty"`
+	FailureStage    string `json:"failure_stage,omitempty"`
+	Diagnostic      string `json:"diagnostic,omitempty"`
+	HostNetwork     bool   `json:"host_network,omitempty"`
+	BridgeEnabled   bool   `json:"bridge_enabled,omitempty"`
 }
 
 type ValidationError struct{ Message string }
@@ -225,15 +233,20 @@ func (s *Service) Test(ctx context.Context, scope string) (TestResult, error) {
 	resp, err := client.Do(req)
 	latency := time.Since(started).Milliseconds()
 	parsed, _ := url.Parse(rawProxy)
-	result := TestResult{Scope: scope, Target: publicURL(target), LatencyMS: latency, ProxyScheme: strings.ToLower(parsed.Scheme), ProxyEnabled: true}
+	result := TestResult{Scope: scope, Target: publicURL(target), LatencyMS: latency, HostLatencyMS: latency, ProxyScheme: strings.ToLower(parsed.Scheme), ProxyEnabled: true}
 	if err != nil {
+		result.FailureStage = "host_upstream_proxy"
+		result.Diagnostic = "proxy=" + result.ProxyScheme + " stage=" + result.FailureStage
 		return result, errors.New("proxy connection test failed")
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	result.HTTPStatus = resp.StatusCode
 	result.OK = resp.StatusCode >= 200 && resp.StatusCode < 400
+	result.HostOK = result.OK
 	if !result.OK {
+		result.FailureStage = "host_target_http"
+		result.Diagnostic = "proxy=" + result.ProxyScheme + " stage=" + result.FailureStage
 		return result, fmt.Errorf("proxy target returned HTTP %d", resp.StatusCode)
 	}
 	result.Message = "proxy connection test passed"

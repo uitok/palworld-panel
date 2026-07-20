@@ -54,7 +54,7 @@ export const networkProxyApi = {
   test: (scope: 'install' | 'community') =>
     handleRequest<NetworkProxyTestResult>(
       () => apiClient.post('/settings/network-proxy/test', { scope }, { timeout: 20_000 }),
-      { ok: false, scope, target: '', latency_ms: 0, http_status: 0, proxy_scheme: 'http', proxy_enabled: false, message: '' },
+      { ok: false, scope, target: '', latency_ms: 0, http_status: 0, proxy_scheme: 'http', proxy_enabled: false, message: '', host_ok: false, host_latency_ms: 0 },
       { quiet: true, fallbackOnError: false },
     ),
 };

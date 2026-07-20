@@ -205,6 +205,11 @@ steam_auth_runscript() {
   return "$status"
 }
 
+proxy_test() {
+  local target="${1:?proxy test target is required}"
+  curl --fail --silent --show-error --location --max-time 12 --range 0-0 "$target" >/dev/null
+}
+
 rotate_server_log() {
   local log_path="${1:?log path is required}"
   local keep="${2:?backup count is required}"
@@ -332,6 +337,9 @@ case "$cmd" in
     ;;
   steam-auth-runscript)
     steam_auth_runscript "$@"
+    ;;
+  proxy-test)
+    proxy_test "$@"
     ;;
   start)
     start_server "$@"

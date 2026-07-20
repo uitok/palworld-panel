@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/networkproxy"
@@ -25,6 +26,23 @@ type Runner struct {
 type ContainerStatus struct {
 	Exists bool   `json:"exists"`
 	Status string `json:"status"`
+}
+
+type downloadProxySession struct {
+	bridge      *networkproxy.Bridge
+	proxyURL    string
+	proxyScheme string
+	environment []string
+	hostNetwork bool
+}
+
+type ProxyContainerTestResult struct {
+	OK            bool
+	Latency       time.Duration
+	FailureStage  string
+	Diagnostic    string
+	HostNetwork   bool
+	BridgeEnabled bool
 }
 
 const (
@@ -58,13 +76,19 @@ func (r Runner) BuildImage(ctx context.Context) error {
 }
 
 func (r Runner) buildImageWithBase(ctx context.Context, baseImage string) error {
-	args := []string{"build", "-t", r.cfg.DockerImage, "-f", filepath.Join(r.cfg.RunnerDir, "Dockerfile")}
-	for _, key := range configuredProxyNames(r.commandEnvironment()) {
-		args = append(args, "--build-arg", key)
+	session, err := r.startDownloadProxy()
+	if err != nil {
+		return fmt.Errorf("prepare Wine image download proxy: %w", err)
 	}
+	defer session.close()
+	args := []string{"build", "-t", r.cfg.DockerImage, "-f", filepath.Join(r.cfg.RunnerDir, "Dockerfile")}
+	args = append(args, session.buildArgs()...)
 	args = append(args, "--build-arg", wineBaseImageBuildArg+"="+baseImage)
 	args = append(args, r.cfg.RunnerDir)
-	_, err := r.run(ctx, args...)
+	_, err = r.runWithEnvironment(ctx, session.environment, args...)
+	if err != nil && session.proxyURL != "" && !dockerBaseImagePullFailure(err) {
+		return session.wrapError("wine_image_build_download", err)
+	}
 	return err
 }
 
@@ -182,17 +206,25 @@ func compactDockerError(value string) string {
 }
 
 func (r Runner) InstallOrUpdate(ctx context.Context) error {
+	session, err := r.startDownloadProxy()
+	if err != nil {
+		return err
+	}
+	defer session.close()
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
 		"-v", volume(r.cfg.ServerDirectory(), "/data/server"),
 		"-v", volume(r.cfg.WinePrefixDir, "/data/wineprefix"),
 	}
-	args = append(args, r.containerProxyEnvArgs()...)
+	args = append(args, session.containerArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "install")
-	_, err := r.run(ctx, args...)
-	return err
+	_, err = r.runWithEnvironment(ctx, session.environment, args...)
+	if err != nil {
+		return session.wrapError("steamcmd_install_update", err)
+	}
+	return nil
 }
 
 func (r Runner) ImageExists(ctx context.Context) (bool, error) {
@@ -215,15 +247,20 @@ func (r Runner) AppInfo(ctx context.Context) (string, error) {
 	if !exists {
 		return "", fmt.Errorf("wine runner image is not built; run install or bootstrap before checking remote version")
 	}
+	session, err := r.startDownloadProxy()
+	if err != nil {
+		return "", err
+	}
+	defer session.close()
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
 	}
-	args = append(args, r.containerProxyEnvArgs()...)
+	args = append(args, session.containerArgs()...)
 	args = append(args, r.cfg.DockerImage, "appinfo")
-	out, err := r.run(ctx, args...)
+	out, err := r.runWithEnvironment(ctx, session.environment, args...)
 	if err != nil {
-		return "", err
+		return "", session.wrapError("steamcmd_appinfo", err)
 	}
 	return string(out), nil
 }
@@ -233,6 +270,11 @@ func (r Runner) DownloadWorkshop(ctx context.Context, itemID string) error {
 }
 
 func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot string, accountNames ...string) error {
+	session, err := r.startDownloadProxy()
+	if err != nil {
+		return err
+	}
+	defer session.close()
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
@@ -249,20 +291,23 @@ func (r Runner) DownloadWorkshopTo(ctx context.Context, itemID, destinationRoot 
 		}
 		args = append(args, "-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"))
 	}
-	args = append(args, r.containerProxyEnvArgs()...)
+	args = append(args, session.containerArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "workshop", itemID)
 	if accountName != "" {
 		args = append(args, accountName)
 	}
-	out, err := r.run(ctx, args...)
+	out, err := r.runWithEnvironment(ctx, session.environment, args...)
 	if err != nil {
 		combined := append(append([]byte(nil), out...), []byte("\n"+err.Error())...)
 		if authErr := steamcmd.CachedLoginFailure(combined); authErr != nil {
 			return authErr
 		}
 	}
-	return err
+	if err != nil {
+		return session.wrapError("steamcmd_workshop_download", err)
+	}
+	return nil
 }
 
 // AuthenticateWorkshop performs a non-interactive SteamCMD login using a
@@ -284,6 +329,11 @@ func (r Runner) AuthenticateWorkshop(ctx context.Context, request steamcmd.Login
 		return nil, err
 	}
 	defer cleanup()
+	session, err := r.startDownloadProxy()
+	if err != nil {
+		return nil, err
+	}
+	defer session.close()
 	const containerScript = "/run/palpanel/steam-login.txt"
 	args := []string{
 		"run", "--rm",
@@ -291,10 +341,14 @@ func (r Runner) AuthenticateWorkshop(ctx context.Context, request steamcmd.Login
 		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"),
 		"-v", volume(scriptPath, containerScript) + ":ro",
 	}
-	args = append(args, r.containerProxyEnvArgs()...)
+	args = append(args, session.containerArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "steam-auth-runscript", containerScript)
-	return r.runSensitive(ctx, args...)
+	out, err := r.runSensitiveWithEnvironment(ctx, session.environment, args...)
+	if err != nil {
+		return out, session.wrapError("steamcmd_login", err)
+	}
+	return out, nil
 }
 
 func (r Runner) writeWorkshopLoginScript(request steamcmd.LoginRequest) (string, func(), error) {
@@ -359,15 +413,20 @@ func (r Runner) VerifyWorkshopLogin(ctx context.Context, accountName string) (bo
 	if err := r.ensureWorkshopSteamCMDConfigDir(); err != nil {
 		return false, err
 	}
+	session, err := r.startDownloadProxy()
+	if err != nil {
+		return false, err
+	}
+	defer session.close()
 	args := []string{
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
 		"-v", volume(r.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config"),
 	}
-	args = append(args, r.containerProxyEnvArgs()...)
+	args = append(args, session.containerArgs()...)
 	args = append(args, hostOwnerEnvArgs()...)
 	args = append(args, r.cfg.DockerImage, "steam-auth-verify", accountName)
-	_, err := r.run(ctx, args...)
+	_, err = r.runWithEnvironment(ctx, session.environment, args...)
 	if err == nil {
 		return true, nil
 	}
@@ -378,7 +437,7 @@ func (r Runner) VerifyWorkshopLogin(ctx context.Context, accountName string) (bo
 		strings.Contains(message, "account logon denied") {
 		return false, nil
 	}
-	return false, err
+	return false, session.wrapError("steamcmd_login_verify", err)
 }
 
 func (r Runner) WorkshopCredentialsSecure() bool {
@@ -503,12 +562,19 @@ func (r Runner) Status(ctx context.Context) (ContainerStatus, error) {
 }
 
 func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
-	return runCommandWithEnvironment(ctx, r.cfg.DockerBinary, r.commandEnvironment(), args...)
+	return r.runWithEnvironment(ctx, os.Environ(), args...)
+}
+
+func (r Runner) runWithEnvironment(ctx context.Context, environment []string, args ...string) ([]byte, error) {
+	return runCommandWithEnvironment(ctx, r.cfg.DockerBinary, environment, args...)
 }
 
 func (r Runner) runSensitive(ctx context.Context, args ...string) ([]byte, error) {
+	return r.runSensitiveWithEnvironment(ctx, r.commandEnvironment(), args...)
+}
+
+func (r Runner) runSensitiveWithEnvironment(ctx context.Context, environment []string, args ...string) ([]byte, error) {
 	binary := dockerBinary(r.cfg.DockerBinary)
-	environment := r.commandEnvironment()
 	out, err := runDockerCommand(ctx, binary, args, false, environment)
 	if err == nil {
 		return out, nil
@@ -520,6 +586,39 @@ func (r Runner) runSensitive(ctx context.Context, args ...string) ([]byte, error
 		}
 	}
 	return out, fmt.Errorf("Docker credential command failed: %w", err)
+}
+
+func (r Runner) TestInstallProxy(ctx context.Context, target string) (ProxyContainerTestResult, error) {
+	session, err := r.startDownloadProxy()
+	if err != nil {
+		return ProxyContainerTestResult{FailureStage: "bridge_start"}, err
+	}
+	defer session.close()
+	result := ProxyContainerTestResult{
+		HostNetwork: session.hostNetwork, BridgeEnabled: session.bridge != nil,
+		Diagnostic: session.diagnostic("docker_container_test"),
+	}
+	if session.bridge == nil {
+		result.FailureStage = "bridge_disabled"
+		return result, fmt.Errorf("install proxy bridge is not enabled")
+	}
+	exists, err := r.ImageExists(ctx)
+	if err != nil || !exists {
+		result.FailureStage = "runner_image_unavailable"
+		return result, fmt.Errorf("Docker/Wine runner image is unavailable; build it after configuring the Docker daemon mirror or proxy")
+	}
+	args := []string{"run", "--rm"}
+	args = append(args, session.containerArgs()...)
+	args = append(args, r.cfg.DockerImage, "proxy-test", target)
+	started := time.Now()
+	_, err = r.runWithEnvironment(ctx, session.environment, args...)
+	result.Latency = time.Since(started)
+	if err != nil {
+		result.FailureStage = "docker_container_proxy"
+		return result, session.wrapError(result.FailureStage, err)
+	}
+	result.OK = true
+	return result, nil
 }
 
 func RunCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -688,6 +787,104 @@ func (r Runner) commandEnvironment() []string {
 		environment = setEnvironmentValue(environment, key, proxyValue)
 	}
 	return environment
+}
+
+func (r Runner) startDownloadProxy() (*downloadProxySession, error) {
+	session := &downloadProxySession{environment: r.commandEnvironment()}
+	rawProxy, err := networkproxy.New(r.cfg).InstallProxyURL()
+	if err != nil {
+		return nil, err
+	}
+	if rawProxy == "" || runtime.GOOS != "linux" {
+		return session, nil
+	}
+	bridge, err := networkproxy.StartBridge(rawProxy)
+	if err != nil {
+		return nil, err
+	}
+	parsed, _ := url.Parse(rawProxy)
+	session.bridge = bridge
+	session.proxyURL = "http://" + bridge.Address()
+	session.proxyScheme = strings.ToLower(parsed.Scheme)
+	session.environment = removeProxyEnvironment(os.Environ())
+	session.hostNetwork = true
+	return session, nil
+}
+
+func (s *downloadProxySession) close() {
+	if s != nil && s.bridge != nil {
+		_ = s.bridge.Close()
+	}
+}
+
+func (s *downloadProxySession) containerArgs() []string {
+	if s == nil {
+		return nil
+	}
+	if s.proxyURL == "" {
+		var args []string
+		for _, key := range configuredProxyNames(s.environment) {
+			args = append(args, "-e", key)
+		}
+		return args
+	}
+	args := []string{"--network", "host"}
+	for _, key := range proxyEnvironmentNames() {
+		args = append(args, "-e", key+"="+s.proxyURL)
+	}
+	return args
+}
+
+func (s *downloadProxySession) buildArgs() []string {
+	if s == nil {
+		return nil
+	}
+	if s.proxyURL == "" {
+		var args []string
+		for _, key := range configuredProxyNames(s.environment) {
+			args = append(args, "--build-arg", key)
+		}
+		return args
+	}
+	args := []string{"--network", "host"}
+	for _, key := range proxyEnvironmentNames() {
+		args = append(args, "--build-arg", key+"="+s.proxyURL)
+	}
+	return args
+}
+
+func (s *downloadProxySession) diagnostic(stage string) string {
+	if s == nil || s.bridge == nil {
+		return "proxy=disabled host_network=false bridge=false stage=" + stage
+	}
+	return fmt.Sprintf("proxy=%s host_network=%t bridge=true stage=%s", s.proxyScheme, s.hostNetwork, stage)
+}
+
+func (s *downloadProxySession) wrapError(stage string, err error) error {
+	if err == nil || s == nil || s.bridge == nil {
+		return err
+	}
+	return fmt.Errorf("%w (%s)", err, s.diagnostic(stage))
+}
+
+func proxyEnvironmentNames() []string {
+	return []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"}
+}
+
+func removeProxyEnvironment(environment []string) []string {
+	blocked := map[string]bool{}
+	for _, name := range proxyEnvironmentNames() {
+		blocked[name] = true
+	}
+	out := make([]string, 0, len(environment))
+	for _, item := range environment {
+		name, _, ok := strings.Cut(item, "=")
+		if ok && blocked[name] {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func configuredProxyNames(environment []string) []string {

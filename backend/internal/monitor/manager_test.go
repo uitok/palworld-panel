@@ -216,22 +216,14 @@ func TestSampleCollectsWindowsStatsAndCanDisableHistory(t *testing.T) {
 	}}, palrest.New(restServer.URL, "", ""))
 	manager.goos = "windows"
 	manager.diskUsage = func(string) (int64, int64, error) { return 100, 1000, nil }
-	manager.processCPU = func(_ context.Context, pid int) (float64, error) {
+	manager.processStats = func(_ context.Context, pid int) (ProcessStats, error) {
 		if pid != 123 {
 			t.Fatalf("CPU collector PID = %d", pid)
 		}
-		return 18.75, nil
-	}
-	manager.run = func(_ context.Context, name string, _ ...string) ([]byte, error) {
-		switch name {
-		case "tasklist":
-			return []byte(`"PalServer.exe","123","Console","1","1,024 K"` + "\n"), nil
-		default:
-			return nil, errors.New("unexpected command")
-		}
+		return ProcessStats{CPUPercent: 18.75, MemoryUsageBytes: 768 * 1024 * 1024, ProcessCount: 2}, nil
 	}
 	sample, err := manager.Sample(t.Context())
-	if err != nil || !sample.CPUAvailable || sample.CPUPercent != 18.75 || sample.MemoryUsageBytes != 1024*1024 || !sample.DiskAvailable || sample.DiskFreeBytes != 100 {
+	if err != nil || !sample.CPUAvailable || sample.CPUPercent != 18.75 || sample.MemoryUsageBytes != 768*1024*1024 || !sample.MemoryAvailable || !sample.DiskAvailable || sample.DiskFreeBytes != 100 {
 		t.Fatalf("Sample = %#v, %v", sample, err)
 	}
 	history, err := manager.History(t.Context(), 10)

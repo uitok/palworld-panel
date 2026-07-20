@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"context"
-	"encoding/csv"
 	"fmt"
 	"net"
 	"net/http"
@@ -22,16 +21,16 @@ import (
 )
 
 type Manager struct {
-	cfg        appconfig.Config
-	store      *db.Store
-	server     Server
-	palrest    palrest.Client
-	run        func(context.Context, string, ...string) ([]byte, error)
-	dial       func(string, string, time.Duration) (net.Conn, error)
-	diskUsage  func(string) (int64, int64, error)
-	processCPU func(context.Context, int) (float64, error)
-	goos       string
-	now        func() time.Time
+	cfg          appconfig.Config
+	store        *db.Store
+	server       Server
+	palrest      palrest.Client
+	run          func(context.Context, string, ...string) ([]byte, error)
+	dial         func(string, string, time.Duration) (net.Conn, error)
+	diskUsage    func(string) (int64, int64, error)
+	processStats func(context.Context, int) (ProcessStats, error)
+	goos         string
+	now          func() time.Time
 }
 
 type Server interface {
@@ -42,10 +41,16 @@ type Snapshot struct {
 	Sample db.MonitorSample `json:"sample"`
 }
 
+type ProcessStats struct {
+	CPUPercent       float64
+	MemoryUsageBytes int64
+	ProcessCount     int
+}
+
 func New(cfg appconfig.Config, store *db.Store, serverManager Server, restClient palrest.Client) Manager {
 	return Manager{
 		cfg: cfg, store: store, server: serverManager, palrest: restClient,
-		run: runCommand, dial: net.DialTimeout, diskUsage: platformDiskUsage, processCPU: platformProcessCPUPercent,
+		run: runCommand, dial: net.DialTimeout, diskUsage: platformDiskUsage, processStats: platformProcessTreeStats,
 		goos: runtime.GOOS, now: time.Now,
 	}
 }
@@ -309,32 +314,19 @@ func (m Manager) fillWindowsProcessStats(ctx context.Context, sample *db.Monitor
 		appendReason(sample, "windows process: invalid pid")
 		return
 	}
-	out, err := m.command(ctx, "tasklist", "/FI", "PID eq "+pidText, "/FO", "CSV", "/NH")
-	if err != nil {
-		appendReason(sample, "tasklist: "+strings.TrimSpace(string(out)))
-		return
-	}
-	rows, err := csv.NewReader(strings.NewReader(string(out))).ReadAll()
-	if err != nil || len(rows) == 0 || len(rows[0]) < 5 {
-		appendReason(sample, "tasklist: process not found")
-		return
-	}
-	kb := strings.NewReplacer(",", "", " K", "", " ", "").Replace(rows[0][4])
-	if value, err := strconv.ParseInt(kb, 10, 64); err == nil {
-		sample.MemoryAvailable = true
-		sample.MemoryUsageBytes = value * 1024
-	}
-	collector := m.processCPU
+	collector := m.processStats
 	if collector == nil {
-		collector = platformProcessCPUPercent
+		collector = platformProcessTreeStats
 	}
-	cpuPercent, err := collector(ctx, pid)
+	stats, err := collector(ctx, pid)
 	if err != nil {
-		appendReason(sample, "windows process CPU: "+err.Error())
+		appendReason(sample, "windows process tree: "+err.Error())
 		return
 	}
 	sample.CPUAvailable = true
-	sample.CPUPercent = cpuPercent
+	sample.CPUPercent = stats.CPUPercent
+	sample.MemoryAvailable = true
+	sample.MemoryUsageBytes = stats.MemoryUsageBytes
 }
 
 func (m Manager) fillDiskStats(ctx context.Context, sample *db.MonitorSample) {

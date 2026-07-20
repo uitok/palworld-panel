@@ -6,12 +6,16 @@
 }
 
 .pp-shell__content {
+  --pp-route-content-max: 1600px;
   min-width: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
   background: var(--pp-bg);
 }
+
+.pp-shell__content[data-content-width="compact"] { --pp-route-content-max: 1280px; }
+.pp-shell__content[data-content-width="wide"] { --pp-route-content-max: 1720px; }
 
 .pp-topbar {
   flex: none;
@@ -21,7 +25,7 @@
 }
 
 .pp-topbar__inner {
-  width: min(100%, calc(var(--pp-content-max) + 56px));
+  width: min(100%, var(--pp-route-content-max));
   min-height: 82px;
   margin: 0 auto;
   padding: 16px 28px 14px;
@@ -114,9 +118,9 @@
   background: var(--pp-bg);
 }
 
-#app-main > div {
+.pp-route-frame {
   width: 100%;
-  max-width: calc(var(--pp-content-max) + 56px);
+  max-width: var(--pp-route-content-max);
   margin-inline: auto;
 }
 

@@ -228,11 +228,11 @@ supervise() {
   fi
 
   rotate_log "$log_dir/palcalc-bridge.log"
-  PALCALC_BRIDGE_URLS="http://127.0.0.1:$palcalc_port" PALCALC_BRIDGE_CONCURRENCY=1 \
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 PALCALC_BRIDGE_URLS="http://127.0.0.1:$palcalc_port" PALCALC_BRIDGE_CONCURRENCY=1 \
     "$palcalc_bin" >>"$log_dir/palcalc-bridge.log" 2>&1 &
   printf '%s\n' "$!" >"$runtime_dir/palcalc-bridge.pid"
   if ! wait_for_health "$palcalc_health_url" "$runtime_dir/palcalc-bridge.pid" 90; then
-    printf 'palcalc-bridge failed its health check\n' >&2
+    printf 'palcalc-bridge failed its health check; inspect %s\n' "$log_dir/palcalc-bridge.log" >&2
     return 1
   fi
 
@@ -352,6 +352,8 @@ steam_login() {
   local auth_dir
   local owner_uid
   local owner_gid
+  local bridge_pid=""
+  local bridge_file=""
   local -a proxy_args=()
   path="$(config_path)"
   image="$(read_config_value PALPANEL_DOCKER_IMAGE "$path")"
@@ -372,22 +374,38 @@ steam_login() {
     chown "$owner_uid:$owner_gid" "$auth_dir"
   fi
 
-  local proxy_name
-  local proxy_value
-  for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY; do
-    proxy_value="${!proxy_name:-}"
-    [[ -n "$proxy_value" ]] || proxy_value="$(read_config_value "$proxy_name" "$path")"
-    if [[ -n "$proxy_value" ]]; then
-      proxy_value="${proxy_value//:\/\/127.0.0.1:/:\/\/host.docker.internal:}"
-      proxy_value="${proxy_value//:\/\/localhost:/:\/\/host.docker.internal:}"
-      printf -v "$proxy_name" '%s' "$proxy_value"
-      export "${proxy_name?}"
-      proxy_args+=("-e" "$proxy_name")
-    fi
+  docker image inspect "$image" >/dev/null 2>&1 || fail "Docker/Wine runner image $image is missing; install or update the server from PalPanel first"
+
+  mkdir -p "$runtime_dir" "$log_dir"
+  bridge_file="$runtime_dir/steam-proxy-bridge.$BASHPID"
+  rm -f "$bridge_file"
+  PALPANEL_DATA_DIR="$data_dir" "$backend_bin" network-proxy-bridge --config "$path" --address-file "$bridge_file" >>"$log_dir/controller.log" 2>&1 &
+  bridge_pid="$!"
+  for _ in $(seq 1 50); do
+    [[ -s "$bridge_file" ]] && break
+    kill -0 "$bridge_pid" 2>/dev/null || break
+    sleep 0.1
   done
 
-  docker image inspect "$image" >/dev/null 2>&1 || fail "Docker/Wine runner image $image is missing; install or update the server from PalPanel first"
+  local proxy_name
+  local proxy_value
+  if [[ -s "$bridge_file" ]]; then
+    proxy_value="http://$(tr -d '\r\n' <"$bridge_file")"
+    proxy_args+=("--network" "host")
+    for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+      proxy_args+=("-e" "$proxy_name=$proxy_value")
+    done
+  else
+    wait "$bridge_pid" 2>/dev/null || true
+    bridge_pid=""
+    for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+      proxy_value="${!proxy_name:-}"
+      [[ -n "$proxy_value" ]] && proxy_args+=("-e" "$proxy_name")
+    done
+  fi
+
   printf 'SteamCMD will now request the password and Steam Guard code locally. PalPanel will not receive them.\n'
+  set +e
   docker run --rm -it \
     --add-host host.docker.internal:host-gateway \
     -e "PALPANEL_HOST_UID=$owner_uid" \
@@ -395,11 +413,19 @@ steam_login() {
     -v "$auth_dir:/opt/steamcmd/config" \
     "${proxy_args[@]}" \
     "$image" steam-auth-login "$account_name"
+  local docker_status="$?"
+  set -e
+  if [[ -n "$bridge_pid" ]]; then
+    kill -TERM "$bridge_pid" 2>/dev/null || true
+    wait "$bridge_pid" 2>/dev/null || true
+  fi
+  rm -f "$bridge_file"
   chmod 700 "$auth_dir"
   if [[ "$(id -u)" -eq 0 ]]; then
     chown -R "$owner_uid:$owner_gid" "$auth_dir"
   fi
   printf 'SteamCMD exited. Return to Mod Management and click Verify login.\n'
+  return "$docker_status"
 }
 
 require_root() {

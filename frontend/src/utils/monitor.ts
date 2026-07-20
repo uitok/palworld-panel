@@ -22,6 +22,12 @@ export const formatBytes = (bytes: number) => {
 
 export const bytesToGiB = (bytes: number) => bytes / 1024 / 1024 / 1024;
 
+export const formatCPUPercent = (value: number | undefined, available: boolean) => {
+  if (!available || value == null || !Number.isFinite(value)) return '不可用';
+  if (value > 0 && value < 0.1) return '<0.1% CPU';
+  return `${value.toFixed(1)}% CPU`;
+};
+
 export const percent = (used: number, total: number) => {
   if (!total) return null;
   return Math.min(100, Math.max(0, (used / total) * 100));

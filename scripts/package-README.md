@@ -5,6 +5,12 @@ This package contains PalPanel with its web UI embedded in the backend, the nati
 the Wine runner resources, systemd units, and
 `palpanelctl`.
 
+The Linux archive is self-contained: neither a system .NET runtime nor ICU is
+required. PalCalc uses invariant globalization while preserving UTF-8 Chinese
+save data and the JSON API. If it does not start, inspect
+`logs/palcalc-bridge.log` in portable mode or run
+`journalctl -u palpanel-palcalc --no-pager` after a systemd installation.
+
 ## Portable mode
 
 ```bash
@@ -101,8 +107,22 @@ Server installation/update and community-server discovery proxies can be managed
 independently from System Settings > Network & proxy. The managed configuration is
 stored with the rest of PalPanel state under `data/secrets/network-proxy.json` in
 portable mode or `/var/lib/palpanel/secrets/network-proxy.json` under systemd.
-Docker/Wine receives proxy values through its environment; credentials are not
-embedded in Docker arguments or job messages.
+For Docker/Wine downloads, PalPanel starts a short-lived HTTP bridge bound only
+to host `127.0.0.1`. The bridge forwards to configured HTTP, HTTPS, SOCKS5, or
+SOCKS5H upstream proxies, including authenticated proxies. Transient SteamCMD
+containers use host networking and receive only the credential-free bridge URL,
+so a proxy that itself listens only on host loopback works without exposing its
+real URL or password in Docker arguments, container environment, or job logs.
+The bridge is closed when the task succeeds, fails, or is canceled.
+
+The proxy test reports host reachability and Docker-container reachability as
+separate stages. Pulling the Docker base image happens in the Docker daemon and
+does not use the PalPanel bridge; configure a Docker daemon proxy or registry
+mirror when that stage fails. SteamCMD, AppInfo, Workshop, and Steam login
+failures use the panel-managed download proxy after the runner image exists.
+
+Backup downloads are normal same-origin HTTP attachments streamed by the
+browser. The web page does not buffer the complete ZIP in JavaScript memory.
 
 ## Security defaults
 

@@ -127,7 +127,7 @@ build_linux() {
   printf '[palpanel] Publishing self-contained PalCalc bridge linux-%s\n' "$arch"
   # Local release packaging must remain deterministic when NuGet's advisory
   # endpoint is unavailable. GitHub CI explicitly enables the online audit.
-  DOTNET_CLI_UI_LANGUAGE=en dotnet publish "$root_dir/palcalc-bridge/PalCalc.Bridge.csproj" -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true "-p:NuGetAudit=$nuget_audit" -o "$staging_dir/palcalc-linux"
+  DOTNET_CLI_UI_LANGUAGE=en dotnet publish "$root_dir/palcalc-bridge/PalCalc.Bridge.csproj" -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:InvariantGlobalization=true "-p:NuGetAudit=$nuget_audit" -o "$staging_dir/palcalc-linux"
   cp "$staging_dir/palcalc-linux/palcalc-bridge" "$package_dir/bin/palcalc-bridge"
   chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli" "$package_dir/bin/palcalc-bridge"
 

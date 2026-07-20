@@ -405,6 +405,14 @@ export interface components {
       "scope": "install" | "community";
     };
     "NetworkProxyTestResult": {
+      "bridge_enabled"?: boolean;
+      "diagnostic"?: string;
+      "docker_latency_ms"?: number;
+      "docker_ok"?: boolean;
+      "failure_stage"?: string;
+      "host_latency_ms": number;
+      "host_network"?: boolean;
+      "host_ok": boolean;
       "http_status": number;
       "latency_ms": number;
       "message": string;

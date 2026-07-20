@@ -112,16 +112,5 @@ export const backupsApi = {
       { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 
-  download: (name: string) =>
-    handleRequest<unknown, Blob>(
-      () => apiClient.get(`/backups/${encodeURIComponent(name)}/download`, { responseType: 'blob', timeout: 0 }),
-      new Blob(),
-      {
-        map: (raw) => (raw instanceof Blob ? raw : new Blob([raw as BlobPart])),
-        quiet: true,
-        fallbackOnError: false,
-      },
-    ),
-
   downloadUrl: (name: string) => `${apiClient.defaults.baseURL}/backups/${encodeURIComponent(name)}/download`,
 };

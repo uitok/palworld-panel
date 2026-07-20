@@ -28,6 +28,7 @@ import (
 	"palpanel/internal/jobs"
 	"palpanel/internal/mods"
 	"palpanel/internal/monitor"
+	"palpanel/internal/networkproxy"
 	"palpanel/internal/paldefender"
 	"palpanel/internal/palrest"
 	"palpanel/internal/scheduler"
@@ -49,6 +50,9 @@ func run(args []string) error {
 func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) error {
 	if len(args) > 0 && args[0] == "admin" {
 		return runAdminWithIO(args[1:], input, output, errorOutput)
+	}
+	if len(args) > 0 && args[0] == "network-proxy-bridge" {
+		return runNetworkProxyBridge(args[1:], output, errorOutput)
 	}
 	fs := flag.NewFlagSet("palpanel", flag.ContinueOnError)
 	fs.SetOutput(errorOutput)
@@ -229,6 +233,56 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 		return fmt.Errorf("run api: %w", err)
 	}
 	log.Printf("shutdown complete")
+	return nil
+}
+
+func runNetworkProxyBridge(args []string, output, errorOutput io.Writer) error {
+	fs := flag.NewFlagSet("palpanel network-proxy-bridge", flag.ContinueOnError)
+	fs.SetOutput(errorOutput)
+	configPath := fs.String("config", "", "path to palpanel.env")
+	addressFile := fs.String("address-file", "", "private file used to publish the loopback bridge address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(*configPath) == "" || strings.TrimSpace(*addressFile) == "" {
+		return errors.New("network-proxy-bridge requires --config and --address-file")
+	}
+	values, err := appconfig.ParseEnvFile(*configPath)
+	if err != nil {
+		return fmt.Errorf("load config file: %w", err)
+	}
+	restore, err := appconfig.ApplyFileEnvironment(values)
+	if err != nil {
+		return fmt.Errorf("load config file: %w", err)
+	}
+	defer restore()
+	cfg, err := appconfig.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	rawProxy, err := networkproxy.New(cfg).InstallProxyURL()
+	if err != nil {
+		return err
+	}
+	if rawProxy == "" {
+		return errors.New("install proxy is not enabled")
+	}
+	bridge, err := networkproxy.StartBridge(rawProxy)
+	if err != nil {
+		return err
+	}
+	defer bridge.Close()
+	if err := os.MkdirAll(filepath.Dir(*addressFile), 0o700); err != nil {
+		return fmt.Errorf("create proxy bridge runtime directory: %w", err)
+	}
+	if err := os.WriteFile(*addressFile, []byte(bridge.Address()+"\n"), 0o600); err != nil {
+		return fmt.Errorf("publish proxy bridge address: %w", err)
+	}
+	defer os.Remove(*addressFile)
+	fmt.Fprintln(output, "network proxy bridge ready")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
 	return nil
 }
 

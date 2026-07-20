@@ -9,17 +9,6 @@ import { DataTable } from '../components/ui/DataTable';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { formatBytes } from '../utils/monitor';
 
-const saveBlob = (name: string, blob: Blob) => {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = name;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-};
-
 export const Backups: React.FC = () => {
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,19 +92,6 @@ export const Backups: React.FC = () => {
       const result = await backupsApi.verify(backup.name);
       setVerifyResults((prev) => ({ ...prev, [backup.name]: result }));
       setMessage(result.valid ? `校验通过：${backup.name}` : `校验失败：${result.errors.join(' / ') || backup.name}`);
-    } catch (actionError) {
-      setMessage(getErrorMessage(actionError));
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
-  const downloadBackup = async (backup: BackupInfo) => {
-    setPendingAction(`download:${backup.name}`);
-    try {
-      const blob = await backupsApi.download(backup.name);
-      saveBlob(backup.name, blob);
-      setMessage(`已开始下载：${backup.name}`);
     } catch (actionError) {
       setMessage(getErrorMessage(actionError));
     } finally {
@@ -360,7 +336,7 @@ export const Backups: React.FC = () => {
                 pendingAction={pendingAction}
                 verifyResult={verifyResults[backup.name]}
                 onVerify={() => verifyBackup(backup)}
-                onDownload={() => downloadBackup(backup)}
+                downloadUrl={backupsApi.downloadUrl(backup.name)}
                 onUpload={() => uploadBackup(backup)}
                 onRestore={() => restoreBackup(backup)}
                 onDelete={() => deleteBackup(backup)}
@@ -382,7 +358,7 @@ export const Backups: React.FC = () => {
                     name={backup.name}
                     pendingAction={pendingAction}
                     onVerify={() => verifyBackup(backup)}
-                    onDownload={() => downloadBackup(backup)}
+                    downloadUrl={backupsApi.downloadUrl(backup.name)}
                     onUpload={() => uploadBackup(backup)}
                     onRestore={() => restoreBackup(backup)}
                     onDelete={() => deleteBackup(backup)}
@@ -410,12 +386,12 @@ const BackupActions: React.FC<{
   name: string;
   pendingAction: string | null;
   onVerify: () => void;
-  onDownload: () => void;
+  downloadUrl: string;
   onUpload: () => void;
   onRestore: () => void;
   onDelete: () => void;
   webDAVEnabled: boolean;
-}> = ({ name, pendingAction, onVerify, onDownload, onUpload, onRestore, onDelete, webDAVEnabled }) => {
+}> = ({ name, pendingAction, onVerify, downloadUrl, onUpload, onRestore, onDelete, webDAVEnabled }) => {
   const busy = Boolean(pendingAction);
   const current = (prefix: string) => pendingAction === `${prefix}:${name}`;
   return (
@@ -423,9 +399,9 @@ const BackupActions: React.FC<{
       <button type="button" title="校验" onClick={onVerify} disabled={busy} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-40">
         <ShieldCheck size={14} />
       </button>
-      <button type="button" title="下载" onClick={onDownload} disabled={busy} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-40">
+      <a href={downloadUrl} download={name} title="下载" aria-disabled={busy} onClick={(event) => { if (busy) event.preventDefault(); }} className={`rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 ${busy ? 'pointer-events-none opacity-40' : ''}`}>
         <Download size={14} />
-      </button>
+      </a>
       <button type="button" title="上传到 WebDAV" onClick={onUpload} disabled={busy || !webDAVEnabled} className="rounded-lg border border-sky-200 p-2 text-sky-600 hover:bg-sky-50 disabled:opacity-40">
         {current('webdav') ? <RefreshCw size={14} className="animate-spin" /> : <CloudUpload size={14} />}
       </button>
@@ -444,12 +420,12 @@ const BackupCard: React.FC<{
   verifyResult?: BackupVerifyResult;
   pendingAction: string | null;
   onVerify: () => void;
-  onDownload: () => void;
+  downloadUrl: string;
   onUpload: () => void;
   onRestore: () => void;
   onDelete: () => void;
   webDAVEnabled: boolean;
-}> = ({ backup, verifyResult, pendingAction, onVerify, onDownload, onUpload, onRestore, onDelete, webDAVEnabled }) => (
+}> = ({ backup, verifyResult, pendingAction, onVerify, downloadUrl, onUpload, onRestore, onDelete, webDAVEnabled }) => (
   <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
       <p className="min-w-0 break-all text-sm font-bold text-slate-800">{backup.name}</p>
@@ -469,7 +445,7 @@ const BackupCard: React.FC<{
         name={backup.name}
         pendingAction={pendingAction}
         onVerify={onVerify}
-        onDownload={onDownload}
+        downloadUrl={downloadUrl}
         onUpload={onUpload}
         onRestore={onRestore}
         onDelete={onDelete}

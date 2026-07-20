@@ -1,6 +1,7 @@
 import { apiClient, handleRequest } from './client';
 import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
 import type { SaveIndexStatus, SaveSource } from '../types';
+import { SAVE_ARCHIVE_IMPORT_TIMEOUT_MS, SAVE_INDEX_OPERATION_TIMEOUT_MS } from './requestTimeouts';
 
 export interface SaveSourcesResponse {
   items: SaveSource[];
@@ -44,13 +45,24 @@ export const saveSourcesApi = {
     const body = new FormData();
     body.append('file', file);
     if (name.trim()) body.append('name', name.trim());
-    return handleRequest<unknown, SaveSource>(() => apiClient.post('/save-sources/import', body, { headers: { 'Content-Type': 'multipart/form-data' } }), mapSource({}), {
+    return handleRequest<unknown, SaveSource>(() => apiClient.post('/save-sources/import', body, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: SAVE_ARCHIVE_IMPORT_TIMEOUT_MS,
+    }), mapSource({}), {
       fallbackOnError: false,
       map: mapSource,
     });
   },
-  activate: (id: string) => handleRequest(() => apiClient.post(`/save-sources/${encodeURIComponent(id)}/activate`), {}, { fallbackOnError: false }),
-  rebuild: (id: string) => handleRequest(() => apiClient.post(`/save-sources/${encodeURIComponent(id)}/rebuild`), {}, { fallbackOnError: false }),
+  activate: (id: string) => handleRequest(
+    () => apiClient.post(`/save-sources/${encodeURIComponent(id)}/activate`, undefined, { timeout: SAVE_INDEX_OPERATION_TIMEOUT_MS }),
+    {},
+    { fallbackOnError: false },
+  ),
+  rebuild: (id: string) => handleRequest(
+    () => apiClient.post(`/save-sources/${encodeURIComponent(id)}/rebuild`, undefined, { timeout: SAVE_INDEX_OPERATION_TIMEOUT_MS }),
+    {},
+    { fallbackOnError: false },
+  ),
   rename: (id: string, name: string) => handleRequest<unknown, SaveSource>(() => apiClient.patch(`/save-sources/${encodeURIComponent(id)}`, { name }), mapSource({}), { fallbackOnError: false, map: mapSource }),
   remove: (id: string) => handleRequest(() => apiClient.delete(`/save-sources/${encodeURIComponent(id)}`), {}, { fallbackOnError: false }),
 };

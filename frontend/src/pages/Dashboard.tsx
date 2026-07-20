@@ -21,7 +21,7 @@ import { StatCard } from '../components/ui/StatCard';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import type { Job } from '../types';
-import { bytesToGiB, chartTooltipFormatter, toMonitorChartPoints } from '../utils/monitor';
+import { bytesToGiB, chartTooltipFormatter, formatCPUPercent, toMonitorChartPoints } from '../utils/monitor';
 
 const stoppedMetrics = {
   server_fps: 0,
@@ -72,6 +72,13 @@ export const Dashboard: React.FC = () => {
     placeholderData: (previous) => previous,
   });
 
+  const snapshotQuery = useQuery({
+    queryKey: ['dashboard-monitor-snapshot', refreshKey],
+    queryFn: monitorApi.snapshot,
+    refetchInterval: autoRefresh ? 5000 : false,
+    placeholderData: (previous) => previous,
+  });
+
   const logsQuery = useQuery({
     queryKey: ['dashboard-logs', 80, debouncedLogSearch, logLevel, status?.status, refreshKey],
     queryFn: () => serverApi.getLogs(80, debouncedLogSearch, logLevel),
@@ -111,14 +118,17 @@ export const Dashboard: React.FC = () => {
       ? getErrorMessage(statusQuery.error)
       : metricsQuery.error
         ? getErrorMessage(metricsQuery.error)
-        : logsQuery.error
-          ? getErrorMessage(logsQuery.error)
-          : null);
+        : snapshotQuery.error
+          ? getErrorMessage(snapshotQuery.error)
+          : logsQuery.error
+            ? getErrorMessage(logsQuery.error)
+            : null);
 
   const refreshDashboard = async () => {
     await Promise.all([
       statusQuery.refetch(),
       metricsQuery.refetch(),
+      snapshotQuery.refetch(),
       historyQuery.refetch(),
       logsQuery.refetch(),
       ...(canResetWorld ? [worldQuery.refetch()] : []),
@@ -194,14 +204,17 @@ export const Dashboard: React.FC = () => {
   };
 
   const latestChart = useMemo(() => chartData[chartData.length - 1], [chartData]);
+  const latestSample = snapshotQuery.data?.sample ?? historyQuery.data?.[historyQuery.data.length - 1];
   const hasMemoryPercent = chartData.some((point) => point.memoryPercent != null);
   const hasMemoryUsage = chartData.some((point) => point.memoryGiB != null);
-  const latestMemoryText =
-    latestChart?.memoryPercent != null
+  const latestMemoryText = !latestSample?.memory_available
+    ? '内存不可用'
+    : latestChart?.memoryPercent != null
       ? `${latestChart.memoryPercent.toFixed(1)}% 内存`
       : latestChart?.memoryGiB != null
         ? `${latestChart.memoryGiB.toFixed(1)} GB 内存`
-        : `内存 ${formatRAM(status?.memory_usage_bytes)}`;
+        : `内存 ${formatRAM(latestSample.memory_usage_bytes)}`;
+  const latestCPUText = formatCPUPercent(latestSample?.cpu_percent, latestSample?.cpu_available === true);
   const serverFacts = [
     { label: '游戏端口', value: status?.ports?.game || 8211, detail: `REST ${status?.ports?.rest || 8212}`, icon: <Bell size={16} />, tone: 'text-sky-700 bg-sky-50' },
     { label: '帕鲁总数', value: metrics?.total_pals || 0, detail: '来自存档与监控数据', icon: <Sword size={16} />, tone: 'text-blue-700 bg-blue-50' },
@@ -247,7 +260,7 @@ export const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="在线玩家" value={`${metrics?.current_players || 0} / ${metrics?.max_players || 32}`} icon={<Users size={16} />} trend="来自官方 REST / 监控采样" trendType="info" color="sky" />
         <StatCard title="服务器状态" value={status?.status === 'running' ? '运行中' : '已停止'} icon={<Activity size={16} />} trend={status?.setup_step || 'prerequisites'} trendType={status?.status === 'running' ? 'up' : 'down'} color={status?.status === 'running' ? 'emerald' : 'rose'} />
-        <StatCard title="系统占用" value={`${latestChart?.cpu ?? status?.cpu_percent?.toFixed(1) ?? 0}% CPU`} icon={<Cpu size={16} />} trend={latestMemoryText} trendType="neutral" color="blue" />
+        <StatCard title="系统占用" value={latestCPUText} icon={<Cpu size={16} />} trend={latestMemoryText} trendType="neutral" color="blue" />
         <StatCard title="世界运行时间" value={formatUptime(metrics?.uptime)} icon={<Clock size={16} />} trend={status?.pending_restart ? '配置等待重启' : '配置已生效'} trendType={status?.pending_restart ? 'down' : 'up'} color="emerald" />
       </div>
 
