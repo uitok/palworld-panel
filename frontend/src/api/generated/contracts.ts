@@ -650,6 +650,8 @@ export interface components {
     };
     "SteamWorkshopAuthRequest": {
       "account_name"?: string;
+      "password"?: string;
+      "steam_guard_code"?: string;
     };
     "SteamWorkshopAuthStatus": {
       "account_name"?: string;
@@ -658,6 +660,8 @@ export interface components {
       "logged_in": boolean;
       "login_in_progress": boolean;
       "message"?: string;
+      "password_configured": boolean;
+      "steam_guard_required": boolean;
       "steamcmd_installed": boolean;
       "supported": boolean;
       "verification_required": boolean;

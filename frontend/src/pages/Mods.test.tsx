@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     workshopAuthStatus: vi.fn(),
     startWorkshopAuth: vi.fn(),
     verifyWorkshopAuth: vi.fn(),
+    clearWorkshopAuth: vi.fn(),
     searchWorkshop: vi.fn(),
     getWorkshopItem: vi.fn(),
     translateWorkshop: vi.fn(),
@@ -78,15 +79,19 @@ describe('Mods Workshop store', () => {
     mocks.modsApi.workshopStatus.mockResolvedValue({ configured: true, key_source: 'environment', app_id: '1623730' });
     mocks.modsApi.workshopAuthStatus.mockResolvedValue({
       supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
-      logged_in: true, verification_required: false, account_name: 'steam_account',
+      logged_in: true, verification_required: false, password_configured: true, steam_guard_required: false, account_name: 'steam_account',
     });
     mocks.modsApi.startWorkshopAuth.mockResolvedValue({
       supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: true,
-      logged_in: false, verification_required: true, account_name: 'steam_account', message: 'SteamCMD opened',
+      logged_in: true, verification_required: false, password_configured: true, steam_guard_required: false, account_name: 'steam_account', message: 'configured',
     });
     mocks.modsApi.verifyWorkshopAuth.mockResolvedValue({
       supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
-      logged_in: true, verification_required: false, account_name: 'steam_account', last_verified_at: '2026-07-15T12:00:00Z',
+      logged_in: true, verification_required: false, password_configured: true, steam_guard_required: false, account_name: 'steam_account', last_verified_at: '2026-07-15T12:00:00Z',
+    });
+    mocks.modsApi.clearWorkshopAuth.mockResolvedValue({
+      supported: true, steamcmd_installed: true, credentials_secure: false, login_in_progress: false,
+      logged_in: false, verification_required: true, password_configured: false, steam_guard_required: false,
     });
     mocks.modsApi.searchWorkshop.mockResolvedValue({ items: [], total: 0, page_size: 24 });
     mocks.modsApi.getWorkshopItem.mockResolvedValue({
@@ -180,7 +185,7 @@ describe('Mods Workshop store', () => {
     });
   });
 
-  it('reuses a verified SteamCMD cache before loading Workshop', async () => {
+  it('loads Workshop while configured explicit credentials are ready for downloads', async () => {
     renderMods();
 
     await waitFor(() => expect(mocks.modsApi.workshopAuthStatus).toHaveBeenCalledTimes(1));
@@ -188,32 +193,52 @@ describe('Mods Workshop store', () => {
     expect(screen.queryByRole('dialog', { name: '登录 Steam 以使用 Workshop' })).not.toBeInTheDocument();
   });
 
-  it('does not load Workshop until SteamCMD login is explicitly verified', async () => {
+  it('loads Workshop without login and lets an administrator configure explicit credentials', async () => {
     mocks.authApi.status.mockResolvedValue({ initialized: true, authenticated: true, user: { name: 'admin', role: 'admin', permissions: ['read', 'mods:write', 'security:write'] } });
     mocks.authApi.me.mockResolvedValue({ name: 'admin', role: 'admin', permissions: ['read', 'mods:write', 'security:write'] });
     mocks.modsApi.workshopAuthStatus.mockResolvedValueOnce({
       supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
-      logged_in: false, verification_required: true,
-    }).mockResolvedValueOnce({
-      supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
-      logged_in: true, verification_required: false, account_name: 'steam_account', last_verified_at: '2026-07-15T12:00:00Z',
+      logged_in: false, verification_required: true, password_configured: false, steam_guard_required: false,
     });
-
     renderMods();
 
+    await waitFor(() => expect(mocks.modsApi.searchWorkshop).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: '配置 Steam 登录' }));
     const dialog = await screen.findByRole('dialog', { name: '登录 Steam 以使用 Workshop' });
-    expect(mocks.modsApi.searchWorkshop).not.toHaveBeenCalled();
-    expect(dialog.querySelector('input[type="password"]')).toBeNull();
+    expect(dialog.querySelector('input[type="password"]')).not.toBeNull();
 
     fireEvent.change(screen.getByLabelText('Steam 账户名'), { target: { value: 'steam_account' } });
-    fireEvent.click(screen.getByRole('button', { name: '打开 SteamCMD 登录窗口' }));
-    await waitFor(() => expect(mocks.modsApi.startWorkshopAuth).toHaveBeenCalledWith('steam_account'));
-    expect(mocks.modsApi.searchWorkshop).not.toHaveBeenCalled();
-
-    expect(screen.getByRole('button', { name: '我已完成，验证登录' })).toBeDisabled();
-    await waitFor(() => expect(mocks.modsApi.workshopAuthStatus).toHaveBeenCalledTimes(2), { timeout: 2_000 });
-    await waitFor(() => expect(mocks.modsApi.searchWorkshop).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText('Steam 密码'), { target: { value: 'fixture password' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存并验证登录' }));
+    await waitFor(() => expect(mocks.modsApi.startWorkshopAuth).toHaveBeenCalledWith({ accountName: 'steam_account', password: 'fixture password', steamGuardCode: '' }));
     expect(screen.queryByRole('dialog', { name: '登录 Steam 以使用 Workshop' })).not.toBeInTheDocument();
+  });
+
+  it('prompts for a transient Steam Guard code without clearing the entered password', async () => {
+    mocks.authApi.status.mockResolvedValue({ initialized: true, authenticated: true, user: { name: 'admin', role: 'admin', permissions: ['read', 'mods:write', 'security:write'] } });
+    mocks.authApi.me.mockResolvedValue({ name: 'admin', role: 'admin', permissions: ['read', 'mods:write', 'security:write'] });
+    mocks.modsApi.workshopAuthStatus.mockResolvedValue({
+      supported: true, steamcmd_installed: true, credentials_secure: false, login_in_progress: false,
+      logged_in: false, verification_required: true, password_configured: false, steam_guard_required: false,
+    });
+    mocks.modsApi.startWorkshopAuth
+      .mockRejectedValueOnce(new ApiError('Steam Guard verification code is required', 409, 'steam_guard_required'))
+      .mockResolvedValueOnce({
+        supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
+        logged_in: true, verification_required: false, password_configured: true, steam_guard_required: false, account_name: 'steam_account',
+      });
+
+    renderMods();
+    fireEvent.click(await screen.findByRole('button', { name: '配置 Steam 登录' }));
+    fireEvent.change(screen.getByLabelText('Steam 账户名'), { target: { value: 'steam_account' } });
+    fireEvent.change(screen.getByLabelText('Steam 密码'), { target: { value: 'fixture password' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存并验证登录' }));
+
+    expect(await screen.findByText('Steam 要求新的 Steam Guard 验证码，请输入后重新验证。')).toBeInTheDocument();
+    expect(screen.getByLabelText('Steam 密码')).toHaveValue('fixture password');
+    fireEvent.change(screen.getByLabelText('Steam Guard 验证码（需要时填写）'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存并验证登录' }));
+    await waitFor(() => expect(mocks.modsApi.startWorkshopAuth).toHaveBeenLastCalledWith({ accountName: 'steam_account', password: 'fixture password', steamGuardCode: '123456' }));
   });
 
   it('lets mods:write users use an already verified session without granting Steam login controls', async () => {
@@ -226,23 +251,22 @@ describe('Mods Workshop store', () => {
     expect(screen.queryByText(/本机管理员/)).not.toBeInTheDocument();
   });
 
-  it('requires a local security administrator to start or verify Steam login', async () => {
+  it('hides Steam credential controls from users without security permission', async () => {
     mocks.modsApi.workshopAuthStatus.mockResolvedValue({
       supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
-      logged_in: false, verification_required: true,
+      logged_in: false, verification_required: true, password_configured: false, steam_guard_required: false,
     });
 
     renderMods();
 
-    expect(await screen.findByText('Steam 登录需由具备安全管理权限的本机管理员在面板主机上完成。')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '打开 SteamCMD 登录窗口' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '我已完成，验证登录' })).toBeDisabled();
+    await waitFor(() => expect(mocks.modsApi.searchWorkshop).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: '配置 Steam 登录' })).not.toBeInTheDocument();
   });
 
   it('keeps GitHub and HTTPS imports available while blocking Workshop imports behind Steam login', async () => {
     mocks.modsApi.workshopAuthStatus.mockResolvedValue({
       supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false,
-      logged_in: false, verification_required: true,
+      logged_in: false, verification_required: true, password_configured: false, steam_guard_required: false,
     });
     mocks.modsApi.inspectImport.mockResolvedValue({
       id: 'inspection_github', source_type: 'github_release', source: 'https://github.com/example/mod/releases/latest',
@@ -250,7 +274,7 @@ describe('Mods Workshop store', () => {
     });
 
     renderMods();
-    fireEvent.click(await screen.findByRole('button', { name: '关闭 Steam 登录' }));
+    await waitFor(() => expect(mocks.modsApi.searchWorkshop).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: '导入 Mod' }));
     fireEvent.change(screen.getByLabelText('导入来源'), { target: { value: 'https://github.com/example/mod/releases/latest' } });
     fireEvent.click(screen.getByRole('button', { name: '检查' }));

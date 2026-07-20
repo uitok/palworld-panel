@@ -208,8 +208,6 @@ describe('PalDefender player center', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '导出玩家帕鲁' }));
     await waitFor(() => expect(mocks.gmApi.exportPals).toHaveBeenCalledWith('steam_1'));
-    fireEvent.change(screen.getByLabelText('导出帕鲁模板'), { target: { value: 'anubis.json' } });
-    fireEvent.click(screen.getByRole('button', { name: '载入导出文件' }));
     await waitFor(() => expect(mocks.gmApi.exportedPalTemplate).toHaveBeenCalledWith('steam_1', 'anubis.json'));
     expect(screen.getByLabelText('模板名称')).toHaveValue('anubis');
     expect(screen.getByLabelText('IV 生命')).toHaveValue(100);
@@ -226,6 +224,33 @@ describe('PalDefender player center', () => {
       PalSouls: expect.objectContaining({ CraftSpeed: 10 }),
       ExtraWorkSuitabilities: { Mining: 5 },
     })));
+  });
+
+  it('creates a real template file from the selected PalID and shows confirmation', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    fireEvent.change(screen.getByLabelText('帕鲁 ID'), { target: { value: 'Anubis' } });
+    fireEvent.click(screen.getByRole('button', { name: '新建模板文件' }));
+    await waitFor(() => expect(mocks.gmApi.putTemplate).toHaveBeenCalledWith(expect.stringMatching(/^pal_Anubis_\d+$/), { PalID: 'Anubis', Level: 1 }));
+    expect(await screen.findByText(/模板文件 .*\.json 已创建/)).toBeInTheDocument();
+    expect((screen.getByLabelText('模板名称') as HTMLInputElement).value).toMatch(/^pal_Anubis_\d+$/);
+  });
+
+  it('explains why a template file cannot be created without a PalID', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    fireEvent.click(screen.getByRole('button', { name: '新建模板文件' }));
+    expect(await screen.findByText(/新建模板前请先在上方选择帕鲁/)).toBeInTheDocument();
+    expect(mocks.gmApi.putTemplate).not.toHaveBeenCalled();
+  });
+
+  it('disables live PalDefender export for an offline player but keeps prior exports available', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'OfflineUser 离线' }));
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    expect(screen.getByRole('button', { name: '导出玩家帕鲁' })).toBeDisabled();
+    expect(screen.getByText(/玩家离线时 PalDefender 不会加载用于导出的帕鲁容器/)).toBeInTheDocument();
+    expect(screen.getByLabelText('导出帕鲁模板')).toBeEnabled();
   });
 
   it('imports a JSON Pal template and preserves supported fields outside the visual editor', async () => {

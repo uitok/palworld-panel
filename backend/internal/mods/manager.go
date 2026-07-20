@@ -263,6 +263,12 @@ func (m Manager) update(jobID, status string, progress int, message, errText str
 	}
 }
 
+func (m Manager) updateWithCode(jobID, status string, progress int, message, errText, errorCode string) {
+	if err := m.jobs.UpdateWithCode(jobID, status, progress, message, errText, errorCode); err != nil {
+		log.Printf("job %s update failed: %v", jobID, err)
+	}
+}
+
 func cleanFilename(name string) string {
 	name = filepath.Base(name)
 	if name == "." || name == string(os.PathSeparator) || strings.TrimSpace(name) == "" {

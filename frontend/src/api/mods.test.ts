@@ -144,6 +144,8 @@ describe('mods api mapping', () => {
       login_in_progress: false,
       logged_in: true,
       verification_required: false,
+      password_configured: true,
+      steam_guard_required: false,
       account_name: 'steam_account',
       last_verified_at: '2026-07-15T12:00:00Z',
       message: 'verified',
@@ -158,6 +160,8 @@ describe('mods api mapping', () => {
       login_in_progress: false,
       logged_in: true,
       verification_required: false,
+      password_configured: true,
+      steam_guard_required: false,
       account_name: 'steam_account',
       last_verified_at: '2026-07-15T12:00:00Z',
       message: 'verified',
@@ -166,7 +170,7 @@ describe('mods api mapping', () => {
     expect(status).not.toHaveProperty('guard_code');
   });
 
-  it('uses only the Steam account name for start and verification', async () => {
+  it('submits explicit Steam credentials without returning secrets in status', async () => {
     const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
       data: { ok: true, data: { supported: true, steamcmd_installed: true, logged_in: false } },
       status: 200,
@@ -177,12 +181,12 @@ describe('mods api mapping', () => {
     } as AxiosResponse);
 
     await modsApi.workshopAuthStatus();
-    await modsApi.startWorkshopAuth('  steam_account  ');
-    await modsApi.verifyWorkshopAuth('steam_account');
+    await modsApi.startWorkshopAuth({ accountName: '  steam_account  ', password: 'fixture password', steamGuardCode: ' 123456 ' });
+    await modsApi.verifyWorkshopAuth('steam_account', '654321');
 
     expect(get).toHaveBeenCalledWith('/mods/workshop/auth/status', { timeout: 60_000 });
-    expect(post).toHaveBeenNthCalledWith(1, '/mods/workshop/auth/start', { account_name: 'steam_account' }, { timeout: 60_000 });
-    expect(post).toHaveBeenNthCalledWith(2, '/mods/workshop/auth/verify', { account_name: 'steam_account' }, { timeout: 60_000 });
+    expect(post).toHaveBeenNthCalledWith(1, '/mods/workshop/auth/start', { account_name: 'steam_account', password: 'fixture password', steam_guard_code: '123456' }, { timeout: 60_000 });
+    expect(post).toHaveBeenNthCalledWith(2, '/mods/workshop/auth/verify', { account_name: 'steam_account', steam_guard_code: '654321' }, { timeout: 60_000 });
   });
 
   it('posts Workshop install requests with item_id and enable fields', async () => {

@@ -18,7 +18,9 @@ import (
 const maxSteamAuthRequestBytes = 4 << 10
 
 type workshopAuthRequest struct {
-	AccountName string `json:"account_name"`
+	AccountName    string `json:"account_name"`
+	Password       string `json:"password"`
+	SteamGuardCode string `json:"steam_guard_code"`
 }
 
 func (s Server) workshopAuthStatus(c *gin.Context) {
@@ -38,7 +40,11 @@ func (s Server) startWorkshopAuth(c *gin.Context) {
 	if !valid {
 		return
 	}
-	status, err := s.mods.StartWorkshopLogin(c.Request.Context(), request.AccountName)
+	status, err := s.mods.StartWorkshopLogin(c.Request.Context(), steamcmd.LoginRequest{
+		AccountName:    request.AccountName,
+		Password:       request.Password,
+		SteamGuardCode: request.SteamGuardCode,
+	})
 	if err != nil {
 		failSteamAuth(c, "start", err)
 		return
@@ -54,9 +60,21 @@ func (s Server) verifyWorkshopAuth(c *gin.Context) {
 	if !valid {
 		return
 	}
-	status, err := s.mods.VerifyWorkshopLogin(c.Request.Context(), request.AccountName)
+	status, err := s.mods.VerifyWorkshopLogin(c.Request.Context(), request.AccountName, request.SteamGuardCode)
 	if err != nil {
 		failSteamAuth(c, "verify", err)
+		return
+	}
+	ok(c, status)
+}
+
+func (s Server) clearWorkshopAuth(c *gin.Context) {
+	if !requireLoopbackSteamAuth(c) {
+		return
+	}
+	status, err := s.mods.ClearWorkshopLogin(c.Request.Context())
+	if err != nil {
+		failSteamAuth(c, "clear", err)
 		return
 	}
 	ok(c, status)
@@ -95,7 +113,7 @@ func decodeWorkshopAuthRequest(c *gin.Context) (workshopAuthRequest, bool) {
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil && !errors.Is(err, io.EOF) {
-		fail(c, http.StatusBadRequest, "invalid_steam_auth_request", "request must contain only an optional account_name string")
+		fail(c, http.StatusBadRequest, "invalid_steam_auth_request", "request may contain only account_name, password, and steam_guard_code strings")
 		return workshopAuthRequest{}, false
 	}
 	var trailing any
@@ -110,12 +128,14 @@ func failSteamAuth(c *gin.Context, operation string, err error) {
 	switch {
 	case errors.Is(err, steamcmd.ErrInvalidAccountName):
 		fail(c, http.StatusBadRequest, "invalid_steam_account", err.Error())
+	case errors.Is(err, steamcmd.ErrSteamGuardRequired):
+		fail(c, http.StatusConflict, "steam_guard_required", steamcmd.ErrSteamGuardRequired.Error())
+	case errors.Is(err, steamcmd.ErrInvalidCredentials):
+		fail(c, http.StatusUnauthorized, "invalid_steam_credentials", steamcmd.ErrInvalidCredentials.Error())
 	case errors.Is(err, mods.ErrSteamAccountRequired):
 		fail(c, http.StatusBadRequest, "steam_account_required", mods.ErrSteamAccountRequired.Error())
 	case errors.Is(err, steamcmd.ErrInteractiveLogin):
 		fail(c, http.StatusConflict, "steam_login_unsupported", err.Error())
-	case errors.Is(err, steamcmd.ErrLoginInProgress):
-		fail(c, http.StatusConflict, "steam_login_in_progress", steamcmd.ErrLoginInProgress.Error())
 	case errors.Is(err, context.Canceled):
 		fail(c, http.StatusRequestTimeout, "steam_login_cancelled", "Steam login operation was cancelled")
 	case errors.Is(err, context.DeadlineExceeded):

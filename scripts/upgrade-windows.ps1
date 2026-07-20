@@ -344,8 +344,15 @@ function Invoke-PalPanelStartupValidation {
       Stop-PalPanelManagedProcesses -InstallRoot $InstallRoot -TimeoutSeconds $ProcessStopTimeoutSeconds | Out-Null
       throw "upgraded Launcher did not complete startup validation within $StartupTimeoutSeconds seconds; logs retained in $TransactionRoot"
     }
-    if ($process.ExitCode -ne 0) {
-      throw "upgraded Launcher failed startup validation with exit code $($process.ExitCode); logs retained in $TransactionRoot"
+    # WaitForExit(timeout) can report completion before redirected output has
+    # drained and before Windows PowerShell refreshes ExitCode. Finish the
+    # wait and refresh explicitly so a successful launcher is not rolled back
+    # with an empty exit code.
+    $process.WaitForExit()
+    $process.Refresh()
+    $exitCode = $process.ExitCode
+    if ($exitCode -ne 0) {
+      throw "upgraded Launcher failed startup validation with exit code $exitCode; logs retained in $TransactionRoot"
     }
   } finally {
     if ($null -ne $process) {

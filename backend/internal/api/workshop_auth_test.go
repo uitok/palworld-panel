@@ -14,13 +14,13 @@ import (
 	"palpanel/internal/db"
 	"palpanel/internal/docker"
 	"palpanel/internal/mods"
+	"palpanel/internal/steamcmd"
 )
 
-func TestWorkshopAuthRejectsCredentialFieldsWithoutEchoingValues(t *testing.T) {
+func TestWorkshopAuthRejectsUnknownOrTrailingFieldsWithoutEchoingValues(t *testing.T) {
 	server, cleanup := newWorkshopAuthTestServer(t)
 	defer cleanup()
 	for _, body := range []string{
-		`{"account_name":"fixture_user","password":"never-store-this"}`,
 		`{"account_name":"fixture_user","guard_code":"123456"}`,
 		`{"account_name":"fixture_user"}{"account_name":"second_user"}`,
 	} {
@@ -54,7 +54,7 @@ func TestWorkshopAuthStatusWithoutAccountDoesNotProbeOrInstall(t *testing.T) {
 	}
 }
 
-func TestWorkshopSearchRequiresVerifiedSteamSession(t *testing.T) {
+func TestWorkshopSearchDoesNotRequireSteamCredentials(t *testing.T) {
 	server, cleanup := newWorkshopAuthTestServer(t)
 	defer cleanup()
 	gin.SetMode(gin.TestMode)
@@ -62,7 +62,7 @@ func TestWorkshopSearchRequiresVerifiedSteamSession(t *testing.T) {
 	router.GET("/api/mods/workshop/search", server.searchWorkshopMods)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/mods/workshop/search", nil))
-	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), `"code":"steam_login_required"`) {
+	if recorder.Code == http.StatusUnauthorized || strings.Contains(recorder.Body.String(), `"code":"steam_login_required"`) {
 		t.Fatalf("response = %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -130,6 +130,25 @@ func TestSteamAuthOperationalErrorIsStableAndRedacted(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), "private") || strings.Contains(recorder.Body.String(), "local path") {
 		t.Fatalf("response exposed operational detail: %s", recorder.Body.String())
+	}
+}
+
+func TestSteamAuthCredentialErrorsHaveStableCodes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, fixture := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{err: steamcmd.ErrSteamGuardRequired, status: http.StatusConflict, code: "steam_guard_required"},
+		{err: steamcmd.ErrInvalidCredentials, status: http.StatusUnauthorized, code: "invalid_steam_credentials"},
+	} {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		failSteamAuth(context, "verify", fixture.err)
+		if recorder.Code != fixture.status || !strings.Contains(recorder.Body.String(), `"code":"`+fixture.code+`"`) {
+			t.Fatalf("response = %d: %s", recorder.Code, recorder.Body.String())
+		}
 	}
 }
 

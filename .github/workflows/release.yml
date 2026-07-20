@@ -37,6 +37,8 @@ jobs:
           scripts/scan-secrets.sh
           git diff --check
       - name: Build release assets from tag
+        env:
+          PALPANEL_NUGET_AUDIT: "true"
         run: scripts/package.sh --version "$GITHUB_REF_NAME" --targets linux-amd64 --clean
       - name: Extract package for SBOM
         run: |

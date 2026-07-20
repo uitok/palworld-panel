@@ -31,24 +31,20 @@ func (m Manager) WorkshopAuthStatus(ctx context.Context) (steamcmd.LoginStatus, 
 	if err != nil {
 		return steamcmd.LoginStatus{}, fmt.Errorf("read Steam Workshop account: %w", err)
 	}
-	status := m.steamAuth.LoginStatus(accountName)
-	if accountName == "" || !status.Supported || !status.SteamCMDInstalled || status.LoggedIn || status.LoginInProgress {
-		return status, nil
-	}
-	status, err = m.steamAuth.VerifyLogin(ctx, accountName)
+	status, err := m.steamAuth.CredentialStatus(accountName)
 	if err != nil {
-		return status, fmt.Errorf("verify cached Steam Workshop session: %w", err)
+		return status, fmt.Errorf("read native Steam Workshop credentials: %w", err)
 	}
 	return status, nil
 }
 
-func (m Manager) StartWorkshopLogin(ctx context.Context, accountName string) (steamcmd.LoginStatus, error) {
+func (m Manager) StartWorkshopLogin(ctx context.Context, request steamcmd.LoginRequest) (steamcmd.LoginStatus, error) {
 	dockerAuth, err := m.usesDockerWorkshopAuth(ctx)
 	if err != nil {
 		return steamcmd.LoginStatus{}, err
 	}
 	if dockerAuth {
-		accountName, err = m.resolveWorkshopAccount(ctx, accountName)
+		accountName, err := m.resolveWorkshopAccount(ctx, request.AccountName)
 		if err != nil {
 			return steamcmd.LoginStatus{}, err
 		}
@@ -64,20 +60,17 @@ func (m Manager) StartWorkshopLogin(ctx context.Context, accountName string) (st
 		}
 		return status, fmt.Errorf("%w: on the Linux server run `palpanelctl steam-login %s`, complete password and Steam Guard prompts in SteamCMD, enter quit, then return here and verify", steamcmd.ErrInteractiveLogin, accountName)
 	}
-	accountName, err = m.resolveWorkshopAccount(ctx, accountName)
+	status, err := m.steamAuth.Authenticate(ctx, request)
 	if err != nil {
-		return steamcmd.LoginStatus{}, err
+		return status, err
 	}
-	if err := steamcmd.ValidateAccountName(accountName); err != nil {
-		return m.steamAuth.LoginStatus(accountName), err
+	if err := m.store.SetKV(ctx, workshopSteamAccountKey, status.AccountName); err != nil {
+		return status, fmt.Errorf("save Steam Workshop account: %w", err)
 	}
-	if err := m.store.SetKV(ctx, workshopSteamAccountKey, accountName); err != nil {
-		return m.steamAuth.LoginStatus(accountName), fmt.Errorf("save Steam Workshop account: %w", err)
-	}
-	return m.steamAuth.StartInteractiveLogin(ctx, accountName)
+	return status, nil
 }
 
-func (m Manager) VerifyWorkshopLogin(ctx context.Context, accountName string) (steamcmd.LoginStatus, error) {
+func (m Manager) VerifyWorkshopLogin(ctx context.Context, accountName, steamGuardCode string) (steamcmd.LoginStatus, error) {
 	dockerAuth, err := m.usesDockerWorkshopAuth(ctx)
 	if err != nil {
 		return steamcmd.LoginStatus{}, err
@@ -95,17 +88,41 @@ func (m Manager) VerifyWorkshopLogin(ctx context.Context, accountName string) (s
 		}
 		return m.dockerWorkshopAuthStatus(ctx, accountName, true)
 	}
-	accountName, err = m.resolveWorkshopAccount(ctx, accountName)
+	if strings.TrimSpace(accountName) == "" {
+		status, statusErr := m.steamAuth.CredentialStatus("")
+		if statusErr != nil {
+			return status, statusErr
+		}
+		accountName = status.AccountName
+		if strings.TrimSpace(accountName) == "" {
+			accountName, statusErr = m.resolveWorkshopAccount(ctx, "")
+			if statusErr != nil {
+				return status, statusErr
+			}
+		}
+	}
+	status, err := m.steamAuth.VerifyCredentials(ctx, accountName, steamGuardCode)
+	if err != nil {
+		return status, err
+	}
+	if err := m.store.SetKV(ctx, workshopSteamAccountKey, status.AccountName); err != nil {
+		return status, fmt.Errorf("save Steam Workshop account: %w", err)
+	}
+	return status, nil
+}
+
+func (m Manager) ClearWorkshopLogin(ctx context.Context) (steamcmd.LoginStatus, error) {
+	dockerAuth, err := m.usesDockerWorkshopAuth(ctx)
 	if err != nil {
 		return steamcmd.LoginStatus{}, err
 	}
-	if err := steamcmd.ValidateAccountName(accountName); err != nil {
-		return m.steamAuth.LoginStatus(accountName), err
+	if err := m.store.SetKV(ctx, workshopSteamAccountKey, ""); err != nil {
+		return steamcmd.LoginStatus{}, fmt.Errorf("clear Steam Workshop account: %w", err)
 	}
-	if err := m.store.SetKV(ctx, workshopSteamAccountKey, accountName); err != nil {
-		return m.steamAuth.LoginStatus(accountName), fmt.Errorf("save Steam Workshop account: %w", err)
+	if dockerAuth {
+		return m.dockerWorkshopAuthStatus(ctx, "", false)
 	}
-	return m.steamAuth.VerifyLogin(ctx, accountName)
+	return m.steamAuth.ClearCredentials(ctx)
 }
 
 func (m Manager) RequireWorkshopLogin(ctx context.Context) (steamcmd.LoginStatus, error) {
@@ -134,10 +151,7 @@ func (m Manager) RequireWorkshopLogin(ctx context.Context) (steamcmd.LoginStatus
 	if err != nil {
 		return steamcmd.LoginStatus{}, fmt.Errorf("read Steam Workshop account: %w", err)
 	}
-	if strings.TrimSpace(accountName) == "" {
-		return m.steamAuth.LoginStatus(""), steamcmd.ErrLoginRequired
-	}
-	return m.steamAuth.RequireLogin(ctx, accountName)
+	return m.steamAuth.RequireCredentials(ctx, accountName)
 }
 
 func (m Manager) usesDockerWorkshopAuth(ctx context.Context) (bool, error) {

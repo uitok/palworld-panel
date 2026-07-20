@@ -145,6 +145,7 @@ func (s Server) registerContentRoutes(api *gin.RouterGroup) {
 	api.GET("/mods/workshop/auth/status", s.workshopAuthStatus)
 	api.POST("/mods/workshop/auth/start", Require(PermSecurityWrite), s.startWorkshopAuth)
 	api.POST("/mods/workshop/auth/verify", Require(PermSecurityWrite), s.verifyWorkshopAuth)
+	api.DELETE("/mods/workshop/auth/credentials", Require(PermSecurityWrite), s.clearWorkshopAuth)
 	api.GET("/mods/workshop/search", s.searchWorkshopMods)
 	api.GET("/mods/workshop/:id", s.getWorkshopMod)
 	api.POST("/mods/workshop/:id/translate", Require(PermModsWrite), s.translateWorkshopMod)

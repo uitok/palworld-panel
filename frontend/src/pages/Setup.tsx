@@ -497,7 +497,7 @@ export const Setup: React.FC = () => {
   const criticalStatusMissing = !loading && (!host || !status);
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+    <div className="mx-auto flex min-w-0 w-full max-w-7xl flex-col gap-6 overflow-x-clip p-4 sm:p-6 lg:p-8">
       {needsWindowsSource && (
         <WindowsServerSourcePanel
           source={windowsServerSource}
@@ -688,8 +688,8 @@ const SetupHero: React.FC<{
   onPrimaryAction: () => void;
   onRefresh: () => void;
 }> = ({ action, platformText, message, activeJob, onPrimaryAction, onRefresh }) => (
-  <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+  <section className="min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
+    <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
       <div className="min-w-0">
         <h3 className="flex items-center gap-2 text-[18px] font-bold text-slate-900">
           <Wand2 size={20} className="text-sky-500" />
@@ -700,7 +700,7 @@ const SetupHero: React.FC<{
         </p>
         {action.disabledReason && <p className="mt-2 text-xs font-semibold text-amber-700">{action.disabledReason}</p>}
       </div>
-      <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-72">
+      <div className="grid w-full min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:w-72 xl:grid-cols-1">
         <button
           type="button"
           onClick={onPrimaryAction}

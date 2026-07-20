@@ -381,7 +381,7 @@ steam_login() {
       proxy_value="${proxy_value//:\/\/127.0.0.1:/:\/\/host.docker.internal:}"
       proxy_value="${proxy_value//:\/\/localhost:/:\/\/host.docker.internal:}"
       printf -v "$proxy_name" '%s' "$proxy_value"
-      export "$proxy_name"
+      export "${proxy_name?}"
       proxy_args+=("-e" "$proxy_name")
     fi
   done

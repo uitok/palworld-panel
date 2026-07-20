@@ -64,12 +64,15 @@ VPN/reverse-proxy entry point.
 
 ## Steam Workshop login
 
-Workshop search, details, translation, and downloads are shown only after the
-local SteamCMD login cache is verified. The PalPanel dialog accepts only the
-Steam account name and opens a separate local SteamCMD console. Enter the Steam
-password and any Steam Guard challenge only in that console; PalPanel never
-accepts them through the browser/API or stores them. Starting and verifying this
-flow requires an administrator using the panel from the same Windows host.
+Workshop search, details, and translation are available without Steam login.
+Before downloading a Workshop item, a local administrator configures the Steam
+account and password in PalPanel. The password is stored as plaintext in the
+ACL-restricted `data\secrets\steam-workshop-credentials.json` file; Steam Guard
+codes are used for one verification attempt and are never stored. Each download
+logs in and downloads in one SteamCMD process through a temporary private script.
+The script is deleted afterward, and stale scripts are cleaned before the next
+attempt. Credential operations remain restricted to the same Windows host and
+the `security:write` permission.
 
 GitHub, public HTTPS ZIP, local ZIP, and local Mod actions do not require this
 Steam login. PalDefender is also outside the Workshop gate.

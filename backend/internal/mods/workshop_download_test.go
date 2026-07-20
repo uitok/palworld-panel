@@ -17,7 +17,7 @@ type fakeNativeWorkshopDownloader struct {
 	downloadCalls int
 	ensureErr     error
 	downloadErr   error
-	download      func(appID, itemID, destination, accountName string) error
+	download      func(appID, itemID, destination string) error
 }
 
 func (f *fakeNativeWorkshopDownloader) Ensure(context.Context) error {
@@ -25,13 +25,13 @@ func (f *fakeNativeWorkshopDownloader) Ensure(context.Context) error {
 	return f.ensureErr
 }
 
-func (f *fakeNativeWorkshopDownloader) DownloadWorkshopTo(_ context.Context, appID, itemID, destination, accountName string) error {
+func (f *fakeNativeWorkshopDownloader) DownloadWorkshopTo(_ context.Context, appID, itemID, destination string) error {
 	f.downloadCalls++
 	if f.downloadErr != nil {
 		return f.downloadErr
 	}
 	if f.download != nil {
-		return f.download(appID, itemID, destination, accountName)
+		return f.download(appID, itemID, destination)
 	}
 	return nil
 }
@@ -44,12 +44,9 @@ func TestRunWorkshopImportUsesNativeSteamCMDForWindowsRuntime(t *testing.T) {
 	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "fixture_user"); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeNativeWorkshopDownloader{download: func(appID, itemID, destination, accountName string) error {
+	fake := &fakeNativeWorkshopDownloader{download: func(appID, itemID, destination string) error {
 		if appID != manager.cfg.WorkshopAppID || itemID != "123456789" {
 			t.Fatalf("native download IDs = %q, %q", appID, itemID)
-		}
-		if accountName != "fixture_user" {
-			t.Fatalf("native Steam account = %q", accountName)
 		}
 		item := filepath.Join(destination, itemID)
 		if err := os.MkdirAll(item, 0o755); err != nil {

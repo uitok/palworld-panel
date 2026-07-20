@@ -544,7 +544,20 @@ func (m Manager) runWorkshopImport(ctx context.Context, jobID, itemID string, en
 		return
 	}
 	if err := m.downloadWorkshopTo(ctx, jobID, itemID, downloadRoot); err != nil {
-		m.update(jobID, "failed", 50, "Workshop download failed", err.Error())
+		errorCode := ""
+		message := "Workshop download failed"
+		switch {
+		case errors.Is(err, steamcmd.ErrSteamGuardRequired):
+			errorCode = "steam_guard_required"
+			message = "Steam Guard verification is required"
+		case errors.Is(err, steamcmd.ErrInvalidCredentials):
+			errorCode = "invalid_steam_credentials"
+			message = "Saved Steam credentials were rejected"
+		case errors.Is(err, steamcmd.ErrLoginRequired):
+			errorCode = "steam_login_required"
+			message = "Steam credentials are required"
+		}
+		m.updateWithCode(jobID, "failed", 50, message, err.Error(), errorCode)
 		return
 	}
 	m.update(jobID, "running", 80, "validating and installing mod", "")

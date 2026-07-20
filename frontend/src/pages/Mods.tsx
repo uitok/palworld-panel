@@ -11,7 +11,6 @@ import {
   Info,
   Languages,
   LogIn,
-  MonitorUp,
   PackageCheck,
   Power,
   RefreshCw,
@@ -52,7 +51,11 @@ const sortOptions = [
   { id: 'updated', labelKey: 'mods.updated' as TranslationKey },
 ];
 
-const isSteamLoginRequired = (error: unknown) => error instanceof ApiError && error.code === 'steam_login_required';
+const isSteamLoginRequired = (error: unknown) => error instanceof ApiError && [
+  'steam_login_required',
+  'steam_guard_required',
+  'invalid_steam_credentials',
+].includes(error.code || '');
 
 const isWorkshopImportSource = (source: string) => {
   const value = source.trim();
@@ -121,12 +124,6 @@ export const Mods: React.FC = () => {
     try {
       const status = await modsApi.workshopAuthStatus();
       setWorkshopAuth(status);
-      if (!status.logged_in) {
-        setStoreItems([]);
-        setStoreNextCursor(undefined);
-        setStoreTotal(0);
-        setWorkshopLoginOpen(true);
-      }
       return status;
     } catch (error) {
       setWorkshopAuthError(getErrorMessage(error));
@@ -148,13 +145,11 @@ export const Mods: React.FC = () => {
           login_in_progress: false,
           logged_in: false,
           verification_required: true,
+          password_configured: false,
+          steam_guard_required: error instanceof ApiError && error.code === 'steam_guard_required',
           message: errorMessage,
         });
     setWorkshopAuthError(errorMessage);
-    setStoreItems([]);
-    setStoreNextCursor(undefined);
-    setStoreTotal(0);
-    setSelectedWorkshop(null);
     setWorkshopLoginOpen(true);
     return true;
   }, []);
@@ -195,12 +190,7 @@ export const Mods: React.FC = () => {
   const loadStore = useCallback(async (
     reset = true,
     overrides: { sort?: string } = {},
-    authenticated = workshopAuth?.logged_in === true,
   ) => {
-    if (!authenticated) {
-      setWorkshopLoginOpen(true);
-      return;
-    }
     setStoreLoading(true);
     setStoreError(null);
     try {
@@ -229,15 +219,14 @@ export const Mods: React.FC = () => {
     } finally {
       setStoreLoading(false);
     }
-  }, [handleWorkshopAuthFailure, storeNextCursor, storeQuery, storeSort, tagText, workshopAuth?.logged_in]);
+  }, [handleWorkshopAuthFailure, storeNextCursor, storeQuery, storeSort, tagText]);
 
   useEffect(() => {
     if (initialLoadRef.current) return;
     initialLoadRef.current = true;
     void loadInstalled();
-    void loadWorkshopAuthStatus().then((status) => {
-      if (status?.logged_in) void loadStore(true, {}, true);
-    });
+    void loadWorkshopAuthStatus();
+    void loadStore(true);
   }, [loadInstalled, loadStore, loadWorkshopAuthStatus]);
 
   useEffect(() => {
@@ -289,12 +278,23 @@ export const Mods: React.FC = () => {
     setActiveJob(job);
     const done = await tasksApi.waitForJob(job.id, setActiveJob);
     setMessage(done.status === 'success' ? '任务已完成，重启后生效' : done.error || '任务失败');
+    if (done.error_code && ['steam_login_required', 'steam_guard_required', 'invalid_steam_credentials'].includes(done.error_code)) {
+      setWorkshopAuth((current) => current ? {
+        ...current,
+        logged_in: false,
+        verification_required: true,
+        steam_guard_required: done.error_code === 'steam_guard_required',
+        message: done.error || done.message,
+      } : current);
+      setWorkshopAuthError(done.error || done.message || 'Steam 登录失败');
+      setWorkshopLoginOpen(true);
+    }
     await loadInstalled();
     return done;
   };
 
   const installWorkshop = async (itemID: string, enable: boolean) => {
-    if (!workshopAuth?.logged_in) {
+    if (!workshopAuth?.logged_in && !workshopAuth?.password_configured) {
       setWorkshopLoginOpen(true);
       return;
     }
@@ -329,7 +329,7 @@ export const Mods: React.FC = () => {
       await modsApi.delete(mod.id);
       setMessage('Mod 已删除，重启后生效');
       await loadInstalled();
-      if (workshopAuth?.logged_in && !storeError) {
+      if (!storeError) {
         await loadStore(true);
       }
     } catch (error) {
@@ -338,10 +338,6 @@ export const Mods: React.FC = () => {
   };
 
   const openWorkshopDetail = async (item: WorkshopItem) => {
-    if (!workshopAuth?.logged_in) {
-      setWorkshopLoginOpen(true);
-      return;
-    }
     setSelectedWorkshop(item);
     setTranslationError(null);
     setDetailLoading(true);
@@ -376,7 +372,6 @@ export const Mods: React.FC = () => {
     setWorkshopAuth(status);
     setWorkshopAuthError(null);
     setWorkshopLoginOpen(false);
-    await loadStore(true, {}, true);
   };
 
   const headers = [
@@ -428,27 +423,28 @@ export const Mods: React.FC = () => {
       {message && <div className="rounded-lg border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">{message}</div>}
       {activeJob && <JobProgress job={activeJob} />}
 
-      {activeTab === 'store' && workshopAuthLoading && (
-        <div className="py-12 text-center text-xs font-semibold text-slate-400">
-          <RefreshCw className="mr-2 inline animate-spin text-sky-500" size={14} />
-          {t('mods.verifyingSteam')}
-        </div>
-      )}
-
-      {activeTab === 'store' && !workshopAuthLoading && !workshopAuth?.logged_in && !workshopLoginOpen && (
-        <WorkshopAuthGate
-          status={workshopAuth}
-          error={workshopAuthError}
-          canAuthenticate={canAuthenticateSteam}
-          onLogin={() => setWorkshopLoginOpen(true)}
-          onRetry={() => void loadWorkshopAuthStatus().then((status) => {
-            if (status?.logged_in) void loadStore(true, {}, true);
-          })}
-        />
-      )}
-
-      {activeTab === 'store' && !workshopAuthLoading && workshopAuth?.logged_in && (
+      {activeTab === 'store' && (
         <section className="flex flex-col gap-4">
+          <div className={`flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${workshopAuth?.logged_in || workshopAuth?.password_configured ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-slate-800">
+                {workshopAuthLoading
+                  ? '正在读取 Steam 登录配置…'
+                  : workshopAuth?.logged_in || workshopAuth?.password_configured
+                    ? `Workshop 下载账号：${workshopAuth.account_name || '已配置'}`
+                    : '浏览无需登录，下载 Workshop Mod 前需要配置 Steam 凭据'}
+              </p>
+              {(workshopAuthError || workshopAuth?.message) && (
+                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-600">{localizeSteamAuthMessage(workshopAuthError || workshopAuth?.message)}</p>
+              )}
+            </div>
+            {canAuthenticateSteam && workshopAuth?.supported !== false && (
+              <button type="button" onClick={() => setWorkshopLoginOpen(true)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800">
+                <LogIn size={14} />
+                {workshopAuth?.password_configured ? '管理 Steam 凭据' : '配置 Steam 登录'}
+              </button>
+            )}
+          </div>
           <div className="rounded-lg border border-slate-100 bg-white p-4">
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_auto]">
               <div className="relative">
@@ -758,7 +754,7 @@ export const Mods: React.FC = () => {
 	  {importOpen && (
 		<ImportDialog
 		  onClose={() => setImportOpen(false)}
-		  workshopAuthenticated={workshopAuth?.logged_in === true}
+		  workshopAuthenticated={workshopAuth?.logged_in === true || workshopAuth?.password_configured === true}
 		  onWorkshopAuthRequired={() => {
 			setImportOpen(false);
 			setWorkshopLoginOpen(true);
@@ -766,7 +762,7 @@ export const Mods: React.FC = () => {
 		  onImport={async (job) => {
 			setImportOpen(false);
 			const done = await trackJob(job);
-			if (done.status === 'success' && workshopAuth?.logged_in && !storeError) await loadStore(true);
+			if (done.status === 'success' && !storeError) await loadStore(true);
 		  }}
 		/>
 	  )}
@@ -783,7 +779,7 @@ export const Mods: React.FC = () => {
           onInstallEnabled={() => installWorkshop(selectedWorkshop.id, true)}
         />
       )}
-      {workshopLoginOpen && !workshopAuth?.logged_in && (
+      {workshopLoginOpen && (
         <WorkshopLoginDialog
           status={workshopAuth}
           initialError={workshopAuthError}
@@ -863,55 +859,6 @@ const InstalledRuntimeComponents: React.FC<{
   );
 };
 
-const WorkshopAuthGate: React.FC<{
-  status: SteamWorkshopAuthStatus | null;
-  error: string | null;
-  canAuthenticate: boolean;
-  onLogin: () => void;
-  onRetry: () => void;
-}> = ({ status, error, canAuthenticate, onLogin, onRetry }) => {
-  const unsupported = status?.supported === false;
-  const steamCMDMissing = status?.supported === true && !status.steamcmd_installed;
-  const title = unsupported
-    ? '当前平台不支持 SteamCMD 登录'
-    : steamCMDMissing
-      ? '需要先安装 SteamCMD'
-      : error && !status
-        ? '无法检查 Steam 登录'
-        : '登录 Steam 后浏览 Workshop';
-  return (
-    <section className="flex min-h-[360px] flex-col items-center justify-center border-y border-slate-100 bg-white px-5 py-12 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-900 text-white">
-        <LogIn size={21} />
-      </div>
-      <h2 className="mt-4 text-base font-bold text-slate-900">{title}</h2>
-      <p className="mt-2 max-w-xl text-xs font-semibold leading-5 text-slate-500">
-        Workshop 搜索、详情和下载只会在验证本机 SteamCMD 登录缓存后加载。本地 Mod、GitHub、HTTPS ZIP、UE4SS 和 PalDefender 不受此门禁影响。
-      </p>
-      {(error || status?.message) && (
-        <div role="alert" className="mt-4 max-w-xl rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-left text-xs font-semibold leading-5 text-amber-800">
-          {localizeSteamAuthMessage(error || status?.message)}
-        </div>
-      )}
-      {!canAuthenticate && (
-        <p className="mt-4 text-xs font-semibold text-slate-500">Steam 登录需由具备安全管理权限的本机管理员完成。</p>
-      )}
-      <div className="mt-5 flex flex-wrap justify-center gap-2">
-        {!unsupported && !steamCMDMissing && status && canAuthenticate && (
-          <button type="button" onClick={onLogin} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800">
-            <LogIn size={14} />
-            登录 Steam
-          </button>
-        )}
-        <button type="button" onClick={onRetry} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
-          <RefreshCw size={14} />
-          重新检查
-        </button>
-      </div>
-    </section>
-  );
-};
-
 const localizeSteamAuthMessage = (message?: string | null) => {
   if (!message) return '';
   const linuxCommand = message.match(/`(palpanelctl steam-login [A-Za-z0-9_]+)`/)?.[1];
@@ -924,6 +871,21 @@ const localizeSteamAuthMessage = (message?: string | null) => {
   if (message.startsWith('SteamCMD cached credentials were verified successfully.')) {
     return 'SteamCMD 登录缓存验证成功。每次下载 Workshop Mod 前都会再次检查该会话。';
   }
+  if (message === 'Enter the Steam account name and password used for Workshop downloads.') {
+    return '请输入用于 Workshop 下载的 Steam 账户名和密码。';
+  }
+  if (message === 'Steam credentials are configured. Workshop downloads will log in explicitly before use.') {
+    return 'Steam 凭据已配置；每次 Workshop 下载都会显式登录，不再依赖登录缓存。';
+  }
+  if (message === 'Verify the saved Steam credentials before downloading Workshop Mods.') {
+    return '请验证已保存的 Steam 凭据后再下载 Workshop Mod。';
+  }
+  if (message === 'Steam Guard verification code is required') {
+    return 'Steam 要求新的 Steam Guard 验证码，请输入后重新验证。';
+  }
+  if (message === 'invalid Steam credentials') {
+    return 'Steam 拒绝了账号或密码，请重新输入。';
+  }
   if (linuxCommand && message.includes('Cached SteamCMD credentials are missing or expired.')) {
     return `SteamCMD 登录缓存不存在或已过期。请在 Linux 服务器终端执行 ${linuxCommand}，完成登录并输入 quit 后再验证。`;
   }
@@ -934,14 +896,14 @@ const localizeSteamAuthMessage = (message?: string | null) => {
     return '请输入本机 SteamCMD 会话使用的 Steam 账户名。';
   }
   if (message.startsWith('Steam login is required')) {
-    return '需要先打开 SteamCMD 登录窗口并验证本机登录缓存，才能下载 Workshop Mod。';
+    return '需要先配置 Steam 账号和密码，才能下载 Workshop Mod。';
   }
   if (message === 'Steam login operations are available only from the server host') {
     return 'Steam 登录操作只能在 PalPanel 所在的服务器主机上执行。';
   }
   if (message === 'Steam login operation was cancelled') return 'Steam 登录操作已取消。';
   if (message === 'Steam login verification timed out') return 'Steam 登录验证超时，请重新尝试。';
-  if (message === 'Steam login operation failed') return 'Steam 登录操作失败，请检查 SteamCMD 窗口。';
+  if (message === 'Steam login operation failed') return 'Steam 登录操作失败，请检查账号、密码、Steam Guard 或网络连接。';
   if (message === 'Complete login in the SteamCMD window, enter quit, then verify the session.') {
     return 'SteamCMD 登录窗口正在运行。完成密码和 Steam Guard 验证后，请输入 quit 并等待窗口关闭；面板会自动检测登录缓存。';
   }
@@ -966,11 +928,11 @@ const WorkshopLoginDialog: React.FC<{
   onVerified: (status: SteamWorkshopAuthStatus) => Promise<void>;
 }> = ({ status, initialError, canAuthenticate, onClose, onStatusChange, onVerified }) => {
   const [accountName, setAccountName] = useState(status?.account_name || '');
-  const [busy, setBusy] = useState<'start' | 'verify' | null>(null);
+  const [password, setPassword] = useState('');
+  const [steamGuardCode, setSteamGuardCode] = useState('');
+  const [busy, setBusy] = useState<'login' | 'verify' | 'clear' | null>(null);
   const [error, setError] = useState(localizeSteamAuthMessage(initialError));
   const [notice, setNotice] = useState(initialError ? '' : localizeSteamAuthMessage(status?.message));
-  const onStatusChangeRef = useRef(onStatusChange);
-  const onVerifiedRef = useRef(onVerified);
   const accountAvailable = Boolean(accountName.trim() || status?.account_name);
   const canUseSteamCMD = Boolean(status?.supported && status.steamcmd_installed && canAuthenticate);
   const linuxDockerLogin = [status?.message, initialError].some((value) => value?.includes('palpanelctl steam-login') || value?.includes('On Linux'));
@@ -979,55 +941,50 @@ const WorkshopLoginDialog: React.FC<{
     if (!accountName && status?.account_name) setAccountName(status.account_name);
   }, [accountName, status?.account_name]);
 
-  useEffect(() => {
-    onStatusChangeRef.current = onStatusChange;
-    onVerifiedRef.current = onVerified;
-  }, [onStatusChange, onVerified]);
-
-  useEffect(() => {
-    if (!status?.login_in_progress) return;
-    let disposed = false;
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await modsApi.workshopAuthStatus();
-        if (disposed) return;
-        onStatusChangeRef.current(next);
-        setNotice(localizeSteamAuthMessage(next.message));
-        if (next.logged_in) {
-          await onVerifiedRef.current(next);
-          return;
-        }
-        if (!next.login_in_progress) return;
-      } catch (pollError) {
-        if (!disposed) setError(getErrorMessage(pollError));
-      }
-      if (!disposed) timer = window.setTimeout(() => void poll(), 500);
-    };
-    timer = window.setTimeout(() => void poll(), 500);
-    return () => {
-      disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [status?.login_in_progress]);
-
   const startLogin = async () => {
     if (!accountAvailable) {
       setError('请输入 Steam 账户名。');
       return;
     }
-    setBusy('start');
+    if (!linuxDockerLogin && !password && !status?.password_configured) {
+      setError('请输入 Steam 密码。');
+      return;
+    }
+    setBusy('login');
     setError('');
     setNotice('');
     try {
-      const next = await modsApi.startWorkshopAuth(accountName.trim() || undefined);
+      const next = linuxDockerLogin
+        ? await modsApi.startWorkshopAuth({ accountName: accountName.trim(), password: '' })
+        : password
+          ? await modsApi.startWorkshopAuth({ accountName: accountName.trim(), password, steamGuardCode })
+          : await modsApi.verifyWorkshopAuth(accountName.trim(), steamGuardCode);
       onStatusChange(next);
       if (next.logged_in) {
+        setPassword('');
+        setSteamGuardCode('');
         await onVerified(next);
         return;
       }
-      setNotice(localizeSteamAuthMessage(next.message) || 'SteamCMD 登录窗口已打开。请在该窗口输入密码和 Steam Guard 验证码；登录成功后输入 quit，并等待窗口关闭。面板会自动检测登录缓存。');
+      setNotice(localizeSteamAuthMessage(next.message));
     } catch (startError) {
+      if (startError instanceof ApiError && startError.code === 'steam_guard_required') {
+        onStatusChange({
+          ...(status || {
+            supported: true,
+            steamcmd_installed: true,
+            credentials_secure: false,
+            login_in_progress: false,
+            logged_in: false,
+            verification_required: true,
+            password_configured: false,
+            steam_guard_required: true,
+          }),
+          steam_guard_required: true,
+          logged_in: false,
+          verification_required: true,
+        });
+      }
       setError(localizeSteamAuthMessage(getErrorMessage(startError)));
     } finally {
       setBusy(null);
@@ -1042,15 +999,33 @@ const WorkshopLoginDialog: React.FC<{
     setBusy('verify');
     setError('');
     try {
-      const next = await modsApi.verifyWorkshopAuth(accountName.trim() || undefined);
+      const next = await modsApi.verifyWorkshopAuth(accountName.trim() || undefined, steamGuardCode);
       onStatusChange(next);
       if (!next.logged_in) {
-        setError(localizeSteamAuthMessage(next.message) || '尚未检测到有效的 Steam 登录缓存，请完成 SteamCMD 登录后重试。');
+        setError(localizeSteamAuthMessage(next.message) || '尚未检测到有效的 Steam 登录缓存。');
         return;
       }
       await onVerified(next);
     } catch (verifyError) {
       setError(localizeSteamAuthMessage(getErrorMessage(verifyError)));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearLogin = async () => {
+    if (!window.confirm('删除 PalPanel 本机保存的 Steam 账号和密码？')) return;
+    setBusy('clear');
+    setError('');
+    try {
+      const next = await modsApi.clearWorkshopAuth();
+      setAccountName('');
+      setPassword('');
+      setSteamGuardCode('');
+      onStatusChange(next);
+      setNotice('已删除本机保存的 Steam 凭据。');
+    } catch (clearError) {
+      setError(localizeSteamAuthMessage(getErrorMessage(clearError)));
     } finally {
       setBusy(null);
     }
@@ -1064,7 +1039,7 @@ const WorkshopLoginDialog: React.FC<{
           <div className="min-w-0">
             <h2 id="steam-login-title" className="text-base font-bold text-slate-900">登录 Steam 以使用 Workshop</h2>
             <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
-              {linuxDockerLogin ? 'Linux/Docker 登录在服务器本地 SteamCMD 终端完成，验证通过后才会加载 Workshop。' : '登录在本机 SteamCMD 窗口完成，验证通过后才会加载 Workshop。'}
+              {linuxDockerLogin ? 'Linux/Docker 登录继续在服务器本地 SteamCMD 终端完成。' : 'Windows 会保存账号和密码，并在每次 Workshop 下载时显式登录。'}
             </p>
           </div>
           <button type="button" onClick={onClose} disabled={busy !== null} className="shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-40" aria-label="关闭 Steam 登录">
@@ -1076,7 +1051,9 @@ const WorkshopLoginDialog: React.FC<{
           <div className="flex items-start gap-3 border-b border-slate-100 pb-4">
             <ShieldCheck className="mt-0.5 shrink-0 text-emerald-600" size={17} />
             <p className="text-xs font-semibold leading-5 text-slate-600">
-              此页面只接收 Steam 账户名，不接收密码、Steam Guard 验证码或恢复码。{linuxDockerLogin ? '请按提示在 Linux 服务器终端执行 palpanelctl steam-login，敏感信息只输入该 SteamCMD 终端。' : '敏感信息只应输入 SteamCMD 窗口。'}
+              {linuxDockerLogin
+                ? '密码和 Steam Guard 验证码仍只输入服务器本地 SteamCMD 终端。'
+                : '安全提示：Steam 密码会以明文保存在 PalPanel 本机受限 secrets 文件中；Steam Guard 验证码仅用于本次验证，不会保存。'}
             </p>
           </div>
 
@@ -1091,50 +1068,62 @@ const WorkshopLoginDialog: React.FC<{
                   spellCheck={false}
                   value={accountName}
                   onChange={(event) => setAccountName(event.target.value)}
-                  disabled={busy !== null || status?.login_in_progress}
+                  disabled={busy !== null}
                   placeholder="不是个人资料昵称"
                   className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50"
                 />
               </label>
             </li>
+            {!linuxDockerLogin && (
             <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">2</span>
+              <div className="grid min-w-0 gap-3">
+                <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+                  Steam 密码
+                  <input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy !== null} placeholder={status?.password_configured ? '已保存；留空则使用已保存密码' : '输入 Steam 密码'} className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
+                </label>
+                <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+                  Steam Guard 验证码（需要时填写）
+                  <input type="text" inputMode="numeric" autoComplete="one-time-code" value={steamGuardCode} onChange={(event) => setSteamGuardCode(event.target.value)} disabled={busy !== null} placeholder={status?.steam_guard_required ? 'Steam 当前要求验证码' : '可留空'} className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
+                </label>
+              </div>
+            </li>
+            )}
+            <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">{linuxDockerLogin ? '2' : '3'}</span>
               <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-700">{linuxDockerLogin ? '生成服务器终端登录命令' : '在本机 SteamCMD 中完成登录'}</p>
+                <p className="text-xs font-bold text-slate-700">{linuxDockerLogin ? '生成终端命令并验证缓存' : '保存并验证显式登录'}</p>
                 <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
                   {linuxDockerLogin
-                    ? '点击后会保存账户名并显示 palpanelctl steam-login 命令。请在 Linux 服务器终端执行该命令，只在 SteamCMD 中输入密码和 Steam Guard 验证码，成功后输入 quit。'
-                    : '点击后会打开带输入输出提示的独立窗口。请只在该窗口输入密码和 Steam Guard 验证码；登录成功后输入 quit 退出。'}
+                    ? '终端中的 SteamCMD 登录成功并输入 quit 后，回到此处手动验证缓存。下载 Workshop Mod 前还会再次校验。'
+                    : '验证成功后保存账号和密码；后续下载会在同一 SteamCMD 命令中显式登录并下载。'}
                 </p>
                 <button
                   type="button"
                   onClick={() => void startLogin()}
-                  disabled={busy !== null || status?.login_in_progress || !canUseSteamCMD || !accountAvailable}
+                  disabled={busy !== null || !canUseSteamCMD || !accountAvailable}
                   className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-40"
                 >
-                  {busy === 'start' ? <RefreshCw size={14} className="animate-spin" /> : <MonitorUp size={14} />}
-                  {status?.login_in_progress ? 'SteamCMD 登录窗口运行中' : linuxDockerLogin ? '保存账号并显示登录命令' : '打开 SteamCMD 登录窗口'}
+                  {busy === 'login' ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                  {linuxDockerLogin ? '保存账号并显示登录命令' : status?.password_configured && !password ? '使用已保存密码验证' : '保存并验证登录'}
                 </button>
-              </div>
-            </li>
-            <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">3</span>
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-700">验证登录缓存</p>
-                <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">
-                  {linuxDockerLogin
-                    ? '终端中的 SteamCMD 登录成功并输入 quit 后，回到此处手动验证缓存。下载 Workshop Mod 前还会再次校验。'
-                    : 'SteamCMD 显示登录成功后输入 quit，等待窗口关闭。面板会自动验证；也可以在自动检测结束后手动重试。'}
-                </p>
+                {linuxDockerLogin && (
                 <button
                   type="button"
                   onClick={() => void verifyLogin()}
-                  disabled={busy !== null || status?.login_in_progress || !canUseSteamCMD || !accountAvailable}
+                  disabled={busy !== null || !canUseSteamCMD || !accountAvailable}
                   className="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
                 >
                   {busy === 'verify' ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                  我已完成，验证登录
+                  我已完成终端登录，验证缓存
                 </button>
+                )}
+                {!linuxDockerLogin && status?.password_configured && (
+                  <button type="button" onClick={() => void clearLogin()} disabled={busy !== null} className="ml-2 mt-3 inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-40">
+                    {busy === 'clear' ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    删除已保存凭据
+                  </button>
+                )}
               </div>
             </li>
           </ol>
@@ -1177,7 +1166,7 @@ const ImportDialog: React.FC<{
 			return;
 		}
 		if (!file && isWorkshopImportSource(source) && !workshopAuthenticated) {
-			setError('Workshop 导入需要先验证 Steam 登录。');
+			setError('Workshop 导入需要先配置 Steam 登录凭据。');
 			onWorkshopAuthRequired();
 			return;
 		}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Download, ExternalLink, FileJson, LoaderCircle, RefreshCw, Save, Search, Send, Sparkles, Sword, Trash2, Upload, X } from 'lucide-react';
 import { palDefenderGMApi } from '../../api/paldefenderGM';
@@ -10,6 +10,7 @@ type ActionRunner = (key: string, action: () => Promise<unknown>, success: strin
 export const PalWorkspace: React.FC<{
   identifier: string;
   playerName: string;
+  online: boolean;
   canWrite: boolean;
   canManageTemplates: boolean;
   available: boolean;
@@ -20,7 +21,7 @@ export const PalWorkspace: React.FC<{
   passiveCatalog: PalDefenderPalCatalogEntry[];
   onRun: ActionRunner;
   onRelease: (pal: Pal) => Promise<boolean>;
-}> = ({ identifier, playerName, canWrite, canManageTemplates, available, busy, pending, savePals, palCatalog, passiveCatalog, onRun, onRelease }) => {
+}> = ({ identifier, playerName, online, canWrite, canManageTemplates, available, busy, pending, savePals, palCatalog, passiveCatalog, onRun, onRelease }) => {
   const queryClient = useQueryClient();
   const [palID, setPalID] = useState('');
   const [palLevel, setPalLevel] = useState('1');
@@ -34,6 +35,12 @@ export const PalWorkspace: React.FC<{
   const [passiveSearch, setPassiveSearch] = useState('');
   const [releaseTarget, setReleaseTarget] = useState<Pal | null>(null);
   const [releaseConfirmation, setReleaseConfirmation] = useState('');
+  const editorSectionRef = useRef<HTMLElement>(null);
+
+  const showEditor = () => requestAnimationFrame(() => {
+    const section = editorSectionRef.current;
+    if (section && typeof section.scrollIntoView === 'function') section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 
   const filteredPalCatalog = palCatalog.filter((pal) => {
     const needle = palSearch.trim().toLowerCase();
@@ -83,8 +90,25 @@ export const PalWorkspace: React.FC<{
   const exportPals = async () => {
     await onRun('export-pals', async () => {
       await palDefenderGMApi.exportPals(identifier);
-      await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'exported-templates', identifier] });
-    }, `已导出 ${playerName} 的帕鲁；请选择导出文件继续编辑`);
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const exported = await palDefenderGMApi.exportedPalTemplates(identifier);
+        queryClient.setQueryData(['paldefender-gm', 'exported-templates', identifier], exported);
+        const latest = [...exported.templates].sort((left, right) => right.modified_at.localeCompare(left.modified_at))[0];
+        if (latest) {
+          setSelectedExport(latest.name);
+          const template = await palDefenderGMApi.exportedPalTemplate(identifier, latest.name);
+          const defaultName = latest.name.replace(/\.json$/i, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64);
+          setTemplateBase(template);
+          setEditor(editorFromTemplate(defaultName || 'exported_pal', template));
+          setTemplateImportError('');
+          setTemplateImportMessage(`已导出玩家帕鲁并自动载入 ${latest.name}；可直接编辑或另存模板`);
+          showEditor();
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Error('PalDefender 已接受导出命令，但 5 秒内没有生成模板文件。请确认玩家拥有帕鲁，并检查 PalDefender/Pals/Exported 目录。');
+    }, `已导出 ${playerName} 的帕鲁并载入模板编辑器`);
   };
 
   const loadManagedTemplate = async () => {
@@ -124,11 +148,35 @@ export const PalWorkspace: React.FC<{
     }
   };
 
-  const resetTemplateEditor = () => {
-    setTemplateBase(null);
-    setEditor(emptyTemplateEditor());
+  const createTemplate = async () => {
     setTemplateImportMessage('');
     setTemplateImportError('');
+    showEditor();
+    if (!available) {
+      setTemplateImportError('PalDefender 当前不可用，无法创建模板文件');
+      return;
+    }
+    if (!canManageTemplates) {
+      setTemplateImportError('当前管理员缺少 security:write 权限，无法创建模板文件');
+      return;
+    }
+    const templatePalID = editor.palID.trim() || palID.trim();
+    if (!templatePalID) {
+      setTemplateImportError('新建模板前请先在上方选择帕鲁，或在编辑器中填写 PalID');
+      return;
+    }
+    const safePalID = templatePalID.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+/, '').slice(0, 36) || 'pal';
+    const name = `pal_${safePalID}_${Date.now()}`.slice(0, 64);
+    const template: PalDefenderPalTemplate = { PalID: templatePalID, Level: 1 };
+    await onRun('create-template', async () => {
+      const result = await palDefenderGMApi.putTemplate(name, template);
+      const savedName = result.template?.name || `${name}.json`;
+      setTemplateBase(template);
+      setEditor(editorFromTemplate(savedName, template));
+      setSelectedTemplate(savedName);
+      setTemplateImportMessage(`模板文件 ${savedName} 已创建；可继续编辑并点击“保存模板”更新文件`);
+      await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'templates'] });
+    }, `模板 ${name}.json 已创建`);
   };
 
   const saveTemplate = async () => {
@@ -195,17 +243,18 @@ export const PalWorkspace: React.FC<{
           <div className="mt-4 flex flex-wrap gap-2">
             <button type="button" onClick={() => void giveTemplate()} disabled={disabled || !selectedTemplate} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'give-template' ? <LoaderCircle size={14} className="animate-spin" /> : <Upload size={14} />}发放模板</button>
             <button type="button" onClick={() => void loadManagedTemplate()} disabled={!selectedTemplate} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-40"><FileJson size={14} />编辑模板</button>
-            <button type="button" onClick={() => void exportPals()} disabled={!canWrite || busy || !identifier} className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs font-bold text-sky-700 disabled:opacity-40">{pending === 'export-pals' ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}导出玩家帕鲁</button>
+            <button type="button" onClick={() => void exportPals()} disabled={!canWrite || busy || !identifier || !online} title={online ? '通过 PalDefender 导出玩家当前帕鲁' : 'PalDefender /exportpals 需要玩家在线并完成角色加载'} className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs font-bold text-sky-700 disabled:opacity-40">{pending === 'export-pals' ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}导出玩家帕鲁</button>
             <button type="button" onClick={() => void loadExportedTemplate()} disabled={!selectedExport} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-40"><RefreshCw size={14} />载入导出文件</button>
           </div>
+          {!online && <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-5 text-amber-800">玩家离线时 PalDefender 不会加载用于导出的帕鲁容器。请让玩家进入服务器并完成角色加载后再导出；以前已经导出的文件仍可在上方选择和编辑。</p>}
         </section>
       </div>
 
-      <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <section ref={editorSectionRef} className="scroll-mt-6 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><Save size={16} className="text-emerald-500" />PalTemplate 属性编辑器</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">可直接发放当前配置；持久保存模板需要 security:write 权限，且不会覆盖玩家已有帕鲁。</p></div><a href="https://paldeck.cc/creator" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600">打开模板生成器 <ExternalLink size={12} /></a></div>
         <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-sky-100 bg-sky-50/50 p-3">
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-sky-600 px-3 py-2.5 text-xs font-bold text-white"><Upload size={14} />导入 JSON 模板<input aria-label="导入帕鲁模板文件" type="file" accept=".json,application/json" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; void importTemplateFile(file); event.target.value = ''; }} /></label>
-          <button type="button" onClick={resetTemplateEditor} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600">新建空白模板</button>
+          <button type="button" onClick={() => void createTemplate()} disabled={busy} title="立即创建一个最小可用的 PalTemplate JSON 文件" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600 disabled:opacity-40">{pending === 'create-template' ? <LoaderCircle size={14} className="animate-spin" /> : <FileJson size={14} />}新建模板文件</button>
           <span className="text-[10px] font-semibold text-slate-400">推荐：</span>
           <a href="https://paldeck.cc/creator" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-700">Paldeck 模板生成器 <ExternalLink size={11} /></a>
           <a href="https://paldeck.cc/passives" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700">词条表 <ExternalLink size={11} /></a>

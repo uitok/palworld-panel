@@ -62,6 +62,23 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
           paths: { palworld_settings: '/data/PalWorldSettings.ini' },
         };
         break;
+      case '/api/server/prerequisites':
+        data = [{ id: 'windows', label: 'Windows host', ok: true, required: true }, { id: 'steamcmd', label: 'SteamCMD', ok: true, required: false }];
+        break;
+      case '/api/server/runtime':
+        data = { mode: 'windows_steamcmd' };
+        break;
+      case '/api/server/host':
+        data = {
+          os: 'windows', arch: 'amd64', supported: true, systemd: false, recommended_runtime: 'windows_steamcmd',
+          docker: { cli_installed: false, daemon_reachable: false },
+          sudo: { is_root: false, sudo_installed: false, passwordless: false, can_elevate: false, needs_password: false },
+          current_user_in_docker_group: false, warnings: [],
+        };
+        break;
+      case '/api/server/startup':
+        data = { startup: { port: 8211, players: 32, public_lobby: false, public_ip: '', public_port: 8211, log_format: 'text', use_perf_threads: true, no_async_loading_thread: true, use_multithread_for_ds: true, number_of_worker_threads_server: 0, workshop_dir: '', no_mods: false }, args: [], issues: [] };
+        break;
       case '/api/server/version':
         data = { installed: true, current_build_id: '100', latest_build_id: '100', update_available: false, compatibility_warnings: [] };
         break;
@@ -105,7 +122,7 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
         data = [];
         break;
       case '/api/mods/workshop/auth/status':
-        data = { supported: true, steamcmd_installed: true, credentials_secure: true, login_in_progress: false, logged_in: false, verification_required: true, message: 'Enter the Steam account name used for the local SteamCMD session.' };
+        data = { supported: true, steamcmd_installed: true, credentials_secure: false, login_in_progress: false, logged_in: false, verification_required: true, password_configured: false, steam_guard_required: false, message: 'Enter the Steam account name and password used for Workshop downloads.' };
         break;
     }
     if (!authenticated && path !== '/api/auth/status' && path !== '/api/auth/login') {
@@ -160,10 +177,12 @@ test('pages remain renderable while the backend temporarily returns 502', async 
   expect(pageErrors).toEqual([]);
 });
 
-test('Workshop login dialog uses the full viewport instead of the transformed page container', async ({ page }) => {
+test('Workshop credential dialog uses the full viewport instead of the transformed page container', async ({ page }) => {
   await installFakeBackend(page);
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/mods');
+
+  await page.getByRole('button', { name: '配置 Steam 登录' }).click();
 
   const dialog = page.getByRole('dialog', { name: '登录 Steam 以使用 Workshop' });
   await expect(dialog).toBeVisible();
@@ -174,8 +193,8 @@ test('Workshop login dialog uses the full viewport instead of the transformed pa
   expect(box?.width).toBe(1280);
   expect(box?.height).toBe(720);
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
-  await expect(dialog.getByText('请输入本机 SteamCMD 会话使用的 Steam 账户名。')).toBeVisible();
-  await expect(dialog.getByText('Enter the Steam account name used for the local SteamCMD session.')).toHaveCount(0);
+  await expect(dialog.getByText('请输入用于 Workshop 下载的 Steam 账户名和密码。')).toBeVisible();
+  await expect(dialog.getByLabel('Steam 密码')).toBeVisible();
 });
 
 test('renders task and schedule data from the API contract', async ({ page }) => {
@@ -219,6 +238,32 @@ test('mobile navigation stays in view and closes from the backdrop', async ({ pa
 
   await page.mouse.click(370, 400);
   await expect(drawer).toHaveCount(0);
+});
+
+test('setup wizard stays inside a medium-width viewport', async ({ page }) => {
+  await installFakeBackend(page);
+  for (const width of [757, 1024, 1100]) {
+    await page.setViewportSize({ width, height: 760 });
+    await page.goto('/setup');
+    await expect(page.getByRole('heading', { name: '一键开服' })).toBeVisible();
+    expect(await page.evaluate(() => ({ document: document.documentElement.scrollWidth, body: document.body.scrollWidth, viewport: window.innerWidth }))).toEqual({ document: width, body: width, viewport: width });
+    const hero = page.getByRole('heading', { name: '一键开服' }).locator('xpath=ancestor::section[1]');
+    const box = await hero.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    for (const button of await hero.getByRole('button').all()) {
+      const buttonBox = await button.boundingBox();
+      expect(buttonBox).not.toBeNull();
+      expect(buttonBox!.x).toBeGreaterThanOrEqual(0);
+      expect(buttonBox!.x + buttonBox!.width).toBeLessThanOrEqual(width);
+    }
+    if (width < 1280) {
+      const headingBox = await page.getByRole('heading', { name: '一键开服' }).boundingBox();
+      const primaryBox = await hero.getByRole('button').first().boundingBox();
+      expect(primaryBox!.y).toBeGreaterThan(headingBox!.y + headingBox!.height);
+    }
+  }
 });
 
 test('community server discovery remains usable on a mobile viewport with stale data', async ({ page }) => {

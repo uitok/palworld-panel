@@ -213,30 +213,24 @@ developer or self-hosted run.
   `/gm` still requires a running server, confirmed dependency load, and an authorized test
   player before destructive player operations can be tested manually.
 
-## Steam Workshop login gate
+## Steam Workshop credentials
 
-Workshop search, details, translation, and every Workshop download path stay hidden or
-blocked until PalPanel verifies a reusable local SteamCMD login cache. The login dialog
-accepts only the Steam account name. PalPanel then opens a separate SteamCMD console on the
-same Windows desktop; enter the Steam password and any Steam Guard challenge only in that
-console. Neither value is accepted by the browser/API, placed in environment variables, or
-persisted by PalPanel. PalPanel stores only the validated account name, never reads
-SteamCMD's credential configuration, and restricts the SteamCMD `config` directory ACL to
-the current Windows account, SYSTEM, and Administrators.
+Workshop search, details, and translation are available without Steam authentication. A
+Workshop download requires a local administrator to configure a Steam account and password
+through the panel. PalPanel verifies them with an explicit SteamCMD login and stores them in
+the ACL-restricted `data\secrets\steam-workshop-credentials.json` file. This is an explicit
+security tradeoff: the password is stored as local plaintext. Steam Guard codes are accepted
+only for one verification attempt and are never persisted.
 
-Starting or verifying the login requires the admin-only `security:write` permission and a
-real loopback TCP client; forwarded client-IP headers do not satisfy this restriction. A
-backend restart reloads the selected account name and probes the existing cache with
-non-interactive password prompting disabled. If verification fails or expires, return to
-the login dialog and complete the local SteamCMD flow again.
+Each download creates a private temporary SteamCMD runscript containing the login and
+download commands, invokes SteamCMD with only the script path in its process arguments, and
+deletes the script afterward. Stale scripts from an interrupted process are removed before
+the next attempt. Starting, verifying, or clearing credentials requires `security:write`
+and a real loopback TCP client; forwarded client-IP headers do not satisfy this restriction.
 
-This gate applies only to Steam Workshop. GitHub, public HTTPS ZIP, local ZIP, and local Mod
-scan/action flows remain available without a Steam login. PalDefender is also an explicit
-exception; installing it always checks and installs the pinned UE4SS dependency first.
-
-Do not copy or publish `runtime\steamcmd\config`, `runtime\steamcmd\userdata`, SteamCMD
-logs, or Workshop staging directories. The repository's development runtime is ignored by
-Git, but evidence and support bundles still need a manual redaction review before sharing.
+Do not copy or publish `data\secrets`, SteamCMD logs, or Workshop staging directories. The
+repository's development runtime is ignored by Git, but evidence and support bundles still
+need a manual redaction review before sharing.
 
 ## GM protocol and live-player validation
 

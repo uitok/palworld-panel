@@ -98,6 +98,19 @@ describe('api client response handling', () => {
         { quiet: true, fallbackOnError: false },
       ),
     ).rejects.toMatchObject({ status: 401, code: 'steam_login_required', message: 'Steam cache expired' });
+
+    await expect(
+      handleRequest(
+        () => Promise.reject({
+          response: {
+            status: 401,
+            data: { ok: false, error: { code: 'invalid_steam_credentials', message: 'invalid Steam credentials' } },
+          },
+        }),
+        {},
+        { quiet: true, fallbackOnError: false },
+      ),
+    ).rejects.toMatchObject({ status: 401, code: 'invalid_steam_credentials', message: 'invalid Steam credentials' });
     expect(listener).not.toHaveBeenCalled();
 
     window.removeEventListener('palpanel:auth-error', listener);

@@ -67,6 +67,8 @@ jobs:
           sed 's|ExecStart=/opt/palpanel/current/bin/palcalc-bridge.*|ExecStart=/bin/true|' scripts/systemd/palpanel-palcalc.service > "$tmp/palpanel-palcalc.service"
           systemd-analyze verify "$tmp/palpanel.service" "$tmp/palpanel-sav-cli.service" "$tmp/palpanel-palcalc.service"
       - name: Build and smoke Linux package
+        env:
+          PALPANEL_NUGET_AUDIT: "true"
         run: |
           scripts/package.sh --version "$CI_PACKAGE_VERSION" --targets linux-amd64 --skip-tests --clean
           scripts/verify-release-contents.sh \

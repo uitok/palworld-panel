@@ -810,9 +810,6 @@ func (s Server) workshopStatus(c *gin.Context) {
 }
 
 func (s Server) searchWorkshopMods(c *gin.Context) {
-	if !s.requireWorkshopLogin(c) {
-		return
-	}
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "24"))
 	params := mods.WorkshopSearchParams{
 		Query:    c.Query("q"),
@@ -830,9 +827,6 @@ func (s Server) searchWorkshopMods(c *gin.Context) {
 }
 
 func (s Server) getWorkshopMod(c *gin.Context) {
-	if !s.requireWorkshopLogin(c) {
-		return
-	}
 	item, err := s.mods.WorkshopDetail(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		failWorkshop(c, err)
