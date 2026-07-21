@@ -1091,6 +1091,15 @@ func (s Server) palDefenderReleases(c *gin.Context) {
 	ok(c, releases)
 }
 
+func (s Server) ue4ssInstall(c *gin.Context) {
+	j, err := s.defender.InstallUE4SS(c.Request.Context())
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "ue4ss_install_failed", err.Error())
+		return
+	}
+	accepted(c, j)
+}
+
 func (s Server) palDefenderStatus(c *gin.Context) {
 	status, err := s.defender.Status(c.Request.Context())
 	if err != nil {

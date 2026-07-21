@@ -37,7 +37,8 @@ export const Security: React.FC = () => {
   const trackJob = async (job: Job) => {
     setActiveJob(job);
     const done = await tasksApi.waitForJob(job.id, setActiveJob);
-    setMessage(done.status === 'success' ? 'PalDefender 任务已完成' : done.error || 'PalDefender 任务失败');
+	const name = job.type === 'ue4ss_install' ? 'UE4SS' : 'PalDefender';
+	setMessage(done.status === 'success' ? `${name} 任务已完成` : done.error || `${name} 任务失败`);
     await load();
   };
 
@@ -173,6 +174,9 @@ export const Security: React.FC = () => {
             </div>
           )}
           <div className="mt-4 grid grid-cols-2 gap-2">
+			<button type="button" onClick={() => runJob(securityApi.installUE4SS)} className="col-span-2 rounded-xl border border-emerald-200 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50">
+				安装 / 更新 UE4SS
+			</button>
             <button type="button" onClick={() => runJob(securityApi.install)} className="rounded-xl bg-sky-500 px-4 py-2 text-xs font-bold text-white hover:bg-sky-600">
               安装
             </button>

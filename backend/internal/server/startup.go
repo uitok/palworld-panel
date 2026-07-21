@@ -12,6 +12,7 @@ import (
 const (
 	RuntimeWineDocker      = "wine_docker"
 	RuntimeWindowsSteamCMD = "windows_steamcmd"
+	RuntimeLinuxSteamCMD   = "linux_steamcmd"
 )
 
 type StartupConfig struct {

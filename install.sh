@@ -7,7 +7,7 @@ version="${PALPANEL_VERSION:-latest}"
 listen_addr="${PALPANEL_LISTEN_ADDR:-127.0.0.1:8080}"
 listen_explicit=0
 [[ -v PALPANEL_LISTEN_ADDR ]] && listen_explicit=1
-docker_mode="auto"
+docker_mode="disabled"
 proxy_url="${PALPANEL_PROXY:-}"
 github_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 migrate_container=""
@@ -30,8 +30,8 @@ Downloads and installs the latest PalPanel Linux amd64 release.
 Options:
   --version TAG        install a specific release tag (default: latest)
   --listen HOST:PORT   panel listener (default: 127.0.0.1:8080)
-  --docker             grant the service account Docker socket access
-  --no-docker          do not grant Docker socket access
+  --docker             legacy: grant Docker socket access for wine_docker migrations
+  --no-docker          do not grant Docker socket access (default)
   --proxy URL          proxy for GitHub downloads (for example socks5h://127.0.0.1:10808)
   --repo OWNER/REPO    GitHub repository (default: uitok/palworld-panel)
   --migrate-container NAME

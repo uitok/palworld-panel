@@ -492,6 +492,8 @@ paths:
     get: {operationId: listPalDefenderReleases, tags: [security], x-palpanel-permission: read, responses: *readResponses}
   /security/paldefender/status:
     get: {operationId: getPalDefenderStatus, tags: [security], x-palpanel-permission: read, responses: *readResponses}
+  /security/ue4ss/install:
+    post: {operationId: installUE4SS, tags: [security], x-palpanel-permission: 'security:write', responses: *writeResponses}
   /security/paldefender/install:
     post: {operationId: installPalDefender, tags: [security], x-palpanel-permission: 'security:write', responses: *writeResponses}
   /security/paldefender/update:

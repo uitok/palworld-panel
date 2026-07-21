@@ -14,7 +14,7 @@ const stoppedStatus: ServerStatus = {
   status: 'stopped',
   installed: false,
   pending_restart: false,
-  runtime_mode: 'wine_docker',
+  runtime_mode: 'linux_steamcmd',
   setup_step: 'prerequisites',
   config_exists: false,
   container: { exists: false, status: 'missing' },

@@ -36,6 +36,7 @@ const (
 
 	runtimeWineDocker      = "wine_docker"
 	runtimeWindowsSteamCMD = "windows_steamcmd"
+	runtimeLinuxSteamCMD   = "linux_steamcmd"
 )
 
 var panelRESTPermissions = []string{
@@ -162,6 +163,9 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 	}
 	installed := files["PalDefender.dll"] && files["d3d9.dll"]
 	var warnings []string
+	if m.isLinuxRuntime() {
+		warnings = append(warnings, "Native Linux mode supports UE4SS Lua mods and Linux .so plugins; PalDefender Windows DLLs are unavailable.")
+	}
 	if installed && !dirExists(m.cfg.PalDefenderDir()) {
 		warnings = append(warnings, "PalDefender directory has not been generated yet; start the server once")
 	}
@@ -395,6 +399,9 @@ func BalancedPreset() map[string]any {
 }
 
 func (m Manager) installJob(ctx context.Context, typ, message string) (db.Job, error) {
+	if m.isLinuxRuntime() {
+		return db.Job{}, fmt.Errorf("PalDefender is a Windows DLL and cannot be installed into the native Linux server; install native Linux UE4SS instead")
+	}
 	return m.jobs.Submit(ctx, jobs.ClassLifecycle, typ, message, func(jobCtx context.Context, jobID string) {
 		m.update(jobID, "running", 5, "checking Palworld state and UE4SS dependency", "")
 		if _, err := m.ensureUE4SS(jobCtx); err != nil {

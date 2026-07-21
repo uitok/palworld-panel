@@ -61,6 +61,7 @@ request timing and health-probe results into the bounded
 
 ## Runtime Modes
 
+- `linux_steamcmd`: recommended for Linux hosts. The backend downloads Linux SteamCMD, installs the native dedicated server, runs it in its own process group, and uses `Pal/Saved/Config/LinuxServer`. Docker and Wine are not required. Native UE4SS from `XarminaEu/ue4ss-linux` is installed with digest verification and injected through `LD_PRELOAD`; Lua mods work unchanged and C++ mods require Linux `libs/main.so`. PalDefender and Windows DLL mods remain incompatible with the native binary.
 - `windows_steamcmd`: recommended for production Windows hosts. The backend downloads SteamCMD into `data/tools/steamcmd` when needed and installs the Windows dedicated server with `steamcmd +login anonymous +app_update 2394010 validate +quit`.
 - `wine_docker`: keeps the existing Docker + Wine flow for Windows edition server mods and containerized operation. Official Palworld docs warn against Docker Desktop for production save-data IO, so update operations create backups first. Version checks use the existing Wine runner image; build or install once before checking remote version in this mode.
 
@@ -177,7 +178,7 @@ Metrics retain the existing frontend fields and additionally map `basecampnum` t
 - Palworld config: `GET /api/config/palworld`, `PUT /api/config/palworld`, `GET /api/config/palworld/schema`, `POST /api/config/palworld/validate`
 - Mods: `GET /api/mods`, `POST /api/mods/import/inspect`, `POST /api/mods/import/inspect/{id}/select`, `POST /api/mods/import`, `GET /api/mods/workshop/auth/status`, `POST /api/mods/workshop/auth/start`, `POST /api/mods/workshop/auth/verify`, `GET /api/mods/workshop/search`, `GET /api/mods/workshop/{id}`, `POST /api/mods/workshop/{id}/translate`, plus compatible `/api/mods/upload` and `/api/mods/workshop` endpoints
 - AI translation: `GET/PUT /api/ai/translation/config`, `POST /api/ai/translation/test`
-- PalDefender: `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
+- UE4SS/PalDefender: `POST /api/security/ue4ss/install`, `GET /api/security/paldefender/releases`, `GET /api/security/paldefender/status`, `POST /api/security/paldefender/install`, `POST /api/security/paldefender/update`, `POST /api/security/paldefender/rollback`, `GET/PUT /api/security/paldefender/config`, `POST /api/security/paldefender/apply-preset`, `POST /api/security/paldefender/rest-token`, `POST /api/security/paldefender/reload-config`
 - PalDefender GM: status, players, inventory, progression, technologies, Pals, item grants, PalTemplate management/grants, messages and punishments under `/api/security/paldefender/gm`; typed RCON catalogs and commands under `/api/security/paldefender/gm/commands` and `/api/security/paldefender/gm/catalog`; access settings, whitelist and session-admin operations under `/api/security/paldefender/access`, `/api/security/paldefender/whitelist` and `/api/security/paldefender/admins`
 
 ## Paths

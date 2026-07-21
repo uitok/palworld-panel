@@ -119,6 +119,12 @@ const mapToken = (raw: unknown): TokenResult => {
 };
 
 export const securityApi = {
+	installUE4SS: () =>
+		handleRequest<unknown, Job>(
+			() => apiClient.post('/security/ue4ss/install'),
+			createFallbackJob('ue4ss_install', '已提交 UE4SS 安装任务'),
+			{ map: mapJob, quiet: true, fallbackOnError: false },
+		),
   releases: () =>
     handleRequest<unknown, PalDefenderRelease[]>(
       () => apiClient.get('/security/paldefender/releases'),

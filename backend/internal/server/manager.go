@@ -161,7 +161,7 @@ func (m Manager) RuntimeMode(ctx context.Context) (string, error) {
 	if !ok || strings.TrimSpace(mode) == "" {
 		return RecommendedRuntimeForOS(runtime.GOOS), nil
 	}
-	if mode != RuntimeWineDocker && mode != RuntimeWindowsSteamCMD {
+	if mode != RuntimeWineDocker && mode != RuntimeWindowsSteamCMD && mode != RuntimeLinuxSteamCMD {
 		return RecommendedRuntimeForOS(runtime.GOOS), nil
 	}
 	return mode, nil
@@ -169,7 +169,7 @@ func (m Manager) RuntimeMode(ctx context.Context) (string, error) {
 
 func (m Manager) SetRuntimeMode(ctx context.Context, mode string) error {
 	mode = strings.TrimSpace(mode)
-	if mode != RuntimeWineDocker && mode != RuntimeWindowsSteamCMD {
+	if mode != RuntimeWineDocker && mode != RuntimeWindowsSteamCMD && mode != RuntimeLinuxSteamCMD {
 		return fmt.Errorf("unsupported runtime mode: %s", mode)
 	}
 	return m.store.SetKV(ctx, kvRuntimeMode, mode)
@@ -224,10 +224,16 @@ func (m Manager) Prerequisites(ctx context.Context) ([]Prerequisite, error) {
 			Prerequisite{ID: "docker", Label: "Docker CLI", OK: cliOK, Required: true, Message: cliMessage},
 			Prerequisite{ID: "docker_daemon", Label: "Docker daemon", OK: dockerCapability.DaemonReachable, Required: true, Message: daemonMessage},
 		)
-	} else {
+	} else if mode == RuntimeWindowsSteamCMD {
 		steamCMDErr := validatePEExecutable(m.cfg.SteamCMDBinaryPath())
 		checks = append(checks,
 			Prerequisite{ID: "windows", Label: "Windows host", OK: runtime.GOOS == "windows", Required: true, Message: runtime.GOOS},
+			Prerequisite{ID: "steamcmd", Label: "SteamCMD", OK: steamCMDErr == nil, Required: false, Message: m.cfg.SteamCMDBinaryPath()},
+		)
+	} else {
+		steamCMDErr := validateHostExecutable(m.cfg.SteamCMDBinaryPath())
+		checks = append(checks,
+			Prerequisite{ID: "linux", Label: "Linux host", OK: runtime.GOOS == "linux", Required: true, Message: runtime.GOOS},
 			Prerequisite{ID: "steamcmd", Label: "SteamCMD", OK: steamCMDErr == nil, Required: false, Message: m.cfg.SteamCMDBinaryPath()},
 		)
 	}
@@ -330,7 +336,7 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 			return false
 		}
 	}
-	if mode == RuntimeWindowsSteamCMD {
+	if mode == RuntimeWindowsSteamCMD || mode == RuntimeLinuxSteamCMD {
 		m.update(jobID, "running", 25, "preparing SteamCMD", "")
 		if m.installOrUpdateFunc == nil {
 			if err := m.ensureSteamCMD(ctx); err != nil {
@@ -338,7 +344,11 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 				return false
 			}
 		}
-		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
+		platform := "Windows"
+		if mode == RuntimeLinuxSteamCMD {
+			platform = "Linux"
+		}
+		m.update(jobID, "running", 60, action+"ing Palworld "+platform+" dedicated server", "")
 		if err := m.installOrUpdateRuntime(ctx, mode); err != nil {
 			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
 			return false
@@ -359,6 +369,11 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 	}
 	if mode == RuntimeWindowsSteamCMD {
 		if err := m.validateWindowsServerInstall(); err != nil {
+			m.update(jobID, "failed", 70, action+" verification failed", err.Error()+retainedBackupMessage(backup))
+			return false
+		}
+	} else if mode == RuntimeLinuxSteamCMD {
+		if err := m.validateLinuxServerInstall(); err != nil {
 			m.update(jobID, "failed", 70, action+" verification failed", err.Error()+retainedBackupMessage(backup))
 			return false
 		}
@@ -442,6 +457,10 @@ func (m Manager) ValidateStartup(ctx context.Context) []ValidationIssue {
 		if err := m.validateWindowsServerInstall(); err != nil {
 			issues = append(issues, ValidationIssue{Field: "server", Severity: "error", Message: err.Error()})
 		}
+	} else if mode == RuntimeLinuxSteamCMD {
+		if err := m.validateLinuxServerInstall(); err != nil {
+			issues = append(issues, ValidationIssue{Field: "server", Severity: "error", Message: err.Error()})
+		}
 	} else if !fileExists(m.cfg.PalServerExePath()) {
 		issues = append(issues, ValidationIssue{Field: "server", Severity: "error", Message: "PalServer.exe not found; install server first"})
 	}
@@ -477,6 +496,8 @@ func (m Manager) startUnlocked(ctx context.Context) error {
 	}
 	if mode == RuntimeWindowsSteamCMD {
 		err = m.startWindows(ctx, startup.Args(m.cfg))
+	} else if mode == RuntimeLinuxSteamCMD {
+		err = m.startLinux(ctx, startup.Args(m.cfg))
 	} else {
 		err = m.runner.StartWithArgs(ctx, startup.Args(m.cfg))
 	}
@@ -518,6 +539,9 @@ func (m Manager) stopUnlocked(ctx context.Context) error {
 	if mode == RuntimeWindowsSteamCMD {
 		return m.stopWindows(ctx)
 	}
+	if mode == RuntimeLinuxSteamCMD {
+		return m.stopLinux(ctx)
+	}
 	return m.runner.Stop(ctx)
 }
 
@@ -541,6 +565,11 @@ func (m Manager) restartUnlocked(ctx context.Context) error {
 			return fmt.Errorf("stop before restart: %w", err)
 		}
 		err = m.startWindows(ctx, startup.Args(m.cfg))
+	} else if mode == RuntimeLinuxSteamCMD {
+		if err := m.stopLinux(ctx); err != nil {
+			return fmt.Errorf("stop before restart: %w", err)
+		}
+		err = m.startLinux(ctx, startup.Args(m.cfg))
 	} else {
 		err = m.runner.RestartWithArgs(ctx, startup.Args(m.cfg))
 	}
@@ -649,6 +678,8 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 			statusErr = err
 			container = docker.ContainerStatus{Exists: false, Status: "error"}
 		}
+	} else if mode == RuntimeLinuxSteamCMD {
+		container, statusErr = m.linuxStatus(ctx)
 	} else {
 		container, statusErr = m.windowsStatus(ctx)
 	}
@@ -664,6 +695,9 @@ func (m Manager) Status(ctx context.Context) (Status, error) {
 	var installErr error
 	if mode == RuntimeWindowsSteamCMD {
 		installErr = m.validateWindowsServerInstall()
+		installed = installErr == nil
+	} else if mode == RuntimeLinuxSteamCMD {
+		installErr = m.validateLinuxServerInstall()
 		installed = installErr == nil
 	} else if !installed {
 		installed = fileExists(m.cfg.PalServerExePath())
@@ -862,6 +896,9 @@ func (m Manager) installOrUpdateRuntime(ctx context.Context, mode string) error 
 	}
 	if mode == RuntimeWindowsSteamCMD {
 		return m.installOrUpdateWindows(ctx)
+	}
+	if mode == RuntimeLinuxSteamCMD {
+		return m.installOrUpdateLinux(ctx)
 	}
 	return m.runner.InstallOrUpdate(ctx)
 }
@@ -1083,6 +1120,9 @@ func (m Manager) clearWindowsProcessIfMatch(record windowsProcessRecord) {
 
 func (m Manager) statusWarnings(mode string, installed, configExists bool) []string {
 	var warnings []string
+	if mode == RuntimeLinuxSteamCMD {
+		warnings = append(warnings, "Native Linux mode supports UE4SS Lua mods and Linux .so plugins; PalDefender and Windows DLL mods are unavailable.")
+	}
 	if mode == RuntimeWineDocker && runtime.GOOS != "linux" {
 		warnings = append(warnings, "Docker Desktop on Windows/macOS is not recommended by official docs for production save-data IO; create backups before updates.")
 	}

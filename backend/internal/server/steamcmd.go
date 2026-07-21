@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"palpanel/internal/steamcmd"
@@ -30,6 +31,49 @@ func (m Manager) installOrUpdateWindows(ctx context.Context) error {
 		return err
 	}
 	return m.validateWindowsServerInstall()
+}
+
+func (m Manager) installOrUpdateLinux(ctx context.Context) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("linux_steamcmd runtime requires Linux host")
+	}
+	for _, path := range []string{m.cfg.SteamCMDDir, m.cfg.ServerDirectory()} {
+		if err := m.cfg.ValidateManagedPath(path, false); err != nil {
+			return err
+		}
+	}
+	if err := m.nativeSteamCMD().InstallOrUpdate(ctx, palworldServerAppID, m.cfg.ServerDirectory()); err != nil {
+		return err
+	}
+	return m.validateLinuxServerInstall()
+}
+
+func (m Manager) validateLinuxServerInstall() error {
+	path := m.cfg.PalServerLinuxPath()
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("Palworld Linux server installation is incomplete: %w", err)
+	}
+	if info.IsDir() || info.Mode()&0111 == 0 {
+		return fmt.Errorf("Palworld Linux server launcher is not executable: %s", path)
+	}
+	if _, err := m.linuxServerBinaryPath(); err != nil {
+		return err
+	}
+	if _, err := readAppManifestBuildID(appManifestPathForRoot(m.cfg.ServerDirectory())); err != nil {
+		return fmt.Errorf("Palworld Steam appmanifest is invalid: %w", err)
+	}
+	return nil
+}
+
+func (m Manager) linuxServerBinaryPath() (string, error) {
+	for _, name := range []string{"PalServer-Linux-Shipping", "PalServer-Linux-Test"} {
+		path := filepath.Join(m.cfg.LinuxBinariesDir(), name)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("Palworld Linux server binary is missing under %s", m.cfg.LinuxBinariesDir())
 }
 
 func (m Manager) validateWindowsServerInstall() error {
@@ -74,6 +118,17 @@ func validateWindowsServerDirectory(serverRoot string) error {
 
 func validatePEExecutable(path string) error {
 	return steamcmd.ValidatePEExecutable(path)
+}
+
+func validateHostExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() || info.Mode()&0111 == 0 {
+		return fmt.Errorf("not executable: %s", path)
+	}
+	return nil
 }
 
 func (m Manager) removeManagedDirectory(path string) error {

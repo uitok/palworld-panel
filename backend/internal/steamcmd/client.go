@@ -1,8 +1,10 @@
 package steamcmd
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -78,8 +80,8 @@ func (c *Client) Ensure(ctx context.Context) error {
 	if err := c.validateInstalled(); err == nil {
 		return nil
 	}
-	if c.goos != "windows" {
-		return fmt.Errorf("native SteamCMD requires a Windows host")
+	if c.goos != "windows" && c.goos != "linux" {
+		return fmt.Errorf("native SteamCMD requires a Windows or Linux host")
 	}
 	release, err := c.acquire(ctx)
 	if err != nil {
@@ -112,15 +114,23 @@ func (c *Client) Ensure(ctx context.Context) error {
 		return err
 	}
 
-	archivePath := filepath.Join(stageRoot, "steamcmd.zip")
+	archiveName := "steamcmd.zip"
+	if c.goos == "linux" {
+		archiveName = "steamcmd_linux.tar.gz"
+	}
+	archivePath := filepath.Join(stageRoot, archiveName)
 	if err := c.downloadWithRetry(ctx, archivePath); err != nil {
 		return err
 	}
 	extracted := filepath.Join(stageRoot, "install")
-	if err := extractZip(archivePath, extracted, c.validateManaged); err != nil {
+	if c.goos == "linux" {
+		if err := extractTarGzip(archivePath, extracted, c.validateManaged); err != nil {
+			return fmt.Errorf("extract SteamCMD: %w", err)
+		}
+	} else if err := extractZip(archivePath, extracted, c.validateManaged); err != nil {
 		return fmt.Errorf("extract SteamCMD: %w", err)
 	}
-	if err := ValidatePEExecutable(filepath.Join(extracted, "steamcmd.exe")); err != nil {
+	if err := validateNativeExecutable(filepath.Join(extracted, filepath.Base(c.cfg.SteamCMDBinaryPath())), c.goos); err != nil {
 		return fmt.Errorf("verify downloaded SteamCMD: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(c.cfg.SteamCMDDir), 0o755); err != nil {
@@ -160,7 +170,7 @@ func (c *Client) Ensure(ctx context.Context) error {
 		rollback()
 		return fmt.Errorf("activate SteamCMD: %w", err)
 	}
-	if err := ValidatePEExecutable(c.cfg.SteamCMDBinaryPath()); err != nil {
+	if err := validateNativeExecutable(c.cfg.SteamCMDBinaryPath(), c.goos); err != nil {
 		rollback()
 		return fmt.Errorf("verify installed SteamCMD: %w", err)
 	}
@@ -515,6 +525,9 @@ func (c *Client) download(ctx context.Context, destination string) error {
 	if downloadURL == "" {
 		downloadURL = appconfig.DefaultSteamCMDDownloadURL
 	}
+	if c.goos == "linux" && (downloadURL == appconfig.DefaultSteamCMDDownloadURL || downloadURL == "") {
+		downloadURL = appconfig.DefaultSteamCMDLinuxDownloadURL
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return err
@@ -602,7 +615,62 @@ func (c *Client) validateInstalled() error {
 	if err := c.validateManaged(c.cfg.SteamCMDBinaryPath()); err != nil {
 		return err
 	}
-	return ValidatePEExecutable(c.cfg.SteamCMDBinaryPath())
+	return validateNativeExecutable(c.cfg.SteamCMDBinaryPath(), c.goos)
+}
+
+func validateNativeExecutable(path, goos string) error {
+	if goos == "windows" {
+		return ValidatePEExecutable(path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() || info.Mode()&0111 == 0 {
+		return fmt.Errorf("%s is not executable", path)
+	}
+	return nil
+}
+
+func extractTarGzip(archivePath, destination string, validate func(string) error) error {
+	file, err := os.Open(archivePath)
+	if err != nil { return err }
+	defer file.Close()
+	gz, err := gzip.NewReader(file)
+	if err != nil { return err }
+	defer gz.Close()
+	if err := os.MkdirAll(destination, 0o755); err != nil { return err }
+	reader := tar.NewReader(gz)
+	entries := 0
+	var total int64
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) { break }
+		if err != nil { return err }
+		entries++
+		if entries > maxArchiveEntries { return fmt.Errorf("archive contains too many entries") }
+		target := filepath.Join(destination, filepath.FromSlash(header.Name))
+		if err := validate(target); err != nil { return err }
+		relative, err := filepath.Rel(destination, target)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) { return fmt.Errorf("unsafe archive path: %s", header.Name) }
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil { return err }
+		case tar.TypeReg, tar.TypeRegA:
+			total += header.Size
+			if total > maxExtractedBytes { return fmt.Errorf("archive exceeds extracted size limit") }
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil { return err }
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode)&0o755)
+			if err != nil { return err }
+			_, copyErr := io.CopyN(out, reader, header.Size)
+			closeErr := out.Close()
+			if copyErr != nil { return copyErr }
+			if closeErr != nil { return closeErr }
+		default:
+			return fmt.Errorf("unsupported archive entry: %s", header.Name)
+		}
+	}
+	return nil
 }
 
 func (c *Client) removeManagedDirectory(path string) error {

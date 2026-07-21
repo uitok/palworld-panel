@@ -14,7 +14,7 @@ func TestRecommendedRuntimeForOS(t *testing.T) {
 		want string
 	}{
 		{goos: "windows", want: RuntimeWindowsSteamCMD},
-		{goos: "linux", want: RuntimeWineDocker},
+		{goos: "linux", want: RuntimeLinuxSteamCMD},
 		{goos: "darwin", want: RuntimeWineDocker},
 	}
 	for _, tc := range cases {

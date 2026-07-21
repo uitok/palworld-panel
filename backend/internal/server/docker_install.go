@@ -115,6 +115,9 @@ func RecommendedRuntimeForOS(goos string) string {
 	if goos == "windows" {
 		return RuntimeWindowsSteamCMD
 	}
+	if goos == "linux" {
+		return RuntimeLinuxSteamCMD
+	}
 	return RuntimeWineDocker
 }
 

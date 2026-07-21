@@ -109,6 +109,9 @@ func (m Manager) UE4SSStatus() UE4SSDependencyStatus {
 }
 
 func (m Manager) detectUE4SS() UE4SSDependencyStatus {
+	if m.isLinuxRuntime() {
+		return m.detectLinuxUE4SS()
+	}
 	status := UE4SSDependencyStatus{
 		State: UE4SSMissing, Files: map[string]bool{}, Path: m.cfg.Win64Dir(),
 		Message: "UE4SS is missing; installing PalDefender will install the pinned UE4SS dependency first.",
@@ -170,6 +173,9 @@ func (m Manager) detectUE4SS() UE4SSDependencyStatus {
 }
 
 func (m Manager) ensureUE4SS(ctx context.Context) (UE4SSDependencyStatus, error) {
+	if m.isLinuxRuntime() {
+		return m.ensureLinuxUE4SS(ctx)
+	}
 	m.setUE4SSState(UE4SSChecking, "Checking UE4SS files and compatibility.", "")
 	if err := m.ensureGameStopped(ctx); err != nil {
 		m.setUE4SSState(UE4SSFailed, "UE4SS prerequisite check failed.", err.Error())

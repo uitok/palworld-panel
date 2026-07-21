@@ -151,6 +151,7 @@ func (s Server) registerContentRoutes(api *gin.RouterGroup) {
 }
 
 func (s Server) registerSecurityRoutes(api *gin.RouterGroup) {
+	api.POST("/security/ue4ss/install", Require(PermSecurityWrite), s.ue4ssInstall)
 	api.GET("/security/paldefender/releases", s.palDefenderReleases)
 	api.GET("/security/paldefender/status", s.palDefenderStatus)
 	api.POST("/security/paldefender/install", Require(PermSecurityWrite), s.palDefenderInstall)
