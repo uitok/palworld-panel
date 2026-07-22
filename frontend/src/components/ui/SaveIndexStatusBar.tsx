@@ -19,6 +19,13 @@ const stateText: Record<string, string> = {
   error: '存档解析失败',
 };
 
+const errorCodeHint: Record<string, string> = {
+  parser_incompatible: '存档格式不兼容（常见原因：sav-cli 为 no-cgo 构建，缺少 Oodle 解压，无法解析 PlM 压缩存档，请使用带 cgo 的发布包）',
+  level_sav_not_found: '未找到 Level.sav（请确认存档目录路径正确）',
+  save_path_not_found: '存档路径不存在（请检查存档源路径）',
+  index_failed: '索引失败（请查看 sav-cli 文本日志定位原因）',
+};
+
 const formatTimestamp = (value?: string) => {
   if (!value) return '';
   const date = new Date(value);
@@ -42,13 +49,17 @@ export const SaveIndexStatusBar: React.FC<SaveIndexStatusBarProps> = ({
   onRefresh,
   onRebuild,
 }) => {
-  const state = status?.state || 'disabled';
+  const rawState = status?.state || 'disabled';
+  const state = rawState === 'error' && status?.stale ? 'stale' : rawState;
+  const isFatalError = rawState === 'error' && !status?.stale;
+  const showError = isFatalError || Boolean(status?.error_code);
   const isProblem = !status?.enabled || status.stale || state === 'error' || state === 'missing' || state === 'not_indexed';
   const tone = isProblem
     ? 'border-amber-200/80 bg-amber-50 text-amber-900'
     : 'border-emerald-200/80 bg-emerald-50 text-emerald-800';
   const counts = status?.counts;
   const warnings = status?.warnings ?? [];
+  const errorCodeText = status?.error_code ? errorCodeHint[status.error_code] : '';
   const details = [
     status?.updated_at ? `更新于 ${formatTimestamp(status.updated_at)}` : '',
     status?.parser ? `解析器 ${status.parser}` : '',
@@ -68,7 +79,12 @@ export const SaveIndexStatusBar: React.FC<SaveIndexStatusBarProps> = ({
               {warnings.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">{warningLabel(warnings)}</span>}
             </div>
             {details && <p className="mt-0.5 truncate text-[11px] font-medium opacity-75" title={details}>{details}</p>}
-            {status?.error && <p className="mt-1 max-h-10 overflow-hidden text-[11px] font-semibold leading-5 text-rose-700" title={status.error}>错误：{status.error}</p>}
+            {showError && (errorCodeText || status?.error || status?.error_code) && (
+              <p className="mt-1 max-h-16 overflow-hidden text-[11px] font-semibold leading-5 text-rose-700" title={status?.error || errorCodeText}>
+                错误：{errorCodeText || status?.error}
+                {status?.error_code && <span className="ml-1 rounded bg-rose-100 px-1 py-0.5 font-mono text-[10px] font-bold text-rose-700">{status.error_code}</span>}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 gap-2 pl-9 sm:pl-0">

@@ -203,7 +203,7 @@ test('desktop shell follows the main branch layout without horizontal overflow',
   test.setTimeout(120_000);
   await installFakeBackend(page);
   const routes = ['/setup', '/dashboard', '/player-center', '/backups'] as const;
-  for (const width of [757, 1024, 1440, 1864]) {
+  for (const width of [757, 899, 900, 960, 1023, 1024, 1440, 1864]) {
     await page.setViewportSize({ width, height: 900 });
     for (const path of routes) {
       await page.goto(path);
@@ -213,20 +213,31 @@ test('desktop shell follows the main branch layout without horizontal overflow',
         const content = document.querySelector('#app-main > div')?.getBoundingClientRect();
         const shell = document.querySelector('.pp-shell__content')?.getBoundingClientRect();
         const rail = document.querySelector('.pp-rail')?.getBoundingClientRect();
+        const sidebar = document.querySelector('.pp-shell__sidebar');
+        const mobileActions = document.querySelector('.pp-mobile-actions');
         return {
           header: header && { x: header.x, width: header.width },
           content: content && { x: content.x, width: content.width },
           shell: shell && { x: shell.x, width: shell.width },
-          rail: rail && { right: rail.right },
+          rail: rail && { right: rail.right, width: rail.width },
+          sidebarDisplay: sidebar ? window.getComputedStyle(sidebar).display : 'none',
+          mobileActionsDisplay: mobileActions ? window.getComputedStyle(mobileActions).display : 'none',
           overflow: document.documentElement.scrollWidth - window.innerWidth,
         };
       });
       expect(layout.header).not.toBeNull();
       expect(layout.content).not.toBeNull();
       expect(layout.shell).not.toBeNull();
-      if (width >= 1024) {
+      expect((layout.header?.width ?? 0)).toBeGreaterThan(0);
+      expect((layout.content?.width ?? 0)).toBeGreaterThan(0);
+      if (width >= 900) {
+        expect(layout.sidebarDisplay).toBe('block');
+        expect(layout.mobileActionsDisplay).toBe('none');
         expect(layout.rail).not.toBeNull();
+        expect((layout.rail?.width ?? 0)).toBeGreaterThan(0);
         expect(Math.abs((layout.rail?.right ?? 0) - (layout.shell?.x ?? 0))).toBeLessThanOrEqual(1);
+      } else {
+        expect(layout.sidebarDisplay).toBe('none');
       }
       expect((layout.header?.width ?? 0)).toBeLessThanOrEqual((layout.shell?.width ?? 0) + 1);
       expect((layout.content?.width ?? 0)).toBeLessThanOrEqual((layout.shell?.width ?? 0) + 1);

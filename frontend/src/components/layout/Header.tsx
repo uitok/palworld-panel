@@ -15,6 +15,7 @@ interface HeaderProps {
 }
 
 const groupLabels: Record<string, TranslationKey> = { setup: 'header.setup', workspace: 'header.workspace', world: 'header.world', system: 'header.system' };
+const desktopShellMediaQuery = '(min-width: 900px)';
 
 export const Header: React.FC<HeaderProps> = ({ onMenuClick, onAnnounceClick, onSaveClick, onRestartClick }) => {
   const { t } = useI18n();
@@ -25,7 +26,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuClick, onAnnounceClick, on
   const groupLabel = routeMeta ? t(groupLabels[routeMeta.navGroup]) : appConfig.brand.toUpperCase();
 
   const handleNavigationClick = () => {
-    if (window.matchMedia('(min-width: 1024px)').matches) {
+    if (window.matchMedia(desktopShellMediaQuery).matches) {
       setIsSidebarCollapsed(!isSidebarCollapsed);
       return;
     }

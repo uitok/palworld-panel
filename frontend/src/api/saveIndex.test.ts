@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { mapMapEntitiesResponse } from './saveIndex';
+import { mapMapEntitiesResponse, mapSaveIndexStatus } from './saveIndex';
+
+describe('mapSaveIndexStatus', () => {
+  it('preserves the safe indexer error code returned by the backend', () => {
+    expect(mapSaveIndexStatus({
+      enabled: true,
+      state: 'error',
+      error: 'save indexer failed (parser_incompatible)',
+      error_code: 'parser_incompatible',
+    }).error_code).toBe('parser_incompatible');
+  });
+});
 
 describe('mapMapEntitiesResponse', () => {
   it('maps live coordinates and falls back to nested save coordinates', () => {

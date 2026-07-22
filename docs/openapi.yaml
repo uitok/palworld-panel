@@ -55,6 +55,16 @@ x-import-inspection: &importInspection
   content:
     application/json:
       schema: {$ref: '#/components/schemas/ImportInspectionEnvelope'}
+x-save-import-inspection: &saveImportInspection
+  description: Inspected save-world candidates. Private extraction paths are never returned.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveImportInspectionEnvelope'}
+x-save-import-conflict: &saveImportConflict
+  description: Save import conflict. Multi-world direct uploads include a resumable inspection ID and candidates.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveImportConflictEnvelope'}
 x-local-mod-scan: &localModScan
   description: Reconciliation of Mod files, database records, persistent ignore state, and safe action capabilities.
   content:
@@ -881,6 +891,39 @@ paths:
     post: {operationId: rebuildSaveIndex, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /save-sources:
     get: {operationId: listSaveSources, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /save-sources/import/inspect:
+    post:
+      operationId: inspectSaveSourceImport
+      tags: [world]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/SaveImportInspectRequest'}
+      responses:
+        '200': *saveImportInspection
+        '400': *error
+        '401': *error
+        '403': *error
+  /save-sources/import/inspect/{id}/select:
+    parameters: [*idParameter]
+    post:
+      operationId: selectSaveSourceImportCandidate
+      tags: [world]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaveImportSelectRequest'}
+      responses:
+        '200': *saveImportInspection
+        '400': *error
+        '401': *error
+        '403': *error
+        '409': *error
+        '410': *error
   /save-sources/import:
     post:
       operationId: importSaveSource
@@ -891,7 +934,16 @@ paths:
         content:
           multipart/form-data:
             schema: {$ref: '#/components/schemas/SaveSourceImportRequest'}
-      responses: *writeResponses
+          application/json:
+            schema: {$ref: '#/components/schemas/SaveImportCommitRequest'}
+      responses:
+        '200': *success
+        '400': *error
+        '401': *error
+        '403': *error
+        '409': *saveImportConflict
+        '422': *error
+        '500': *error
   /save-sources/{id}/activate:
     parameters: [*idParameter]
     post: {operationId: activateSaveSource, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
@@ -1411,6 +1463,58 @@ components:
         name:
           type: string
           description: Optional display name for the imported save source.
+    SaveImportInspectRequest:
+      type: object
+      required: [file]
+      additionalProperties: false
+      properties:
+        file:
+          type: string
+          format: binary
+          description: Palworld world save archive in .zip, .tar, .tar.gz, or .tgz format.
+        name:
+          type: string
+          description: Optional display name retained for final import.
+    SaveImportSelectRequest:
+      type: object
+      required: [candidate_id]
+      additionalProperties: false
+      properties:
+        candidate_id: {type: string, minLength: 1}
+    SaveImportCommitRequest:
+      type: object
+      required: [inspection_id]
+      additionalProperties: false
+      properties:
+        inspection_id: {type: string, minLength: 1}
+        candidate_id: {type: string, minLength: 1}
+        name: {type: string}
+    SaveImportCandidate:
+      type: object
+      required: [id, relative_path, player_count, level_sha256, level_size, valid, warnings, errors]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        relative_path: {type: string}
+        world_id: {type: string}
+        player_count: {type: integer, minimum: 0}
+        level_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        level_size: {type: integer, format: int64, minimum: 0}
+        valid: {type: boolean}
+        warnings: {type: array, items: {type: string}}
+        errors: {type: array, items: {type: string}}
+    SaveImportInspection:
+      type: object
+      required: [id, file_name, candidates, selected_candidate_id, requires_selection, expires_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        file_name: {type: string}
+        name: {type: string}
+        candidates: {type: array, items: {$ref: '#/components/schemas/SaveImportCandidate'}}
+        selected_candidate_id: {type: string}
+        requires_selection: {type: boolean}
+        expires_at: {type: string, format: date-time}
     ModImportSelectRequest:
       type: object
       required: [candidate_id]
@@ -1854,6 +1958,26 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/ImportInspection'}
+    SaveImportInspectionEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SaveImportInspection'}
+    SaveImportConflictEnvelope:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: {type: boolean, const: false}
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            inspection_id: {type: string}
+            candidates: {type: array, items: {$ref: '#/components/schemas/SaveImportCandidate'}}
+            expires_at: {type: string, format: date-time}
     LocalScanEnvelope:
       type: object
       required: [ok, data]

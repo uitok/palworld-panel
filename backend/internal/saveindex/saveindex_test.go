@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,8 +213,83 @@ func TestRebuildFailureKeepsStaleCache(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected rebuild error")
 	}
-	if !status.Stale || status.State != "error" || len(index.Players) != 1 {
+	if !status.Stale || status.State != "stale" || len(index.Players) != 1 {
 		t.Fatalf("expected stale cached index after failure, got status=%#v index=%#v", status, index)
+	}
+	cached, readErr := m.loadCache()
+	if readErr != nil {
+		t.Fatalf("loadCache after failure: %v", readErr)
+	}
+	if cached.Status.State != "stale" || !cached.Status.Stale {
+		t.Fatalf("cache was persisted with the wrong state: %#v", cached.Status)
+	}
+}
+
+func TestRebuildFailureWithoutCacheReturnsErrorState(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": map[string]any{"code": "parser_failed", "message": "boom"}})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+
+	index, status, err := NewManager(cfg).Rebuild(t.Context())
+	if err == nil {
+		t.Fatal("expected rebuild error")
+	}
+	if status.State != "error" || status.Stale || len(index.Players) != 0 {
+		t.Fatalf("expected hard error without cache, got status=%#v index=%#v", status, index)
+	}
+}
+
+func TestStatusNormalizesLegacyErrorStaleCache(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	m := NewManager(cfg)
+	worldDir, fp, err := m.fingerprint()
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	cached := cacheFile{
+		Fingerprint: fp,
+		SavedAt:     time.Now().UTC().Format(time.RFC3339),
+		Index: Index{
+			Version:     1,
+			SourcePath:  worldDir,
+			GeneratedAt: "2026-07-09T00:00:00Z",
+			Parser:      "test",
+			Warnings:    []string{"legacy warning"},
+			Players:     []Player{{PlayerUID: "p1", Nickname: "Tester"}},
+			Guilds:      []Guild{},
+			Bases:       []Base{},
+			Pals:        []Pal{},
+			Containers:  []Container{},
+			MapEntities: []MapEntity{},
+		},
+		Status: Status{Enabled: true, State: "error", Stale: true, SourcePath: worldDir, Warnings: []string{"legacy warning"}, CachePath: m.cachePath()},
+	}
+	b, err := json.MarshalIndent(cached, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal cache: %v", err)
+	}
+	if err := os.MkdirAll(cfg.SaveIndexCacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(m.cachePath(), b, 0o644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+
+	index, status, err := m.Current(t.Context())
+	if err != nil {
+		t.Fatalf("Current returned error: %v", err)
+	}
+	if status.State != "stale" || !status.Stale || len(index.Players) != 1 {
+		t.Fatalf("legacy cache was not normalized on read: status=%#v index=%#v", status, index)
+	}
+	if len(status.Warnings) == 0 || status.Warnings[0] != "legacy warning" {
+		t.Fatalf("legacy warnings were not preserved: %#v", status.Warnings)
 	}
 }
 
@@ -268,6 +345,249 @@ func TestRebuildNeverReturnsBinaryTextFromStructuredSidecarError(t *testing.T) {
 		if !strings.Contains(message, "inspect the sav-cli text logs") {
 			t.Fatalf("unexpected safe diagnostic: %q", message)
 		}
+	}
+}
+
+func TestRebuildSurfacesStructuredErrorCode(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": false,
+			"error": map[string]any{
+				"code":    "parser_incompatible",
+				"message": "PlM Oodle decompression failed: GVAS \\x00 raw",
+			},
+			"warnings": []string{"a warning"},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+
+	_, status, err := NewManager(cfg).Rebuild(t.Context())
+	if err == nil {
+		t.Fatal("expected structured sidecar error to fail")
+	}
+	if status.ErrorCode != "parser_incompatible" {
+		t.Fatalf("expected surfaced error code, got %q", status.ErrorCode)
+	}
+	if !slices.Contains(status.Warnings, "a warning") {
+		t.Fatalf("expected sidecar warning to be preserved, got %#v", status.Warnings)
+	}
+	// The safe code is surfaced, but the raw (potentially binary) message never is.
+	for _, message := range []string{err.Error(), status.Error} {
+		if strings.Contains(message, "GVAS") || strings.Contains(message, "\\x") || strings.ContainsRune(message, '\x00') {
+			t.Fatalf("sidecar error payload leaked into diagnostic text: %q", message)
+		}
+	}
+}
+
+func TestRebuildFailureKeepsStructuredErrorOnStaleCache(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	fail := false
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":   true,
+				"data": map[string]any{"oodle": false},
+			})
+			return
+		}
+		if fail {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": false,
+				"error": map[string]any{
+					"code":    "parser_incompatible",
+					"message": "raw parser details must remain private",
+				},
+				"warnings": []string{"sidecar retry warning"},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"version":      1,
+				"generated_at": "2026-07-09T00:00:00Z",
+				"parser":       "test",
+			},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+	m := NewManager(cfg)
+	if _, _, err := m.Rebuild(t.Context()); err != nil {
+		t.Fatalf("initial Rebuild: %v", err)
+	}
+
+	fail = true
+	writeWorld(t, root, "level-two")
+	_, status, err := m.Rebuild(t.Context())
+	if err == nil {
+		t.Fatal("expected rebuild failure")
+	}
+	if !status.Stale || status.ErrorCode != "parser_incompatible" {
+		t.Fatalf("stale failure lost structured status: %#v", status)
+	}
+	if !strings.Contains(status.Error, "parser_incompatible") {
+		t.Fatalf("stale failure lost safe diagnostic: %#v", status)
+	}
+	if !slices.Contains(status.Warnings, oodleUnavailableWarning) {
+		t.Fatalf("stale failure lost Oodle warning: %#v", status.Warnings)
+	}
+	if !slices.Contains(status.Warnings, "sidecar retry warning") {
+		t.Fatalf("stale failure lost sidecar warning: %#v", status.Warnings)
+	}
+
+	persisted := m.Status(t.Context())
+	if persisted.ErrorCode != status.ErrorCode || persisted.Error != status.Error || !slices.Contains(persisted.Warnings, oodleUnavailableWarning) {
+		t.Fatalf("cached status did not persist the failure diagnostics: %#v", persisted)
+	}
+}
+
+func TestSaveCacheAtomicallyReplacesCacheFile(t *testing.T) {
+	_, cfg := testConfig(t)
+	m := NewManager(cfg)
+	if err := m.saveCache("initial", EmptyIndex(), Status{State: "ready", Warnings: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	path := m.cachePath()
+	snapshotPath := filepath.Join(cfg.SaveIndexCacheDir, "initial-cache-link.json")
+	if err := os.Link(path, snapshotPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.saveCache("replacement", EmptyIndex(), Status{State: "ready", Warnings: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	for file, want := range map[string]string{snapshotPath: "initial", path: "replacement"} {
+		body, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cached cacheFile
+		if err := json.Unmarshal(body, &cached); err != nil {
+			t.Fatalf("cache %s is not complete JSON: %v", file, err)
+		}
+		if cached.Fingerprint != want {
+			t.Fatalf("cache %s fingerprint = %q, want %q", file, cached.Fingerprint, want)
+		}
+	}
+}
+
+func TestRebuildRejectsUnknownErrorCode(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": false,
+			"error": map[string]any{
+				"code":    "GVAS \\x00 injected",
+				"message": "raw",
+			},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+
+	_, status, err := NewManager(cfg).Rebuild(t.Context())
+	if err == nil {
+		t.Fatal("expected structured sidecar error to fail")
+	}
+	// An unrecognized code must not be echoed back verbatim.
+	if strings.Contains(status.ErrorCode, "GVAS") || strings.Contains(status.ErrorCode, "\\x") {
+		t.Fatalf("unknown code leaked into ErrorCode: %q", status.ErrorCode)
+	}
+}
+
+func TestEnsureFreshTriggersOneBackgroundRebuildWhenStale(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	var calls int32
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"version":      1,
+				"generated_at": "2026-07-09T00:00:00Z",
+				"parser":       "test",
+				"warnings":     []string{},
+				"players":      []map[string]any{{"player_uid": "p1", "nickname": "Tester"}},
+				"guilds":       []map[string]any{},
+				"bases":        []map[string]any{},
+				"pals":         []map[string]any{},
+				"containers":   []map[string]any{},
+				"map_entities": []map[string]any{},
+			},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+	m := NewManager(cfg)
+
+	if _, _, err := m.Rebuild(t.Context()); err != nil {
+		t.Fatalf("initial Rebuild: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("expected 1 indexer call after initial rebuild, got %d", got)
+	}
+
+	// Change the world so the cached fingerprint is stale.
+	writeWorld(t, root, "level-two-changed")
+
+	// Multiple concurrent EnsureFresh calls must coalesce into one rebuild.
+	for i := 0; i < 5; i++ {
+		m.EnsureFresh(t.Context())
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&calls) >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("expected exactly one background rebuild (2 total calls), got %d", got)
+	}
+
+	// Debounce: immediate follow-up calls must not trigger another rebuild.
+	for i := 0; i < 5; i++ {
+		m.EnsureFresh(t.Context())
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("debounce failed: expected 2 total calls, got %d", got)
+	}
+}
+
+func TestEnsureFreshDoesNothingWhenCacheIsFresh(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	var calls int32
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":   true,
+			"data": map[string]any{"version": 1, "generated_at": "2026-07-09T00:00:00Z", "parser": "test"},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+	m := NewManager(cfg)
+	if _, _, err := m.Rebuild(t.Context()); err != nil {
+		t.Fatalf("initial Rebuild: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		m.EnsureFresh(t.Context())
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("fresh cache must not rebuild: expected 1 call, got %d", got)
 	}
 }
 

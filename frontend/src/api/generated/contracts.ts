@@ -625,6 +625,52 @@ export interface components {
       "message"?: string;
       "waittime"?: number;
     };
+    "SaveImportCandidate": {
+      "errors": Array<string>;
+      "id": string;
+      "level_sha256": string;
+      "level_size": number;
+      "player_count": number;
+      "relative_path": string;
+      "valid": boolean;
+      "warnings": Array<string>;
+      "world_id"?: string;
+    };
+    "SaveImportCommitRequest": {
+      "candidate_id"?: string;
+      "inspection_id": string;
+      "name"?: string;
+    };
+    "SaveImportConflictEnvelope": {
+      "error": {
+        "candidates"?: Array<components["schemas"]["SaveImportCandidate"]>;
+        "code": string;
+        "expires_at"?: string;
+        "inspection_id"?: string;
+        "message": string;
+      };
+      "ok": false;
+    };
+    "SaveImportInspectRequest": {
+      "file": string;
+      "name"?: string;
+    };
+    "SaveImportInspection": {
+      "candidates": Array<components["schemas"]["SaveImportCandidate"]>;
+      "expires_at": string;
+      "file_name": string;
+      "id": string;
+      "name"?: string;
+      "requires_selection": boolean;
+      "selected_candidate_id": string;
+    };
+    "SaveImportInspectionEnvelope": {
+      "data": components["schemas"]["SaveImportInspection"];
+      "ok": true;
+    };
+    "SaveImportSelectRequest": {
+      "candidate_id": string;
+    };
     "SaveSourceImportRequest": {
       "file": string;
       "name"?: string;

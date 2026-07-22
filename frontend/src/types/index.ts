@@ -936,6 +936,7 @@ export interface SaveIndexStatus {
   updated_at: string;
   duration_ms: number;
   error?: string;
+  error_code?: string;
   warnings: string[];
   counts: SaveIndexCounts;
   parser?: string;

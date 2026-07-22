@@ -17,6 +17,7 @@ import (
 )
 
 func (s Server) saveIndexStatus(c *gin.Context) {
+	s.saveIndex.EnsureFresh(c.Request.Context())
 	ok(c, s.saveIndex.Status(c.Request.Context()))
 }
 
@@ -45,7 +46,7 @@ func (s Server) listSavePlayers(c *gin.Context) {
 	}
 	online := s.onlinePlayers(c)
 	status = statusWithOnlineState(status, online)
-	players := overlayOnlinePlayers(index.Players, online.Players)
+	players := mergeSaveAndOnline(index.Players, online.Players)
 	players = filterPlayers(players, c)
 	limit, offset := limitOffset(c)
 	paged, summary := paginate(players, limit, offset)
@@ -59,7 +60,7 @@ func (s Server) getSavePlayer(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	players := overlayOnlinePlayers(index.Players, s.onlinePlayers(c).Players)
+	players := mergeSaveAndOnline(index.Players, s.onlinePlayers(c).Players)
 	for _, player := range players {
 		if matchesID(id, player.PlayerUID, player.SteamID) {
 			ok(c, gin.H{"player": flattenPlayer(player), "status": status})
@@ -93,7 +94,7 @@ func (s Server) listSaveGuilds(c *gin.Context) {
 	online := s.onlinePlayers(c)
 	status = statusWithOnlineState(status, online)
 	guilds := append([]saveindex.Guild(nil), index.Guilds...)
-	applyGuildOnlineCounts(guilds, online.Players)
+	applyGuildOnlineCounts(guilds, mergeSaveAndOnline(index.Players, online.Players))
 	guilds = filterGuilds(guilds, c)
 	guilds = localizeGuilds(guilds)
 	limit, offset := limitOffset(c)
@@ -108,7 +109,8 @@ func (s Server) getSaveGuild(c *gin.Context) {
 		return
 	}
 	guilds := append([]saveindex.Guild(nil), index.Guilds...)
-	applyGuildOnlineCounts(guilds, s.onlinePlayers(c).Players)
+	online := s.onlinePlayers(c)
+	applyGuildOnlineCounts(guilds, mergeSaveAndOnline(index.Players, online.Players))
 	id := c.Param("id")
 	for _, guild := range guilds {
 		if matchesID(id, guild.ID, guild.OwnerPlayerUID, guild.Name, pallocalize.GuildName(guild.Name)) {
@@ -220,6 +222,10 @@ func (s Server) listMapEntities(c *gin.Context) {
 }
 
 func (s Server) currentSaveIndex(c *gin.Context) (saveindex.Index, saveindex.Status, error) {
+	// Access-driven lazy refresh: if the cache is stale relative to the save
+	// files, kick off a single debounced background rebuild. This call returns
+	// the current cache immediately; the next request sees the refreshed index.
+	s.saveIndex.EnsureFresh(c.Request.Context())
 	return s.saveIndex.Current(c.Request.Context())
 }
 
@@ -421,7 +427,7 @@ func flattenMapEntities(entities []saveindex.MapEntity) []gin.H {
 }
 
 func buildMapEntities(index saveindex.Index, online map[string]onlinePlayer) []gin.H {
-	players := overlayOnlinePlayers(index.Players, online)
+	players := mergeSaveAndOnline(index.Players, online)
 	entities := make([]gin.H, 0, len(players)+len(index.Bases)+len(index.Pals)+len(index.MapEntities))
 	for _, player := range players {
 		liveLocation := player.IsOnline && onlinePlayerHasCoordinates(online, player)
@@ -537,73 +543,12 @@ type onlinePlayersResult struct {
 	Error     string
 }
 
-func overlayOnlinePlayers(players []saveindex.Player, online map[string]onlinePlayer) []saveindex.Player {
-	out := append([]saveindex.Player(nil), players...)
-	seen := map[string]bool{}
-	for i := range out {
-		for _, key := range []string{out[i].PlayerUID, out[i].SteamID} {
-			if item, ok := online[normalizedPlayerKey(key)]; ok {
-				out[i].IsOnline = true
-				out[i].Ping = item.Ping
-				out[i].IP = item.IP
-				if item.Nickname != "" {
-					out[i].Nickname = item.Nickname
-				}
-				if item.SteamID != "" {
-					out[i].SteamID = item.SteamID
-				}
-				if item.PlayerUID != "" {
-					out[i].PlayerUID = item.PlayerUID
-				}
-				if coordinatesAvailable(item.Location) {
-					out[i].Location = item.Location
-				}
-				markOnlinePlayerSeen(seen, item)
-				markOnlinePlayerSeen(seen, onlinePlayer{PlayerUID: out[i].PlayerUID, SteamID: out[i].SteamID})
-			}
-		}
-	}
-	for _, item := range online {
-		if onlinePlayerSeen(seen, item) || (strings.TrimSpace(item.PlayerUID) == "" && strings.TrimSpace(item.SteamID) == "") {
-			continue
-		}
-		out = append(out, saveindex.Player{
-			PlayerUID: item.PlayerUID,
-			SteamID:   item.SteamID,
-			Nickname:  item.Nickname,
-			IsOnline:  true,
-			Location:  item.Location,
-			Ping:      item.Ping,
-			IP:        item.IP,
-		})
-		markOnlinePlayerSeen(seen, item)
-	}
-	return out
-}
-
 func normalizedPlayerKey(value string) string {
 	key := strings.ToLower(strings.TrimSpace(value))
 	if strings.HasPrefix(key, "steam_") && len(key) > len("steam_") {
 		return key[len("steam_"):]
 	}
 	return key
-}
-
-func markOnlinePlayerSeen(seen map[string]bool, player onlinePlayer) {
-	for _, value := range []string{player.PlayerUID, player.SteamID} {
-		if key := normalizedPlayerKey(value); key != "" {
-			seen[key] = true
-		}
-	}
-}
-
-func onlinePlayerSeen(seen map[string]bool, player onlinePlayer) bool {
-	for _, value := range []string{player.PlayerUID, player.SteamID} {
-		if key := normalizedPlayerKey(value); key != "" && seen[key] {
-			return true
-		}
-	}
-	return false
 }
 
 func onlinePlayerHasCoordinates(online map[string]onlinePlayer, player saveindex.Player) bool {
@@ -684,19 +629,10 @@ func onlinePlayersFromPalDefender(response paldefender.RESTPlayersResponse) map[
 }
 
 func mergeOnlinePlayers(primary, preferred map[string]onlinePlayer) map[string]onlinePlayer {
-	merged := make(map[string]onlinePlayer, len(primary)+len(preferred))
-	for key, player := range primary {
-		merged[key] = player
-	}
-	for key, player := range preferred {
-		if !coordinatesAvailable(player.Location) {
-			if fallback, ok := merged[key]; ok && coordinatesAvailable(fallback.Location) {
-				player.Location = fallback.Location
-			}
-		}
-		merged[key] = player
-	}
-	return merged
+	registry := newOnlinePlayerRegistry()
+	registry.overlay(primary, false)
+	registry.overlay(preferred, true)
+	return registry.players()
 }
 
 func parseOnlinePlayers(bodyValue any) map[string]onlinePlayer {
@@ -759,11 +695,22 @@ func statusWithOnlineState(status saveindex.Status, online onlinePlayersResult) 
 	return status
 }
 
-func applyGuildOnlineCounts(guilds []saveindex.Guild, online map[string]onlinePlayer) {
+func applyGuildOnlineCounts(guilds []saveindex.Guild, players []saveindex.Player) {
+	online := make(map[string]bool, len(players)*2)
+	for _, player := range players {
+		if !player.IsOnline {
+			continue
+		}
+		for _, value := range []string{player.PlayerUID, player.SteamID} {
+			if key := identityKey(value); key != "" {
+				online[key] = true
+			}
+		}
+	}
 	for i := range guilds {
 		count := 0
 		for _, member := range guilds[i].Members {
-			if _, ok := online[strings.ToLower(member.PlayerUID)]; ok {
+			if online[identityKey(member.PlayerUID)] {
 				count++
 			}
 		}

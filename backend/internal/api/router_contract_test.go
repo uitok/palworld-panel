@@ -277,6 +277,11 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	type schemaReference struct {
 		Ref string `yaml:"$ref"`
 	}
+	type response struct {
+		Content map[string]struct {
+			Schema schemaReference `yaml:"schema"`
+		} `yaml:"content"`
+	}
 	type operation struct {
 		Permission string `yaml:"x-palpanel-permission"`
 		Parameters []struct {
@@ -289,7 +294,7 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 				Schema schemaReference `yaml:"schema"`
 			} `yaml:"content"`
 		} `yaml:"requestBody"`
-		Responses map[string]any `yaml:"responses"`
+		Responses map[string]response `yaml:"responses"`
 	}
 	var spec struct {
 		Paths map[string]struct {
@@ -375,7 +380,13 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	assertRequestSchema("/mods/import/inspect", "multipart/form-data", "ModImportUploadRequest")
 	assertRequestSchema("/mods/import/inspect/{id}/select", "application/json", "ModImportSelectRequest")
 	assertRequestSchema("/mods/import", "application/json", "ModImportRequest")
+	assertRequestSchema("/save-sources/import/inspect", "multipart/form-data", "SaveImportInspectRequest")
+	assertRequestSchema("/save-sources/import/inspect/{id}/select", "application/json", "SaveImportSelectRequest")
 	assertRequestSchema("/save-sources/import", "multipart/form-data", "SaveSourceImportRequest")
+	assertRequestSchema("/save-sources/import", "application/json", "SaveImportCommitRequest")
+	if got := spec.Paths["/save-sources/import"].Post.Responses["409"].Content["application/json"].Schema.Ref; got != "#/components/schemas/SaveImportConflictEnvelope" {
+		t.Errorf("save import 409 response schema = %q", got)
+	}
 	assertRequestSchema("/security/paldefender/gm/players/{id}/items", "application/json", "PalDefenderGiveItemsRequest")
 	assertRequestSchema("/security/paldefender/gm/players/{id}/message", "application/json", "PalDefenderMessageRequest")
 	assertRequestSchema("/security/paldefender/gm/broadcast", "application/json", "PalDefenderBroadcastRequest")

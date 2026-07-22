@@ -61,6 +61,7 @@ type Server struct {
 	authLimiter   *authRateLimiter
 	cache         *ttlCache
 	gmIdempotency *gmIdempotencyStore
+	saveImports   *saveImportInspectionStore
 	webUI         fs.FS
 }
 
@@ -69,6 +70,9 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 	webFiles, _ := webui.Load(cfg.FrontendDist)
 	saveManager := saveindex.NewManager(cfg)
 	initializeSaveSources(cfg, store, saveManager)
+	if err := cleanupSaveImportInspections(cfg); err != nil {
+		log.Printf("save import inspection cleanup failed: %v", err)
+	}
 	networkProxyService := networkproxy.New(cfg)
 	var communityService *communityservers.Service
 	var communityAPI *CommunityServersHandler
@@ -89,7 +93,7 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 			communityAPI = NewCommunityServersHandler(service)
 		}
 	}
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), networkProxy: networkProxyService, auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), networkProxy: networkProxyService, auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), saveImports: newSaveImportInspectionStore(defaultSaveImportInspectionTTL), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))

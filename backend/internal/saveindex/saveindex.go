@@ -21,6 +21,8 @@ import (
 
 var ErrDisabled = errors.New("save indexer is disabled")
 
+const staleAfterRebuildFailureWarning = "returning stale save index after rebuild failed"
+
 type Manager struct {
 	cfg         appconfig.Config
 	client      *http.Client
@@ -31,7 +33,15 @@ type Manager struct {
 	cache       *cacheFile
 	cacheMTime  time.Time
 	cacheLoaded bool
+
+	autoMu          sync.Mutex
+	rebuildInFlight bool
+	lastAutoRebuild time.Time
 }
+
+// autoRebuildDebounce throttles access-driven rebuilds so a rapidly autosaving
+// server cannot trigger a parse storm.
+const autoRebuildDebounce = 10 * time.Second
 
 func NewManager(cfg appconfig.Config) *Manager {
 	timeout := time.Duration(cfg.SaveIndexTimeoutSeconds) * time.Second
@@ -193,6 +203,7 @@ type Status struct {
 	UpdatedAt  string   `json:"updated_at"`
 	DurationMS int      `json:"duration_ms"`
 	Error      string   `json:"error,omitempty"`
+	ErrorCode  string   `json:"error_code,omitempty"`
 	Warnings   []string `json:"warnings"`
 	Counts     Counts   `json:"counts"`
 	Parser     string   `json:"parser,omitempty"`
@@ -217,6 +228,43 @@ type sidecarEnvelope struct {
 type sidecarError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// IndexerError wraps a failure reported by the sav-cli sidecar. Only the safe,
+// enumerated Code is exposed; the sidecar's raw Message is never propagated
+// because it can contain binary save-file fragments.
+type IndexerError struct {
+	Code     string
+	Warnings []string
+}
+
+func (e *IndexerError) Error() string {
+	if e == nil || e.Code == "" {
+		return "save indexer failed; inspect the sav-cli text logs"
+	}
+	return "save indexer failed (" + e.Code + "); inspect the sav-cli text logs"
+}
+
+// knownIndexerCodes is the allowlist of sidecar error codes that are safe to
+// surface to the panel. Codes outside this set are discarded so an untrusted
+// or corrupted sidecar cannot inject arbitrary text into diagnostics.
+var knownIndexerCodes = map[string]bool{
+	"parser_incompatible": true,
+	"save_path_not_found": true,
+	"level_sav_not_found": true,
+	"index_failed":        true,
+	"save_path_required":  true,
+	"bad_request":         true,
+	"method_not_allowed":  true,
+	"json_encode_failed":  true,
+}
+
+func safeIndexerCode(code string) string {
+	code = strings.TrimSpace(code)
+	if knownIndexerCodes[code] {
+		return code
+	}
+	return ""
 }
 
 func EmptyIndex() Index {
@@ -250,7 +298,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 		status.Error = err.Error()
 		return status
 	}
-	status := cached.Status
+	status := normalizeCachedStatus(cached.Status)
 	status.Enabled = true
 	status.SourcePath = worldDir
 	status.CachePath = m.cachePath()
@@ -281,10 +329,13 @@ func (m *Manager) Current(ctx context.Context) (Index, Status, error) {
 		status.Error = err.Error()
 		return index, status, err
 	}
-	status := cached.Status
+	status := normalizeCachedStatus(cached.Status)
 	status.Enabled = true
 	status.SourcePath = worldDir
 	status.CachePath = m.cachePath()
+	if status.Counts == (Counts{}) {
+		status.Counts = cached.Index.Counts
+	}
 	if cached.Fingerprint != fp {
 		status.State = "stale"
 		status.Stale = true
@@ -309,12 +360,28 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 	index, err := m.callIndexer(ctx, worldDir)
 	if err != nil {
 		status := Status{Enabled: true, State: "error", Stale: false, SourcePath: worldDir, Error: err.Error(), Warnings: []string{}, CachePath: m.cachePath()}
+		var indexerErr *IndexerError
+		if errors.As(err, &indexerErr) {
+			status.ErrorCode = indexerErr.Code
+			for _, warning := range indexerErr.Warnings {
+				status.Warnings = appendUnique(status.Warnings, warning)
+			}
+			if indexerErr.Code == "parser_incompatible" && m.probeOodleUnavailable(ctx) {
+				status.Warnings = appendUnique(status.Warnings, oodleUnavailableWarning)
+			}
+		}
 		if cached, cacheErr := m.loadCache(); cacheErr == nil {
-			cached.Status.State = "error"
+			cached.Status = normalizeCachedStatus(cached.Status)
+			cached.Status.State = "stale"
 			cached.Status.Stale = true
-			cached.Status.Error = err.Error()
+			cached.Status.Error = status.Error
+			cached.Status.ErrorCode = status.ErrorCode
 			cached.Status.CachePath = m.cachePath()
-			cached.Index.Warnings = appendUnique(cached.Index.Warnings, "returning stale save index after rebuild failed")
+			for _, warning := range status.Warnings {
+				cached.Status.Warnings = appendUnique(cached.Status.Warnings, warning)
+			}
+			cached.Status.Warnings = appendUnique(cached.Status.Warnings, staleAfterRebuildFailureWarning)
+			cached.Index.Warnings = appendUnique(cached.Index.Warnings, staleAfterRebuildFailureWarning)
 			_ = m.saveCache(cached.Fingerprint, cached.Index, cached.Status)
 			return cached.Index, cached.Status, err
 		}
@@ -365,6 +432,49 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 		return index, status, err
 	}
 	return index, status, nil
+}
+
+// EnsureFresh triggers a single background rebuild when the cached index is
+// stale relative to the current save files. It never blocks the caller: the
+// current (possibly stale) cache is served immediately and the next request
+// picks up the refreshed index. Concurrent calls coalesce, and a debounce
+// window prevents a rapidly autosaving server from causing a parse storm.
+func (m *Manager) EnsureFresh(ctx context.Context) {
+	if !m.cfg.SaveIndexerEnabled {
+		return
+	}
+	_, fp, err := m.fingerprint()
+	if err != nil {
+		return
+	}
+	cached, err := m.loadCache()
+	if err != nil || cached.Fingerprint == fp {
+		// No cache yet (leave the first build to an explicit action) or already
+		// current — nothing to do.
+		return
+	}
+
+	m.autoMu.Lock()
+	if m.rebuildInFlight || time.Since(m.lastAutoRebuild) < autoRebuildDebounce {
+		m.autoMu.Unlock()
+		return
+	}
+	m.rebuildInFlight = true
+	m.lastAutoRebuild = time.Now()
+	m.autoMu.Unlock()
+
+	go func() {
+		defer func() {
+			m.autoMu.Lock()
+			m.rebuildInFlight = false
+			m.autoMu.Unlock()
+		}()
+		// Detach from the request context so a returning client does not cancel
+		// the rebuild mid-parse.
+		rebuildCtx, cancel := context.WithTimeout(context.Background(), time.Duration(m.cfg.SaveIndexTimeoutSeconds+30)*time.Second)
+		defer cancel()
+		_, _, _ = m.Rebuild(rebuildCtx)
+	}()
 }
 
 func (m *Manager) FindWorldDir() (string, error) {
@@ -448,7 +558,7 @@ func (m *Manager) callIndexer(ctx context.Context, worldDir string) (Index, erro
 	}
 	if resp.StatusCode >= 400 || !envelope.OK {
 		if envelope.Error != nil {
-			return Index{}, errors.New("save indexer failed; inspect the sav-cli text logs")
+			return Index{}, &IndexerError{Code: safeIndexerCode(envelope.Error.Code), Warnings: append([]string(nil), envelope.Warnings...)}
 		}
 		return Index{}, fmt.Errorf("save indexer returned status %d", resp.StatusCode)
 	}
@@ -460,29 +570,55 @@ func (m *Manager) callIndexer(ctx context.Context, worldDir string) (Index, erro
 	return index, nil
 }
 
+// probeOodleUnavailable reports whether the sav-cli sidecar advertises that it
+// cannot decompress Oodle-compressed (PlM) saves. A no-cgo sidecar starts and
+// passes /health yet fails every PlM save, so this turns an opaque
+// parser_incompatible into an actionable warning.
+func (m *Manager) probeOodleUnavailable(ctx context.Context) bool {
+	url := strings.TrimRight(m.cfg.SaveIndexerURL, "/") + "/health"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Oodle *bool `json:"oodle"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return false
+	}
+	return envelope.Data.Oodle != nil && !*envelope.Data.Oodle
+}
+
+const oodleUnavailableWarning = "sav-cli was built without cgo/Oodle support; Oodle-compressed (PlM) saves cannot be parsed. Use a release build with cgo enabled."
+
 func (m *Manager) cachePath() string {
 	return filepath.Join(m.cfg.SaveIndexCacheDir, "index-cache.json")
 }
 
 func (m *Manager) loadCache() (cacheFile, error) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+
 	path := m.cachePath()
 	st, err := os.Stat(path)
 	if err != nil {
-		m.cacheMu.Lock()
 		m.cache = nil
 		m.cacheLoaded = false
 		m.cacheMTime = time.Time{}
-		m.cacheMu.Unlock()
 		return cacheFile{}, err
 	}
 
-	m.cacheMu.Lock()
 	if m.cacheLoaded && m.cache != nil && m.cacheMTime.Equal(st.ModTime()) {
-		cached := *m.cache
-		m.cacheMu.Unlock()
-		return cached, nil
+		return *m.cache, nil
 	}
-	m.cacheMu.Unlock()
 
 	var cached cacheFile
 	b, err := os.ReadFile(path)
@@ -493,11 +629,9 @@ func (m *Manager) loadCache() (cacheFile, error) {
 		return cached, err
 	}
 	ensureSlices(&cached.Index)
-	m.cacheMu.Lock()
 	m.cache = &cached
 	m.cacheMTime = st.ModTime()
 	m.cacheLoaded = true
-	m.cacheMu.Unlock()
 	return cached, nil
 }
 
@@ -515,18 +649,40 @@ func (m *Manager) saveCache(fingerprint string, index Index, status Status) erro
 	if err != nil {
 		return err
 	}
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+
 	path := m.cachePath()
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	temporary, err := os.CreateTemp(m.cfg.SaveIndexCacheDir, ".index-cache-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(b); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
 	st, err := os.Stat(path)
 	if err == nil {
-		m.cacheMu.Lock()
 		copy := cached
 		m.cache = &copy
 		m.cacheMTime = st.ModTime()
 		m.cacheLoaded = true
-		m.cacheMu.Unlock()
 	}
 	return nil
 }
@@ -643,11 +799,27 @@ func countsFor(index Index) Counts {
 	}
 }
 
-func appendUnique(items []string, value string) []string {
-	for _, item := range items {
-		if item == value {
-			return items
+func normalizeCachedStatus(status Status) Status {
+	if status.State == "error" && status.Stale {
+		status.State = "stale"
+		status.Error = ""
+		status.Warnings = appendUnique(status.Warnings, staleAfterRebuildFailureWarning)
+	}
+	return status
+}
+
+func appendUnique(items []string, values ...string) []string {
+	for _, value := range values {
+		found := false
+		for _, item := range items {
+			if item == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			items = append(items, value)
 		}
 	}
-	return append(items, value)
+	return items
 }

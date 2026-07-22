@@ -85,7 +85,7 @@ func TestOverlayOnlinePlayersUsesLiveCoordinatesWithoutDuplicates(t *testing.T) 
 		"player-uid": live,
 		"steam-id":   live,
 	}
-	players := overlayOnlinePlayers([]saveindex.Player{{
+	players := mergeSaveAndOnline([]saveindex.Player{{
 		PlayerUID: "player-uid",
 		SteamID:   "steam-id",
 		Nickname:  "存档玩家",
@@ -94,8 +94,8 @@ func TestOverlayOnlinePlayersUsesLiveCoordinatesWithoutDuplicates(t *testing.T) 
 	if len(players) != 1 {
 		t.Fatalf("online player was duplicated: %#v", players)
 	}
-	if !players[0].IsOnline || players[0].Nickname != "在线玩家" || players[0].Location != location {
-		t.Fatalf("live player data did not override the save snapshot: %#v", players[0])
+	if !players[0].IsOnline || players[0].Nickname != "存档玩家" || players[0].Location != location {
+		t.Fatalf("live state did not preserve the save profile: %#v", players[0])
 	}
 }
 
@@ -109,7 +109,7 @@ func TestOverlayOnlinePlayersMatchesSteamPrefixVariants(t *testing.T) {
 		normalizedPlayerKey(live.PlayerUID): live,
 		normalizedPlayerKey(live.SteamID):   live,
 	}
-	players := overlayOnlinePlayers([]saveindex.Player{{
+	players := mergeSaveAndOnline([]saveindex.Player{{
 		PlayerUID: "save-player-uid",
 		SteamID:   "76561198370732375",
 		Nickname:  "玛卡巴卡",
@@ -126,7 +126,7 @@ func TestOverlayOnlinePlayersMatchesSteamPrefixVariants(t *testing.T) {
 
 func TestOverlayOnlinePlayersPreservesSaveCoordinatesWhenRESTHasNone(t *testing.T) {
 	saveLocation := saveindex.Coordinates{X: 11, Y: 22, Z: 33}
-	players := overlayOnlinePlayers([]saveindex.Player{{
+	players := mergeSaveAndOnline([]saveindex.Player{{
 		PlayerUID: "player-uid",
 		SteamID:   "steam-id",
 		Location:  saveLocation,
@@ -246,9 +246,19 @@ func TestSaveIndexQueryHelpersAndFilters(t *testing.T) {
 	}
 
 	guilds := []saveindex.Guild{{ID: "guild-1", Name: "Guild", Members: []saveindex.GuildMember{{PlayerUID: "online"}, {PlayerUID: "offline"}}}}
-	applyGuildOnlineCounts(guilds, map[string]onlinePlayer{"online": {PlayerUID: "online"}})
+	applyGuildOnlineCounts(guilds, []saveindex.Player{{PlayerUID: "online", IsOnline: true}})
 	if guilds[0].OnlineMemberCount != 1 {
 		t.Fatalf("applyGuildOnlineCounts = %#v", guilds)
+	}
+
+	steamOnly := mergeSaveAndOnline(
+		[]saveindex.Player{{PlayerUID: "member-uid", SteamID: "steam_member"}},
+		map[string]onlinePlayer{"member": {SteamID: "member"}},
+	)
+	steamGuild := []saveindex.Guild{{ID: "guild-steam", Members: []saveindex.GuildMember{{PlayerUID: "member-uid"}}}}
+	applyGuildOnlineCounts(steamGuild, steamOnly)
+	if steamGuild[0].OnlineMemberCount != 1 {
+		t.Fatalf("SteamID-only online player was not counted through the merged identity: %#v", steamGuild)
 	}
 
 	players := []saveindex.Player{

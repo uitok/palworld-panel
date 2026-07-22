@@ -32,11 +32,61 @@
   --pp-ink-2: #66717e;
   --pp-ink-3: #6a7480;
 
+  /* Tailwind compatibility palettes. index.css references these tokens so
+     utility classes and pp components share one source of visual truth. */
+  --pp-color-slate-50: var(--pp-bg);
+  --pp-color-slate-100: var(--pp-surface-3);
+  --pp-color-slate-200: var(--pp-line);
+  --pp-color-slate-300: var(--pp-line-strong);
+  --pp-color-slate-400: #86898d;
+  --pp-color-slate-500: var(--pp-ink-2);
+  --pp-color-slate-600: #56616d;
+  --pp-color-slate-700: #46515e;
+  --pp-color-slate-800: #384452;
+  --pp-color-slate-900: var(--pp-ink);
+  --pp-color-slate-950: #29323e;
+
   /* ---------- 品牌色（雾霾蓝） ---------- */
   --pp-brand: #356a9a;
   --pp-brand-strong: #2b5a86;
   --pp-brand-soft: #e4edf5;
   --pp-brand-ring: rgba(53, 106, 154, 0.22);
+
+  --pp-color-sky-50: #edf4fa;
+  --pp-color-sky-100: #dceaf5;
+  --pp-color-sky-200: #bdd7ea;
+  --pp-color-sky-300: #91bbd8;
+  --pp-color-sky-400: #6499bd;
+  --pp-color-sky-500: var(--pp-brand);
+  --pp-color-sky-600: var(--pp-brand-strong);
+  --pp-color-sky-700: #274d70;
+  --pp-color-sky-800: #26415d;
+  --pp-color-sky-900: #25384e;
+  --pp-color-sky-950: #172331;
+
+  --pp-color-emerald-50: #eef4ec;
+  --pp-color-emerald-100: #dceadb;
+  --pp-color-emerald-200: #bcd6ba;
+  --pp-color-emerald-300: #93bd90;
+  --pp-color-emerald-400: #6ba268;
+  --pp-color-emerald-500: #4f8a4d;
+  --pp-color-emerald-600: #427c40;
+  --pp-color-emerald-700: #386a36;
+  --pp-color-emerald-800: #30562f;
+  --pp-color-emerald-900: #294628;
+  --pp-color-emerald-950: #172a17;
+
+  --pp-color-blue-50: #f0f5ff;
+  --pp-color-blue-100: #dfe9ff;
+  --pp-color-blue-200: #c7d8ff;
+  --pp-color-blue-300: #9fbcff;
+  --pp-color-blue-400: #7198ff;
+  --pp-color-blue-500: #4f7cff;
+  --pp-color-blue-600: #3f61f1;
+  --pp-color-blue-700: #344ed6;
+  --pp-color-blue-800: #2d42ad;
+  --pp-color-blue-900: #293d88;
+  --pp-color-blue-950: #192452;
 
   /* ---------- 浅色侧栏（暖砂岩） ---------- */
   --pp-rail: #ece6dc;
@@ -48,8 +98,8 @@
   --pp-rail-accent: #356a9a;
 
   /* ---------- 语义色 ---------- */
-  --pp-ok: #2f73b7;
-  --pp-ok-soft: #e5eff8;
+  --pp-ok: var(--pp-color-emerald-600);
+  --pp-ok-soft: var(--pp-color-emerald-50);
   --pp-warn: #9a6500;
   --pp-warn-soft: #f8edd2;
   --pp-danger: #b85443;
@@ -68,6 +118,14 @@
   --pp-radius-lg: 14px;   /* 卡片 */
   --pp-radius-pill: 999px;
 
+  --pp-radius-tailwind-sm: 0.5rem;
+  --pp-radius-tailwind-md: 0.65rem;
+  --pp-radius-tailwind-lg: 0.8rem;
+  --pp-radius-tailwind-xl: 1rem;
+  --pp-radius-tailwind-2xl: 1.25rem;
+  --pp-radius-tailwind-3xl: 1.5rem;
+  --pp-radius-tailwind-4xl: 1.9rem;
+
   --pp-gap-1: 4px;
   --pp-gap-2: 8px;
   --pp-gap-3: 12px;
@@ -77,11 +135,16 @@
   --pp-gap-8: 32px;
 
   --pp-rail-w: 236px;     /* 侧栏宽度 */
-  --pp-content-max: 1180px;
+  /* 内容最大宽度：随视口在 1180–1560px 间流式伸缩，宽屏/全屏减少留白，
+     窄屏保持可读。单一来源，compat.css 与 index.css 均引用此值。 */
+  --pp-content-max: clamp(1180px, 90vw, 1560px);
 
   /* ---------- 阴影（克制：默认靠边框，浮层才用影） ---------- */
   --pp-shadow-pop: 0 8px 28px rgba(64, 75, 86, 0.16);
   --pp-shadow-card-hover: 0 2px 10px rgba(64, 75, 86, 0.08);
+  --pp-shadow-sm: 0 1px 2px rgb(16 24 40 / 0.05);
+  --pp-shadow-md: 0 8px 24px -14px rgb(16 24 40 / 0.22);
+  --pp-shadow-lg: 0 18px 46px -24px rgb(16 24 40 / 0.28);
 
   /* ---------- 动效 ---------- */
   --pp-ease: cubic-bezier(0.22, 0.61, 0.36, 1);

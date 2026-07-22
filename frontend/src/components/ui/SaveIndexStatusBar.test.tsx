@@ -26,4 +26,43 @@ describe('SaveIndexStatusBar', () => {
     fireEvent.click(screen.getByText('查看解析警告详情（2）'));
     expect(details).toHaveAttribute('open');
   });
+
+  it('shows stale cached data instead of a fatal parse failure', () => {
+    render(<SaveIndexStatusBar status={{
+      enabled: true,
+      state: 'error',
+      stale: true,
+      source_path: 'Level.sav',
+      updated_at: '2026-07-20T00:55:14Z',
+      duration_ms: 10,
+      parser: 'palpanel-sav-cli-go',
+      error: 'save indexer failed; inspect the sav-cli text logs',
+      error_code: 'parser_incompatible',
+      counts: { players: 15, guilds: 8, bases: 29, pals: 3548, containers: 0, map_entities: 0 },
+      warnings: ['returning stale save index after rebuild failed'],
+    }} onRefresh={vi.fn()} onRebuild={vi.fn()} />);
+
+    expect(screen.getByText('存档索引已过期')).toBeInTheDocument();
+    expect(screen.queryByText('存档解析失败')).not.toBeInTheDocument();
+    expect(screen.getByText('parser_incompatible')).toBeInTheDocument();
+  });
+
+  it('maps a fatal error code to an actionable Chinese hint', () => {
+    render(<SaveIndexStatusBar status={{
+      enabled: true,
+      state: 'error',
+      stale: false,
+      source_path: 'Level.sav',
+      updated_at: '2026-07-20T00:55:14Z',
+      duration_ms: 10,
+      parser: 'palpanel-sav-cli-go',
+      error: 'save indexer failed (parser_incompatible); inspect the sav-cli text logs',
+      error_code: 'parser_incompatible',
+      counts: { players: 0, guilds: 0, bases: 0, pals: 0, containers: 0, map_entities: 0 },
+      warnings: [],
+    }} onRefresh={vi.fn()} onRebuild={vi.fn()} />);
+
+    expect(screen.getByText(/存档格式不兼容/)).toBeInTheDocument();
+    expect(screen.getByText('parser_incompatible')).toBeInTheDocument();
+  });
 });

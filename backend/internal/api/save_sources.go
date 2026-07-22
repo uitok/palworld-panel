@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,7 +17,6 @@ import (
 	"palpanel/internal/appconfig"
 	"palpanel/internal/breeding"
 	"palpanel/internal/db"
-	"palpanel/internal/id"
 	"palpanel/internal/saveindex"
 )
 
@@ -49,75 +47,7 @@ func (s Server) listSaveSources(c *gin.Context) {
 }
 
 func (s Server) importSaveSource(c *gin.Context) {
-	file, header, err := c.Request.FormFile("file")
-	if err != nil {
-		fail(c, http.StatusBadRequest, "save_archive_required", "a ZIP or TAR archive is required")
-		return
-	}
-	defer file.Close()
-	format, err := saveArchiveFormatForName(header.Filename)
-	if err != nil {
-		fail(c, http.StatusBadRequest, "save_archive_invalid", err.Error())
-		return
-	}
-
-	sourceID := id.New("save")
-	root := filepath.Join(s.cfg.SaveSourcesDir, sourceID)
-	staging := root + ".staging"
-	if err := os.MkdirAll(staging, 0o700); err != nil {
-		fail(c, http.StatusInternalServerError, "save_import_prepare_failed", err.Error())
-		return
-	}
-	defer os.RemoveAll(staging)
-	temporary, err := os.CreateTemp(staging, "upload-*.archive")
-	if err != nil {
-		fail(c, http.StatusInternalServerError, "save_import_prepare_failed", err.Error())
-		return
-	}
-	temporaryPath := temporary.Name()
-	if _, err := io.CopyN(temporary, file, s.cfg.MaxUploadBytes+1); err != nil && !errors.Is(err, io.EOF) {
-		_ = temporary.Close()
-		fail(c, http.StatusBadRequest, "save_archive_read_failed", err.Error())
-		return
-	}
-	info, _ := temporary.Stat()
-	_ = temporary.Close()
-	if info != nil && info.Size() > s.cfg.MaxUploadBytes {
-		fail(c, http.StatusRequestEntityTooLarge, "save_archive_too_large", "save archive exceeds upload limit")
-		return
-	}
-
-	extracted := filepath.Join(staging, "files")
-	if err := extractSaveArchive(temporaryPath, extracted, s.cfg.MaxUploadBytes, format); err != nil {
-		fail(c, http.StatusBadRequest, "save_archive_invalid", err.Error())
-		return
-	}
-	worldDir, err := findImportedWorld(extracted)
-	if err != nil {
-		fail(c, http.StatusBadRequest, "save_world_missing", err.Error())
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
-		fail(c, http.StatusInternalServerError, "save_import_store_failed", err.Error())
-		return
-	}
-	if err := os.Rename(extracted, root); err != nil {
-		fail(c, http.StatusInternalServerError, "save_import_store_failed", err.Error())
-		return
-	}
-	relativeWorld, _ := filepath.Rel(extracted, worldDir)
-	storedWorld := filepath.Join(root, relativeWorld)
-	name := strings.TrimSpace(c.PostForm("name"))
-	if name == "" {
-		name = defaultSaveSourceName(header.Filename)
-	}
-	source := db.SaveSource{ID: sourceID, Name: name, Kind: "import", Path: storedWorld}
-	if err := s.store.UpsertSaveSource(c.Request.Context(), source); err != nil {
-		_ = os.RemoveAll(root)
-		fail(c, http.StatusInternalServerError, "save_source_store_failed", err.Error())
-		return
-	}
-	ok(c, source)
+	s.handleSaveSourceImport(c)
 }
 
 func (s Server) activateSaveSource(c *gin.Context) {

@@ -10,6 +10,7 @@ import (
 
 	"palpanel/sav-cli/internal/buildinfo"
 	"palpanel/sav-cli/internal/indexer"
+	"palpanel/sav-cli/internal/sav"
 )
 
 type Server struct {
@@ -55,6 +56,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"status":        "ok",
 		"version":       indexer.IndexVersion,
 		"parser":        indexer.ParserName,
+		"oodle":         sav.OodleAvailable(),
 		"build_version": info.Version,
 		"commit":        info.Commit,
 		"build_time":    info.BuildTime,

@@ -76,8 +76,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   return (
     <div className="min-h-dvh w-full font-sans text-slate-800">
-      <div className="pp-shell relative overflow-hidden lg:h-dvh lg:min-h-0">
-        <div className="hidden lg:block">
+      <div className="pp-shell relative overflow-hidden">
+        <div className="pp-shell__sidebar">
           <Sidebar />
         </div>
 
@@ -91,7 +91,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
           <main id="app-main">{children}</main>
 
-          <div className="pp-mobile-actions shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 lg:hidden">
+          <div className="pp-mobile-actions shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
             <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
               <button
                 type="button"
@@ -123,7 +123,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       </div>
 
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div className="pp-mobile-nav fixed inset-0 z-50">
           <button
             type="button"
             aria-label={t('ops.closeNavigation')}

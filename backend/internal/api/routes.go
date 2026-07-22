@@ -222,6 +222,8 @@ func (s Server) registerSecurityRoutes(api *gin.RouterGroup) {
 
 func (s Server) registerWorldRoutes(api *gin.RouterGroup) {
 	api.GET("/save-sources", s.listSaveSources)
+	api.POST("/save-sources/import/inspect", Require(PermServerControl), s.inspectSaveSourceImport)
+	api.POST("/save-sources/import/inspect/:id/select", Require(PermServerControl), s.selectSaveSourceImportCandidate)
 	api.POST("/save-sources/import", Require(PermServerControl), s.importSaveSource)
 	api.POST("/save-sources/:id/activate", Require(PermServerControl), s.activateSaveSource)
 	api.POST("/save-sources/:id/rebuild", Require(PermServerControl), s.rebuildSaveSource)
