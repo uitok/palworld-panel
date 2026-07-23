@@ -411,12 +411,13 @@ func (s Server) serverBootstrap(c *gin.Context) {
 func (s Server) serverLogs(c *gin.Context) {
 	tail, _ := strconv.Atoi(c.DefaultQuery("tail", "200"))
 	query := server.LogQuery{
-		Tail:   tail,
-		Search: c.Query("search"),
-		Level:  c.Query("level"),
-		Since:  c.Query("since"),
+		Channel: c.Query("channel"),
+		Tail:    tail,
+		Search:  c.Query("search"),
+		Level:   c.Query("level"),
+		Since:   c.Query("since"),
 	}
-	logs, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "logs", query.Tail, query.Search, query.Level, query.Since), 2*time.Second, func(ctx context.Context) (server.LogResult, error) {
+	logs, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "logs", query.Channel, query.Tail, query.Search, query.Level, query.Since), 2*time.Second, func(ctx context.Context) (server.LogResult, error) {
 		return s.server.Logs(ctx, query)
 	})
 	if err != nil {

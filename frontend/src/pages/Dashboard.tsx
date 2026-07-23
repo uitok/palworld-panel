@@ -42,6 +42,7 @@ export const Dashboard: React.FC = () => {
   const { status: cachedStatus, setStatus, metrics: cachedMetrics, setMetrics, autoRefresh, refreshKey, triggerRefresh, session } = useServerStore();
   const [logSearch, setLogSearch] = useState('');
   const [logLevel, setLogLevel] = useState('');
+  const [logChannel, setLogChannel] = useState<'game' | 'launcher' | 'paldefender-rest'>('game');
   const [notice, setNotice] = useState<string | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState('');
@@ -80,8 +81,8 @@ export const Dashboard: React.FC = () => {
   });
 
   const logsQuery = useQuery({
-    queryKey: ['dashboard-logs', 80, debouncedLogSearch, logLevel, status?.status, refreshKey],
-    queryFn: () => serverApi.getLogs(80, debouncedLogSearch, logLevel),
+    queryKey: ['dashboard-logs', 80, debouncedLogSearch, logLevel, logChannel, status?.status, refreshKey],
+    queryFn: () => serverApi.getLogs(80, debouncedLogSearch, logLevel, '', logChannel),
     enabled: Boolean(status),
     refetchInterval: autoRefresh && status?.status === 'running' ? 3000 : false,
     placeholderData: (previous) => previous,
@@ -394,7 +395,7 @@ export const Dashboard: React.FC = () => {
             <h3 className="text-base font-bold tracking-tight text-slate-900">实时日志</h3>
             {logResponse && (
               <span className="truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-500">
-                {logResponse.source === 'file' ? '持久日志' : logResponse.source === 'docker' ? 'Docker 输出' : '无采集源'}
+                {logResponse.source === 'paldefender-game' ? '游戏事件' : logResponse.source === 'paldefender-rest' ? 'PalDefender REST' : logResponse.source === 'file' ? '启动器日志' : logResponse.source === 'docker' ? 'Docker 输出' : '无采集源'}
               </span>
             )}
           </div>
@@ -407,7 +408,17 @@ export const Dashboard: React.FC = () => {
             刷新
           </button>
         </div>
-        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_160px]">
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-[180px_1fr_160px]">
+          <select
+            aria-label="日志来源"
+            value={logChannel}
+            onChange={(event) => setLogChannel(event.target.value as 'game' | 'launcher' | 'paldefender-rest')}
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none"
+          >
+            <option value="game">游戏事件</option>
+            <option value="launcher">启动器输出</option>
+            <option value="paldefender-rest">PalDefender REST</option>
+          </select>
           <input
             type="search"
             value={logSearch}

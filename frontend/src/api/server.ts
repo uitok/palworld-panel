@@ -165,7 +165,7 @@ export const mapLogs = (raw: unknown): ServerLogResponse => {
   }
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const logs = Array.isArray(data.logs) ? data.logs.join('\n') : typeof data.logs === 'string' ? data.logs : '';
-  const source = ['file', 'docker', 'none'].includes(String(data.source)) ? String(data.source) : 'none';
+  const source = ['file', 'docker', 'paldefender-game', 'paldefender-rest', 'none'].includes(String(data.source)) ? String(data.source) : 'none';
   return {
     logs,
     source: source as ServerLogResponse['source'],
@@ -224,11 +224,12 @@ export const serverApi = {
       quiet: true,
     }),
 
-  getLogs: (tail = 200, search = '', level = '', since = '') => {
+  getLogs: (tail = 200, search = '', level = '', since = '', channel = '') => {
     const params = new URLSearchParams({ tail: String(tail) });
     if (search) params.set('search', search);
     if (level) params.set('level', level);
     if (since) params.set('since', since);
+    if (channel) params.set('channel', channel);
     return handleRequest<unknown, ServerLogResponse>(
       () => apiClient.get(`/server/logs?${params.toString()}`),
       emptyLogResponse,

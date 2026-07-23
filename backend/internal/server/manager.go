@@ -130,10 +130,11 @@ type BackupVerifyResult struct {
 }
 
 type LogQuery struct {
-	Tail   int
-	Search string
-	Level  string
-	Since  string
+	Channel string
+	Tail    int
+	Search  string
+	Level   string
+	Since   string
 }
 
 type LogResult struct {
@@ -688,6 +689,17 @@ func serverStatusRunning(status Status) bool {
 }
 
 func (m Manager) Logs(ctx context.Context, query LogQuery) (LogResult, error) {
+	channel := strings.ToLower(strings.TrimSpace(query.Channel))
+	switch channel {
+	case "game":
+		return m.fileChannelLogs(ctx, query, "paldefender-game", m.latestGameLogPath)
+	case "paldefender-rest":
+		return m.fileChannelLogs(ctx, query, "paldefender-rest", m.latestPalDefenderRESTLogPath)
+	case "", "launcher":
+	default:
+		return LogResult{}, fmt.Errorf("unsupported log channel %q", query.Channel)
+	}
+
 	mode, err := m.RuntimeMode(ctx)
 	if err != nil {
 		return LogResult{}, err
@@ -722,6 +734,72 @@ func (m Manager) Logs(ctx context.Context, query LogQuery) (LogResult, error) {
 		reason = "not_started"
 	}
 	return LogResult{Source: "none", Available: false, Reason: reason}, nil
+}
+
+func (m Manager) fileChannelLogs(ctx context.Context, query LogQuery, source string, path func() (string, error)) (LogResult, error) {
+	logPath, err := path()
+	if err != nil {
+		return LogResult{}, err
+	}
+	if logPath == "" {
+		return LogResult{Source: "none", Available: false, Reason: "no_collection_source"}, nil
+	}
+	logs, info, err := tailFileInfo(logPath, query.Tail)
+	if err != nil {
+		return LogResult{}, err
+	}
+	result := LogResult{
+		Logs:      filterLogs(logs, query),
+		Source:    source,
+		Available: true,
+		UpdatedAt: info.ModTime().UTC().Format(time.RFC3339Nano),
+	}
+	if strings.TrimSpace(logs) == "" {
+		result.Reason = m.emptyLogReason(ctx)
+	}
+	return result, nil
+}
+
+func (m Manager) latestGameLogPath() (string, error) {
+	path, err := m.latestLogFile(m.cfg.PalDefenderDir(), filepath.Join("Logs"))
+	if err != nil || path != "" {
+		return path, err
+	}
+	return m.latestLogFile(m.cfg.ServerDirectory(), filepath.Join("Pal", "Saved", "Logs"))
+}
+
+func (m Manager) latestPalDefenderRESTLogPath() (string, error) {
+	return m.latestLogFile(m.cfg.PalDefenderDir(), filepath.Join("Logs", "RESTAPI"))
+}
+
+func (m Manager) latestLogFile(base, relative string) (string, error) {
+	root := filepath.Join(base, relative)
+	if err := m.cfg.ValidateManagedPath(root, false); err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var selected string
+	var selectedTime time.Time
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".log") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if selected == "" || info.ModTime().After(selectedTime) {
+			selected = filepath.Join(root, entry.Name())
+			selectedTime = info.ModTime()
+		}
+	}
+	return selected, nil
 }
 
 func (m Manager) emptyLogReason(ctx context.Context) string {
@@ -1576,9 +1654,27 @@ func tailFileInfo(path string, tail int) (string, os.FileInfo, error) {
 	if info.IsDir() {
 		return "", nil, fmt.Errorf("log path is a directory")
 	}
-	b, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return "", nil, err
+	}
+	defer file.Close()
+	const maximumLogTailBytes int64 = 2 * 1024 * 1024
+	start := info.Size() - maximumLogTailBytes
+	if start < 0 {
+		start = 0
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return "", nil, err
+	}
+	b, err := io.ReadAll(io.LimitReader(file, maximumLogTailBytes))
+	if err != nil {
+		return "", nil, err
+	}
+	if start > 0 {
+		if newline := strings.IndexByte(string(b), '\n'); newline >= 0 {
+			b = b[newline+1:]
+		}
 	}
 	lines := strings.Split(string(b), "\n")
 	if len(lines) > tail {
