@@ -371,6 +371,56 @@ export interface components {
       "version"?: string;
       "workshop_id"?: string;
     };
+    "MonitorHistoryEnvelope": {
+      "data": Array<components["schemas"]["MonitorSample"]>;
+      "ok": true;
+    };
+    "MonitorRiskReason": {
+      "code": "host_memory_pressure" | "swap_exhaustion" | "workload_memory_pressure" | "oom_killed" | "abnormal_exit";
+      "message": string;
+      "severity": "warning" | "critical";
+    };
+    "MonitorSample": {
+      "cpu_available": boolean;
+      "cpu_percent": number;
+      "created_at": string;
+      "current_players": number;
+      "disk_available": boolean;
+      "disk_free_bytes": number;
+      "disk_total_bytes": number;
+      "exit_code": number;
+      "finished_at"?: string;
+      "game_port_healthy": boolean;
+      "host_memory_available": boolean;
+      "host_memory_available_bytes": number;
+      "host_memory_total_bytes": number;
+      "host_swap_free_bytes": number;
+      "host_swap_total_bytes": number;
+      "id": string;
+      "lifecycle_available": boolean;
+      "max_players": number;
+      "memory_available": boolean;
+      "memory_limit_bytes": number;
+      "memory_usage_bytes": number;
+      "oom_killed": boolean;
+      "query_port_healthy": boolean;
+      "rcon_healthy": boolean;
+      "rest_healthy": boolean;
+      "restart_count": number;
+      "risk_reasons": Array<components["schemas"]["MonitorRiskReason"]>;
+      "started_at"?: string;
+      "unavailable_reason"?: string;
+      "workload_memory_available": boolean;
+      "workload_memory_limit_bytes": number;
+      "workload_memory_usage_bytes": number;
+    };
+    "MonitorSnapshot": {
+      "sample": components["schemas"]["MonitorSample"];
+    };
+    "MonitorSnapshotEnvelope": {
+      "data": components["schemas"]["MonitorSnapshot"];
+      "ok": true;
+    };
     "NetworkProxyConfig": {
       "community": components["schemas"]["NetworkProxyEndpoint"];
       "install": components["schemas"]["NetworkProxyEndpoint"];

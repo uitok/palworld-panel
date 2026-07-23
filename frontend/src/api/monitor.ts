@@ -1,5 +1,5 @@
 import { apiClient, handleRequest } from './client';
-import type { DebugLogStatus, MonitorSample, MonitorSnapshot } from '../types';
+import type { DebugLogStatus, MonitorRiskReason, MonitorSample, MonitorSnapshot } from '../types';
 
 const emptyDebugStatus: DebugLogStatus = {
   enabled: false,
@@ -17,6 +17,19 @@ const emptySample: MonitorSample = {
   memory_available: false,
   memory_usage_bytes: 0,
   memory_limit_bytes: 0,
+  host_memory_available: false,
+  host_memory_total_bytes: 0,
+  host_memory_available_bytes: 0,
+  host_swap_total_bytes: 0,
+  host_swap_free_bytes: 0,
+  workload_memory_available: false,
+  workload_memory_usage_bytes: 0,
+  workload_memory_limit_bytes: 0,
+  oom_killed: false,
+  lifecycle_available: false,
+  exit_code: 0,
+  restart_count: 0,
+  risk_reasons: [],
   disk_available: false,
   disk_free_bytes: 0,
   disk_total_bytes: 0,
@@ -30,6 +43,14 @@ const emptySample: MonitorSample = {
 
 const mapSample = (raw: unknown): MonitorSample => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const riskReasons = Array.isArray(data.risk_reasons)
+    ? data.risk_reasons.flatMap((rawReason) => {
+        if (!rawReason || typeof rawReason !== 'object') return [];
+        const reason = rawReason as Record<string, unknown>;
+        const severity: MonitorRiskReason['severity'] = reason.severity === 'critical' ? 'critical' : 'warning';
+        return [{ code: String(reason.code || ''), message: String(reason.message || ''), severity }];
+      })
+    : [];
   return {
     id: String(data.id || ''),
     created_at: String(data.created_at || ''),
@@ -38,6 +59,21 @@ const mapSample = (raw: unknown): MonitorSample => {
     memory_available: Boolean(data.memory_available),
     memory_usage_bytes: Number(data.memory_usage_bytes || 0),
     memory_limit_bytes: Number(data.memory_limit_bytes || 0),
+    host_memory_available: Boolean(data.host_memory_available),
+    host_memory_total_bytes: Number(data.host_memory_total_bytes || 0),
+    host_memory_available_bytes: Number(data.host_memory_available_bytes || 0),
+    host_swap_total_bytes: Number(data.host_swap_total_bytes || 0),
+    host_swap_free_bytes: Number(data.host_swap_free_bytes || 0),
+    workload_memory_available: data.workload_memory_available === undefined ? Boolean(data.memory_available) : Boolean(data.workload_memory_available),
+    workload_memory_usage_bytes: Number(data.workload_memory_usage_bytes ?? data.memory_usage_bytes ?? 0),
+    workload_memory_limit_bytes: Number(data.workload_memory_limit_bytes ?? data.memory_limit_bytes ?? 0),
+    oom_killed: Boolean(data.oom_killed),
+    lifecycle_available: Boolean(data.lifecycle_available),
+    exit_code: Number(data.exit_code || 0),
+    restart_count: Number(data.restart_count || 0),
+    started_at: data.started_at ? String(data.started_at) : undefined,
+    finished_at: data.finished_at ? String(data.finished_at) : undefined,
+    risk_reasons: riskReasons,
     disk_available: Boolean(data.disk_available),
     disk_free_bytes: Number(data.disk_free_bytes || 0),
     disk_total_bytes: Number(data.disk_total_bytes || 0),

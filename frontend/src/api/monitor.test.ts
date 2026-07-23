@@ -21,4 +21,30 @@ describe('monitor API', () => {
     expect(get).toHaveBeenCalledWith('/system/debug');
     expect(put).toHaveBeenCalledWith('/system/debug', { enabled: false });
   });
+
+  it('maps separate host and workload memory with lifecycle diagnostics', async () => {
+	vi.spyOn(apiClient, 'get').mockResolvedValue({
+	  data: { ok: true, data: { sample: {
+		id: 'sample-1', created_at: '2026-07-22T01:00:00Z',
+		host_memory_available: true, host_memory_total_bytes: 17179869184, host_memory_available_bytes: 4294967296,
+		host_swap_total_bytes: 4294967296, host_swap_free_bytes: 1073741824,
+		workload_memory_available: true, workload_memory_usage_bytes: 6442450944, workload_memory_limit_bytes: 8589934592,
+		lifecycle_available: true, oom_killed: true, exit_code: 137, restart_count: 3,
+		started_at: '2026-07-22T00:00:00Z', finished_at: '2026-07-22T00:59:00Z',
+		risk_reasons: [{ code: 'oom_killed', message: '工作负载被 OOM 终止', severity: 'critical' }],
+	  } } }, status: 200,
+	} as AxiosResponse);
+
+	await expect(monitorApi.snapshot()).resolves.toMatchObject({ sample: {
+	  host_memory_total_bytes: 17179869184,
+	  host_memory_available_bytes: 4294967296,
+	  workload_memory_usage_bytes: 6442450944,
+	  workload_memory_limit_bytes: 8589934592,
+	  oom_killed: true,
+	  lifecycle_available: true,
+	  exit_code: 137,
+	  restart_count: 3,
+	  risk_reasons: [{ code: 'oom_killed', severity: 'critical' }],
+	} });
+  });
 });

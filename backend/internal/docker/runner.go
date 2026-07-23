@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -20,12 +21,19 @@ import (
 )
 
 type Runner struct {
-	cfg appconfig.Config
+	cfg     appconfig.Config
+	runFunc func(context.Context, ...string) ([]byte, error)
 }
 
 type ContainerStatus struct {
-	Exists bool   `json:"exists"`
-	Status string `json:"status"`
+	Exists             bool   `json:"exists"`
+	Status             string `json:"status"`
+	LifecycleAvailable bool   `json:"lifecycle_available"`
+	OOMKilled          bool   `json:"oom_killed"`
+	ExitCode           int    `json:"exit_code"`
+	RestartCount       int    `json:"restart_count"`
+	StartedAt          string `json:"started_at,omitempty"`
+	FinishedAt         string `json:"finished_at,omitempty"`
 }
 
 type downloadProxySession struct {
@@ -551,7 +559,9 @@ func (r Runner) Logs(ctx context.Context, tail int) (string, error) {
 }
 
 func (r Runner) Status(ctx context.Context) (ContainerStatus, error) {
-	out, err := r.run(ctx, "inspect", "-f", "{{.State.Status}}", r.cfg.DockerContainer)
+	inspectContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := r.run(inspectContext, "inspect", r.cfg.DockerContainer)
 	if err != nil {
 		msg := strings.ToLower(err.Error() + string(out))
 		if strings.Contains(msg, "no such object") {
@@ -559,10 +569,60 @@ func (r Runner) Status(ctx context.Context) (ContainerStatus, error) {
 		}
 		return ContainerStatus{}, err
 	}
-	return ContainerStatus{Exists: true, Status: strings.TrimSpace(string(out))}, nil
+	return parseContainerStatus(out)
+}
+
+func parseContainerStatus(raw []byte) (ContainerStatus, error) {
+	var payload []struct {
+		RestartCount int `json:"RestartCount"`
+		State        *struct {
+			Status     string `json:"Status"`
+			OOMKilled  bool   `json:"OOMKilled"`
+			ExitCode   int    `json:"ExitCode"`
+			StartedAt  string `json:"StartedAt"`
+			FinishedAt string `json:"FinishedAt"`
+		} `json:"State"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ContainerStatus{}, fmt.Errorf("decode docker inspect JSON: %w", err)
+	}
+	if len(payload) != 1 {
+		return ContainerStatus{}, fmt.Errorf("docker inspect returned %d objects", len(payload))
+	}
+	result := ContainerStatus{Exists: true, Status: "unknown"}
+	if payload[0].State == nil {
+		return result, nil
+	}
+	state := payload[0].State
+	result.Status = strings.TrimSpace(state.Status)
+	if result.Status == "" {
+		result.Status = "unknown"
+	}
+	result.LifecycleAvailable = true
+	result.OOMKilled = state.OOMKilled
+	result.ExitCode = state.ExitCode
+	result.RestartCount = payload[0].RestartCount
+	result.StartedAt = normalizeContainerTimestamp(state.StartedAt)
+	result.FinishedAt = normalizeContainerTimestamp(state.FinishedAt)
+	return result, nil
+}
+
+func normalizeContainerTimestamp(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil || parsed.Year() <= 1 {
+		return ""
+	}
+	return value
 }
 
 func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
+	if r.runFunc != nil {
+		return r.runFunc(ctx, args...)
+	}
 	return r.runWithEnvironment(ctx, os.Environ(), args...)
 }
 

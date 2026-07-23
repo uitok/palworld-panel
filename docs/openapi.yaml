@@ -135,6 +135,16 @@ x-mod-config-backups: &modConfigBackups
   content:
     application/json:
       schema: {$ref: '#/components/schemas/ModConfigBackupListEnvelope'}
+x-monitor-snapshot: &monitorSnapshot
+  description: Host and workload resource sample with lifecycle diagnostics and derived risks.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/MonitorSnapshotEnvelope'}
+x-monitor-history: &monitorHistory
+  description: Chronological monitor samples with separate host and workload memory.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/MonitorHistoryEnvelope'}
 x-read-responses: &readResponses
   '200': *success
   '401': *error
@@ -393,9 +403,9 @@ paths:
   /server/initialize-config:
     post: {operationId: initializeServerConfig, tags: [server], x-palpanel-permission: 'config:write', responses: *writeResponses}
   /monitor/snapshot:
-    get: {operationId: getMonitorSnapshot, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: getMonitorSnapshot, tags: [server], x-palpanel-permission: read, responses: {'200': *monitorSnapshot, '401': *error, '500': *error}}
   /monitor/history:
-    get: {operationId: getMonitorHistory, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: getMonitorHistory, tags: [server], x-palpanel-permission: read, responses: {'200': *monitorHistory, '401': *error, '500': *error}}
   /server/backup:
     post: {operationId: createBackup, tags: [server], x-palpanel-permission: 'backup:write', responses: *writeResponses}
   /backups:
@@ -1319,6 +1329,96 @@ components:
       properties:
         waittime: {type: integer, minimum: 5, maximum: 300, default: 60}
         message: {type: string, maxLength: 4096}
+    MonitorRiskReason:
+      type: object
+      required: [code, message, severity]
+      additionalProperties: false
+      properties:
+        code: {type: string, enum: [host_memory_pressure, swap_exhaustion, workload_memory_pressure, oom_killed, abnormal_exit]}
+        message: {type: string}
+        severity: {type: string, enum: [warning, critical]}
+    MonitorSample:
+      type: object
+      required:
+        - id
+        - created_at
+        - cpu_available
+        - cpu_percent
+        - memory_available
+        - memory_usage_bytes
+        - memory_limit_bytes
+        - host_memory_available
+        - host_memory_total_bytes
+        - host_memory_available_bytes
+        - host_swap_total_bytes
+        - host_swap_free_bytes
+        - workload_memory_available
+        - workload_memory_usage_bytes
+        - workload_memory_limit_bytes
+        - oom_killed
+        - lifecycle_available
+        - exit_code
+        - restart_count
+        - risk_reasons
+        - disk_available
+        - disk_free_bytes
+        - disk_total_bytes
+        - current_players
+        - max_players
+        - rest_healthy
+        - rcon_healthy
+        - game_port_healthy
+        - query_port_healthy
+      properties:
+        id: {type: string}
+        created_at: {type: string, format: date-time}
+        cpu_available: {type: boolean}
+        cpu_percent: {type: number}
+        memory_available: {type: boolean, description: Compatibility alias for workload_memory_available.}
+        memory_usage_bytes: {type: integer, format: int64, minimum: 0, description: Compatibility alias for workload_memory_usage_bytes.}
+        memory_limit_bytes: {type: integer, format: int64, minimum: 0, description: Compatibility alias for workload_memory_limit_bytes.}
+        host_memory_available: {type: boolean}
+        host_memory_total_bytes: {type: integer, format: int64, minimum: 0}
+        host_memory_available_bytes: {type: integer, format: int64, minimum: 0}
+        host_swap_total_bytes: {type: integer, format: int64, minimum: 0}
+        host_swap_free_bytes: {type: integer, format: int64, minimum: 0}
+        workload_memory_available: {type: boolean}
+        workload_memory_usage_bytes: {type: integer, format: int64, minimum: 0}
+        workload_memory_limit_bytes: {type: integer, format: int64, minimum: 0}
+        oom_killed: {type: boolean}
+        lifecycle_available: {type: boolean, description: True only when lifecycle fields were collected from a complete runtime state object.}
+        exit_code: {type: integer}
+        restart_count: {type: integer, minimum: 0}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        risk_reasons: {type: array, items: {$ref: '#/components/schemas/MonitorRiskReason'}}
+        disk_available: {type: boolean}
+        disk_free_bytes: {type: integer, format: int64, minimum: 0}
+        disk_total_bytes: {type: integer, format: int64, minimum: 0}
+        current_players: {type: integer, minimum: 0}
+        max_players: {type: integer, minimum: 0}
+        rest_healthy: {type: boolean}
+        rcon_healthy: {type: boolean}
+        game_port_healthy: {type: boolean}
+        query_port_healthy: {type: boolean}
+        unavailable_reason: {type: string}
+    MonitorSnapshot:
+      type: object
+      required: [sample]
+      properties:
+        sample: {$ref: '#/components/schemas/MonitorSample'}
+    MonitorSnapshotEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/MonitorSnapshot'}
+    MonitorHistoryEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/MonitorSample'}}
     BreedingStatus:
       type: object
       required: [configured, available, latency_ms]

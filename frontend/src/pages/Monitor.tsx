@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertCircle, Bug, Cpu, FileText, HardDrive, Network, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Activity, AlertCircle, Bug, Container, Cpu, FileText, HardDrive, MemoryStick, RefreshCw, RotateCcw, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { getErrorMessage } from '../api/client';
 import { monitorApi } from '../api/monitor';
@@ -65,13 +66,13 @@ export const Monitor: React.FC = () => {
 
   const chartData = useMemo(() => toMonitorChartPoints(history), [history]);
 
-  const memoryPct = snapshot ? percent(snapshot.memory_usage_bytes, snapshot.memory_limit_bytes) : null;
+  const memoryPct = snapshot ? percent(snapshot.workload_memory_usage_bytes, snapshot.workload_memory_limit_bytes) : null;
   const hasMemoryPercent = chartData.some((point) => point.memoryPercent != null);
   const hasMemoryUsage = chartData.some((point) => point.memoryGiB != null);
   const memoryTrend =
-    snapshot?.memory_available && memoryPct != null
-      ? `${memoryPct.toFixed(1)}% of ${formatBytes(snapshot.memory_limit_bytes)}`
-      : snapshot?.memory_available
+    snapshot?.workload_memory_available && memoryPct != null
+      ? `${memoryPct.toFixed(1)}% / ${formatBytes(snapshot.workload_memory_limit_bytes)}`
+      : snapshot?.workload_memory_available
         ? '已采集，未提供内存上限'
         : snapshot?.unavailable_reason || '未采集';
   const diskUsedPct = snapshot
@@ -96,7 +97,7 @@ export const Monitor: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <StatCard
           title="在线玩家"
           value={snapshot ? `${snapshot.current_players} / ${snapshot.max_players || '-'}` : '不可用'}
@@ -114,12 +115,28 @@ export const Monitor: React.FC = () => {
           color="blue"
         />
         <StatCard
-          title="内存"
-          value={snapshot?.memory_available ? formatBytes(snapshot.memory_usage_bytes) : '不可用'}
-          icon={<Network size={16} />}
-          trend={memoryTrend}
-          trendType={snapshot?.memory_available ? 'neutral' : 'down'}
+          title="主机内存"
+          value={snapshot?.host_memory_available ? formatBytes(Math.max(0, snapshot.host_memory_total_bytes - snapshot.host_memory_available_bytes)) : '不可用'}
+          icon={<MemoryStick size={16} />}
+          trend={snapshot?.host_memory_available ? `${formatBytes(snapshot.host_memory_available_bytes)} 可用 / ${formatBytes(snapshot.host_memory_total_bytes)}` : '未采集'}
+          trendType={snapshot?.host_memory_available ? 'neutral' : 'down'}
           color="emerald"
+        />
+        <StatCard
+          title="工作负载内存"
+          value={snapshot?.workload_memory_available ? formatBytes(snapshot.workload_memory_usage_bytes) : '不可用'}
+          icon={<Container size={16} />}
+          trend={memoryTrend}
+          trendType={snapshot?.workload_memory_available ? 'neutral' : 'down'}
+          color="blue"
+        />
+        <StatCard
+          title="交换空间"
+          value={snapshot?.host_memory_available && snapshot.host_swap_total_bytes > 0 ? formatBytes(snapshot.host_swap_free_bytes) : '未配置'}
+          icon={<RotateCcw size={16} />}
+          trend={snapshot?.host_swap_total_bytes ? `${formatBytes(snapshot.host_swap_free_bytes)} 可用 / ${formatBytes(snapshot.host_swap_total_bytes)}` : '主机未配置 swap'}
+          trendType={snapshot?.host_swap_total_bytes ? 'neutral' : 'info'}
+          color="amber"
         />
         <StatCard
           title="磁盘"
@@ -130,6 +147,39 @@ export const Monitor: React.FC = () => {
           color="amber"
         />
       </div>
+
+      <section className="border-y border-slate-100 bg-white px-5 py-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <TriangleAlert size={16} className={snapshot?.oom_killed ? 'text-rose-500' : 'text-slate-400'} />
+              <h3 className="text-[14px] font-bold text-slate-800">工作负载生命周期</h3>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs font-semibold text-slate-600">
+              <span>{!snapshot?.lifecycle_available ? 'OOM 未采集' : snapshot.oom_killed ? 'OOM 已发生' : '未记录 OOM'}</span>
+              <span>{!snapshot?.lifecycle_available ? '退出状态未采集' : snapshot.finished_at ? `退出码 ${snapshot.exit_code}` : '暂无退出记录'}</span>
+              <span>{snapshot?.lifecycle_available ? `重启 ${snapshot.restart_count} 次` : '重启次数未采集'}</span>
+              <span>启动：{snapshot?.started_at ? formatLifecycleTime(snapshot.started_at) : '未采集'}</span>
+              <span>结束：{snapshot?.lifecycle_available ? formatLifecycleTime(snapshot.finished_at) : '未采集'}</span>
+            </div>
+          </div>
+          <Link to="/dashboard" className="inline-flex shrink-0 items-center gap-2 text-xs font-bold text-sky-700 hover:text-sky-800">
+            <RotateCcw size={14} />
+            前往手动安全重启
+          </Link>
+        </div>
+        {snapshot?.risk_reasons.length ? (
+          <ul className="mt-4 grid gap-2 md:grid-cols-2" aria-label="风险原因">
+            {snapshot.risk_reasons.map((reason) => (
+              <li key={reason.code} className={`border-l-2 px-3 py-2 text-xs font-semibold ${reason.severity === 'critical' ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-amber-400 bg-amber-50 text-amber-800'}`}>
+                <span className="mr-2 font-mono text-[10px]">{reason.code}</span>{reason.message}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-4 text-xs font-semibold text-emerald-700">当前没有派生风险</p>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <ChartCard title="在线人数历史">
@@ -148,7 +198,7 @@ export const Monitor: React.FC = () => {
           )}
         </ChartCard>
 
-        <ChartCard title="CPU / 内存历史">
+        <ChartCard title="CPU / 工作负载内存历史">
           {chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
@@ -161,9 +211,9 @@ export const Monitor: React.FC = () => {
                 <Tooltip formatter={chartTooltipFormatter} contentStyle={{ fontSize: '11px', borderRadius: '12px', border: '1px solid #f1f5f9' }} />
                 <Area yAxisId="percent" type="monotone" dataKey="cpu" name="CPU (%)" stroke="#2563eb" fill="#dbeafe" strokeWidth={1.5} connectNulls />
                 {hasMemoryPercent ? (
-                  <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="内存 (%)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
+                  <Area yAxisId="percent" type="monotone" dataKey="memoryPercent" name="工作负载内存 (%)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
                 ) : hasMemoryUsage ? (
-                  <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="内存用量 (GB)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
+                  <Area yAxisId="memory" type="monotone" dataKey="memoryGiB" name="工作负载内存用量 (GB)" stroke="#4c7ea8" fill="#e7eef4" strokeWidth={1.5} connectNulls />
                 ) : null}
               </AreaChart>
             </ResponsiveContainer>
@@ -242,6 +292,12 @@ const healthFailureLabel = (kind: 'REST' | 'RCON', reason?: string) => {
   if (new RegExp(`${kind}:.*disabled`, 'i').test(details)) return '未启用';
   if (new RegExp(`${kind}:.*connection refused`, 'i').test(details)) return '连接被拒绝';
   return kind === 'RCON' ? '未启用或不可达' : '不可达';
+};
+
+const formatLifecycleTime = (value?: string) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN');
 };
 
 const healthExplanation = (snapshot: MonitorSample | null) => {

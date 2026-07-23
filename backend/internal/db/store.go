@@ -70,23 +70,53 @@ type PlayerAccessEntry struct {
 }
 
 type MonitorSample struct {
-	ID                string  `json:"id"`
-	CreatedAt         string  `json:"created_at"`
-	CPUAvailable      bool    `json:"cpu_available"`
-	CPUPercent        float64 `json:"cpu_percent"`
-	MemoryAvailable   bool    `json:"memory_available"`
-	MemoryUsageBytes  int64   `json:"memory_usage_bytes"`
-	MemoryLimitBytes  int64   `json:"memory_limit_bytes"`
-	DiskAvailable     bool    `json:"disk_available"`
-	DiskFreeBytes     int64   `json:"disk_free_bytes"`
-	DiskTotalBytes    int64   `json:"disk_total_bytes"`
-	CurrentPlayers    int     `json:"current_players"`
-	MaxPlayers        int     `json:"max_players"`
-	RESTHealthy       bool    `json:"rest_healthy"`
-	RCONHealthy       bool    `json:"rcon_healthy"`
-	GamePortHealthy   bool    `json:"game_port_healthy"`
-	QueryPortHealthy  bool    `json:"query_port_healthy"`
-	UnavailableReason string  `json:"unavailable_reason,omitempty"`
+	ID                       string              `json:"id"`
+	CreatedAt                string              `json:"created_at"`
+	CPUAvailable             bool                `json:"cpu_available"`
+	CPUPercent               float64             `json:"cpu_percent"`
+	MemoryAvailable          bool                `json:"memory_available"`
+	MemoryUsageBytes         int64               `json:"memory_usage_bytes"`
+	MemoryLimitBytes         int64               `json:"memory_limit_bytes"`
+	HostMemoryAvailable      bool                `json:"host_memory_available"`
+	HostMemoryTotalBytes     int64               `json:"host_memory_total_bytes"`
+	HostMemoryAvailableBytes int64               `json:"host_memory_available_bytes"`
+	HostSwapTotalBytes       int64               `json:"host_swap_total_bytes"`
+	HostSwapFreeBytes        int64               `json:"host_swap_free_bytes"`
+	WorkloadMemoryAvailable  bool                `json:"workload_memory_available"`
+	WorkloadMemoryUsageBytes int64               `json:"workload_memory_usage_bytes"`
+	WorkloadMemoryLimitBytes int64               `json:"workload_memory_limit_bytes"`
+	OOMKilled                bool                `json:"oom_killed"`
+	LifecycleAvailable       bool                `json:"lifecycle_available"`
+	ExitCode                 int                 `json:"exit_code"`
+	RestartCount             int                 `json:"restart_count"`
+	StartedAt                string              `json:"started_at,omitempty"`
+	FinishedAt               string              `json:"finished_at,omitempty"`
+	RiskReasons              []MonitorRiskReason `json:"risk_reasons"`
+	DiskAvailable            bool                `json:"disk_available"`
+	DiskFreeBytes            int64               `json:"disk_free_bytes"`
+	DiskTotalBytes           int64               `json:"disk_total_bytes"`
+	CurrentPlayers           int                 `json:"current_players"`
+	MaxPlayers               int                 `json:"max_players"`
+	RESTHealthy              bool                `json:"rest_healthy"`
+	RCONHealthy              bool                `json:"rcon_healthy"`
+	GamePortHealthy          bool                `json:"game_port_healthy"`
+	QueryPortHealthy         bool                `json:"query_port_healthy"`
+	UnavailableReason        string              `json:"unavailable_reason,omitempty"`
+}
+
+type MonitorRiskReason struct {
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Severity string `json:"severity"`
+}
+
+type MonitorAlertState struct {
+	Code           string `json:"code"`
+	UnhealthyCount int    `json:"unhealthy_count"`
+	HealthyCount   int    `json:"healthy_count"`
+	Open           bool   `json:"open"`
+	AlertID        string `json:"alert_id,omitempty"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 type Schedule struct {
@@ -303,7 +333,89 @@ func migrations() []schemaMigration {
 		{version: 4, apply: migrateAccountAuthentication},
 		{version: 5, apply: migrateBreedingAndSaveSources},
 		{version: 6, apply: migrateSaveSourceIndexMetadata},
+		{version: 7, apply: migrateMonitorDiagnostics},
+		{version: 8, apply: migrateMonitorLifecycleAvailability},
 	}
+}
+
+func migrateMonitorLifecycleAvailability(ctx context.Context, tx *sql.Tx) error {
+	if err := ensureColumn(ctx, tx, "monitor_samples", "lifecycle_available", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return execAll(ctx, tx,
+		`UPDATE monitor_alert_states SET
+			alert_id=COALESCE(
+				(SELECT alerts.id FROM alerts WHERE alerts.id=monitor_alert_states.alert_id
+					AND alerts.status='open' AND alerts.source='monitor:' || monitor_alert_states.code),
+				(SELECT MIN(alerts.id) FROM alerts WHERE alerts.status='open'
+					AND alerts.source='monitor:' || monitor_alert_states.code),
+				''
+			),
+			open=CASE WHEN EXISTS (
+				SELECT 1 FROM alerts WHERE alerts.status='open' AND alerts.source='monitor:' || monitor_alert_states.code
+			) THEN 1 ELSE 0 END,
+			unhealthy_count=CASE WHEN EXISTS (
+				SELECT 1 FROM alerts WHERE alerts.status='open' AND alerts.source='monitor:' || monitor_alert_states.code
+			) THEN unhealthy_count ELSE 0 END,
+			healthy_count=CASE WHEN EXISTS (
+				SELECT 1 FROM alerts WHERE alerts.status='open' AND alerts.source='monitor:' || monitor_alert_states.code
+			) THEN healthy_count ELSE 0 END
+			WHERE open=1`,
+		`INSERT INTO monitor_alert_states(code,unhealthy_count,healthy_count,open,alert_id,updated_at)
+			SELECT SUBSTR(alerts.source,9),3,0,1,MIN(alerts.id),CURRENT_TIMESTAMP
+			FROM alerts
+			WHERE alerts.status='open' AND alerts.source LIKE 'monitor:%'
+				AND NOT EXISTS (
+					SELECT 1 FROM monitor_alert_states state WHERE 'monitor:' || state.code=alerts.source
+				)
+			GROUP BY alerts.source`,
+		`UPDATE monitor_alert_states SET
+			open=1,
+			alert_id=(SELECT MIN(alerts.id) FROM alerts WHERE alerts.status='open'
+				AND alerts.source='monitor:' || monitor_alert_states.code),
+			unhealthy_count=CASE WHEN unhealthy_count < 3 THEN 3 ELSE unhealthy_count END,
+			healthy_count=0
+			WHERE open=0 AND EXISTS (
+				SELECT 1 FROM alerts WHERE alerts.status='open' AND alerts.source='monitor:' || monitor_alert_states.code
+			)`,
+		`UPDATE alerts SET status='resolved',ack_at=CASE WHEN ack_at='' THEN CURRENT_TIMESTAMP ELSE ack_at END
+			WHERE status='open' AND source LIKE 'monitor:%' AND NOT EXISTS (
+				SELECT 1 FROM monitor_alert_states state
+				WHERE state.open=1 AND state.alert_id=alerts.id AND 'monitor:' || state.code=alerts.source
+			)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_monitor_source ON alerts(source) WHERE status='open' AND source LIKE 'monitor:%'`,
+	)
+}
+
+func migrateMonitorDiagnostics(ctx context.Context, tx *sql.Tx) error {
+	for _, column := range []struct{ name, definition string }{
+		{"host_memory_available", "INTEGER NOT NULL DEFAULT 0"},
+		{"host_memory_total_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"host_memory_available_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"host_swap_total_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"host_swap_free_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"workload_memory_available", "INTEGER NOT NULL DEFAULT 0"},
+		{"workload_memory_usage_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"workload_memory_limit_bytes", "INTEGER NOT NULL DEFAULT 0"},
+		{"oom_killed", "INTEGER NOT NULL DEFAULT 0"},
+		{"exit_code", "INTEGER NOT NULL DEFAULT 0"},
+		{"restart_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"started_at", "TEXT NOT NULL DEFAULT ''"},
+		{"finished_at", "TEXT NOT NULL DEFAULT ''"},
+		{"risk_reasons_json", "TEXT NOT NULL DEFAULT '[]'"},
+	} {
+		if err := ensureColumn(ctx, tx, "monitor_samples", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	return execAll(ctx, tx, `CREATE TABLE IF NOT EXISTS monitor_alert_states (
+		code TEXT PRIMARY KEY,
+		unhealthy_count INTEGER NOT NULL DEFAULT 0,
+		healthy_count INTEGER NOT NULL DEFAULT 0,
+		open INTEGER NOT NULL DEFAULT 0,
+		alert_id TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL
+	)`)
 }
 
 func migrateSaveSourceIndexMetadata(ctx context.Context, tx *sql.Tx) error {
@@ -702,16 +814,27 @@ func (s *Store) InsertMonitorSample(ctx context.Context, sample MonitorSample) e
 	if sample.CreatedAt == "" {
 		sample.CreatedAt = now()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO monitor_samples (
+	riskReasons, err := json.Marshal(sample.RiskReasons)
+	if err != nil {
+		return fmt.Errorf("encode monitor risk reasons: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO monitor_samples (
 		id,created_at,cpu_available,cpu_percent,memory_available,memory_usage_bytes,memory_limit_bytes,
 		disk_available,disk_free_bytes,disk_total_bytes,current_players,max_players,rest_healthy,rcon_healthy,
-		game_port_healthy,query_port_healthy,unavailable_reason
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		game_port_healthy,query_port_healthy,unavailable_reason,
+		host_memory_available,host_memory_total_bytes,host_memory_available_bytes,host_swap_total_bytes,host_swap_free_bytes,
+		workload_memory_available,workload_memory_usage_bytes,workload_memory_limit_bytes,oom_killed,exit_code,restart_count,
+		started_at,finished_at,risk_reasons_json,lifecycle_available
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sample.ID, sample.CreatedAt, boolInt(sample.CPUAvailable), sample.CPUPercent,
 		boolInt(sample.MemoryAvailable), sample.MemoryUsageBytes, sample.MemoryLimitBytes,
 		boolInt(sample.DiskAvailable), sample.DiskFreeBytes, sample.DiskTotalBytes,
 		sample.CurrentPlayers, sample.MaxPlayers, boolInt(sample.RESTHealthy), boolInt(sample.RCONHealthy),
-		boolInt(sample.GamePortHealthy), boolInt(sample.QueryPortHealthy), sample.UnavailableReason)
+		boolInt(sample.GamePortHealthy), boolInt(sample.QueryPortHealthy), sample.UnavailableReason,
+		boolInt(sample.HostMemoryAvailable), sample.HostMemoryTotalBytes, sample.HostMemoryAvailableBytes,
+		sample.HostSwapTotalBytes, sample.HostSwapFreeBytes, boolInt(sample.WorkloadMemoryAvailable),
+		sample.WorkloadMemoryUsageBytes, sample.WorkloadMemoryLimitBytes, boolInt(sample.OOMKilled), sample.ExitCode,
+		sample.RestartCount, sample.StartedAt, sample.FinishedAt, string(riskReasons), boolInt(sample.LifecycleAvailable))
 	return err
 }
 
@@ -721,7 +844,10 @@ func (s *Store) ListMonitorSamples(ctx context.Context, limit int) ([]MonitorSam
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,created_at,cpu_available,cpu_percent,memory_available,memory_usage_bytes,memory_limit_bytes,
 		disk_available,disk_free_bytes,disk_total_bytes,current_players,max_players,rest_healthy,rcon_healthy,
-		game_port_healthy,query_port_healthy,unavailable_reason
+		game_port_healthy,query_port_healthy,unavailable_reason,
+		host_memory_available,host_memory_total_bytes,host_memory_available_bytes,host_swap_total_bytes,host_swap_free_bytes,
+		workload_memory_available,workload_memory_usage_bytes,workload_memory_limit_bytes,oom_killed,exit_code,restart_count,
+		started_at,finished_at,risk_reasons_json,lifecycle_available
 		FROM monitor_samples ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -731,10 +857,16 @@ func (s *Store) ListMonitorSamples(ctx context.Context, limit int) ([]MonitorSam
 	for rows.Next() {
 		var item MonitorSample
 		var cpuAvailable, memoryAvailable, diskAvailable, restHealthy, rconHealthy, gameHealthy, queryHealthy int
+		var hostMemoryAvailable, workloadMemoryAvailable, oomKilled, lifecycleAvailable int
+		var riskReasonsJSON string
 		if err := rows.Scan(&item.ID, &item.CreatedAt, &cpuAvailable, &item.CPUPercent, &memoryAvailable,
 			&item.MemoryUsageBytes, &item.MemoryLimitBytes, &diskAvailable, &item.DiskFreeBytes,
 			&item.DiskTotalBytes, &item.CurrentPlayers, &item.MaxPlayers, &restHealthy, &rconHealthy,
-			&gameHealthy, &queryHealthy, &item.UnavailableReason); err != nil {
+			&gameHealthy, &queryHealthy, &item.UnavailableReason,
+			&hostMemoryAvailable, &item.HostMemoryTotalBytes, &item.HostMemoryAvailableBytes,
+			&item.HostSwapTotalBytes, &item.HostSwapFreeBytes, &workloadMemoryAvailable,
+			&item.WorkloadMemoryUsageBytes, &item.WorkloadMemoryLimitBytes, &oomKilled, &item.ExitCode,
+			&item.RestartCount, &item.StartedAt, &item.FinishedAt, &riskReasonsJSON, &lifecycleAvailable); err != nil {
 			return nil, err
 		}
 		item.CPUAvailable = cpuAvailable == 1
@@ -744,6 +876,16 @@ func (s *Store) ListMonitorSamples(ctx context.Context, limit int) ([]MonitorSam
 		item.RCONHealthy = rconHealthy == 1
 		item.GamePortHealthy = gameHealthy == 1
 		item.QueryPortHealthy = queryHealthy == 1
+		item.HostMemoryAvailable = hostMemoryAvailable == 1
+		item.WorkloadMemoryAvailable = workloadMemoryAvailable == 1
+		item.OOMKilled = oomKilled == 1
+		item.LifecycleAvailable = lifecycleAvailable == 1
+		if err := json.Unmarshal([]byte(riskReasonsJSON), &item.RiskReasons); err != nil {
+			return nil, fmt.Errorf("decode monitor risk reasons: %w", err)
+		}
+		if item.RiskReasons == nil {
+			item.RiskReasons = []MonitorRiskReason{}
+		}
 		out = append(out, item)
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
@@ -763,6 +905,127 @@ func (s *Store) DeleteMonitorSamplesBefore(ctx context.Context, cutoff time.Time
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+func (s *Store) UpsertMonitorAlertState(ctx context.Context, state MonitorAlertState) error {
+	if strings.TrimSpace(state.Code) == "" {
+		return errors.New("monitor alert state code is required")
+	}
+	state.UpdatedAt = now()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO monitor_alert_states(code,unhealthy_count,healthy_count,open,alert_id,updated_at)
+		VALUES (?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET unhealthy_count=excluded.unhealthy_count,
+		healthy_count=excluded.healthy_count,open=excluded.open,alert_id=excluded.alert_id,updated_at=excluded.updated_at`,
+		state.Code, state.UnhealthyCount, state.HealthyCount, boolInt(state.Open), state.AlertID, state.UpdatedAt)
+	return err
+}
+
+func (s *Store) GetMonitorAlertState(ctx context.Context, code string) (MonitorAlertState, bool, error) {
+	var state MonitorAlertState
+	var open int
+	err := s.db.QueryRowContext(ctx, `SELECT code,unhealthy_count,healthy_count,open,alert_id,updated_at FROM monitor_alert_states WHERE code=?`, code).
+		Scan(&state.Code, &state.UnhealthyCount, &state.HealthyCount, &open, &state.AlertID, &state.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MonitorAlertState{}, false, nil
+	}
+	if err != nil {
+		return MonitorAlertState{}, false, err
+	}
+	state.Open = open == 1
+	return state, true, nil
+}
+
+func (s *Store) ApplyMonitorAlertSample(ctx context.Context, code string, unhealthy, immediate bool, alert Alert) error {
+	if strings.TrimSpace(code) == "" {
+		return errors.New("monitor alert state code is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	state := MonitorAlertState{Code: code}
+	var open int
+	err = tx.QueryRowContext(ctx, `SELECT unhealthy_count,healthy_count,open,alert_id,updated_at FROM monitor_alert_states WHERE code=?`, code).
+		Scan(&state.UnhealthyCount, &state.HealthyCount, &open, &state.AlertID, &state.UpdatedAt)
+	found := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	state.Open = open == 1
+
+	if unhealthy {
+		state.HealthyCount = 0
+		if immediate {
+			state.UnhealthyCount = 3
+		} else if state.UnhealthyCount < 3 {
+			state.UnhealthyCount++
+		}
+		if !state.Open && state.UnhealthyCount >= 3 {
+			if strings.TrimSpace(alert.ID) == "" {
+				return errors.New("monitor alert id is required when opening a round")
+			}
+			if alert.CreatedAt == "" {
+				alert.CreatedAt = now()
+			}
+			if alert.Status == "" {
+				alert.Status = "open"
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO alerts(id,severity,title,message,source,status,created_at,ack_at) VALUES (?,?,?,?,?,?,?,?)`,
+				alert.ID, alert.Severity, alert.Title, alert.Message, alert.Source, alert.Status, alert.CreatedAt, alert.AckAt); err != nil {
+				return err
+			}
+			state.Open = true
+			state.AlertID = alert.ID
+		} else if state.Open && immediate {
+			result, err := tx.ExecContext(ctx, `UPDATE alerts SET severity=?,title=?,message=?,source=? WHERE id=?`,
+				alert.Severity, alert.Title, alert.Message, alert.Source, state.AlertID)
+			if err != nil {
+				return err
+			}
+			if count, err := result.RowsAffected(); err != nil || count == 0 {
+				if err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+		}
+	} else if found {
+		state.UnhealthyCount = 0
+		if state.Open {
+			state.HealthyCount++
+			if state.HealthyCount >= 3 {
+				result, err := tx.ExecContext(ctx, `UPDATE alerts SET
+					status=CASE WHEN status='open' THEN 'resolved' ELSE status END,
+					ack_at=CASE WHEN status='open' THEN ? ELSE ack_at END WHERE id=?`, now(), state.AlertID)
+				if err != nil {
+					return err
+				}
+				if count, err := result.RowsAffected(); err != nil || count == 0 {
+					if err != nil {
+						return err
+					}
+					return sql.ErrNoRows
+				}
+				state.Open = false
+				state.HealthyCount = 0
+				state.AlertID = ""
+			}
+		} else {
+			state.HealthyCount = 0
+		}
+	}
+	if !found && !unhealthy {
+		return tx.Commit()
+	}
+	state.UpdatedAt = now()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO monitor_alert_states(code,unhealthy_count,healthy_count,open,alert_id,updated_at)
+		VALUES (?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET unhealthy_count=excluded.unhealthy_count,
+		healthy_count=excluded.healthy_count,open=excluded.open,alert_id=excluded.alert_id,updated_at=excluded.updated_at`,
+		state.Code, state.UnhealthyCount, state.HealthyCount, boolInt(state.Open), state.AlertID, state.UpdatedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UpsertSchedule(ctx context.Context, item Schedule) error {
@@ -847,6 +1110,37 @@ func (s *Store) CreateAlert(ctx context.Context, item Alert) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO alerts (id,severity,title,message,source,status,created_at,ack_at) VALUES (?,?,?,?,?,?,?,?)`,
 		item.ID, item.Severity, item.Title, item.Message, item.Source, item.Status, item.CreatedAt, item.AckAt)
 	return err
+}
+
+func (s *Store) UpdateAlert(ctx context.Context, item Alert) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE alerts SET severity=?,title=?,message=?,source=? WHERE id=?`,
+		item.Severity, item.Title, item.Message, item.Source, item.ID)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ResolveAlert(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE alerts SET status='resolved',ack_at=? WHERE id=?`, now(), id)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ListAlerts(ctx context.Context, limit int) ([]Alert, error) {
@@ -1061,6 +1355,11 @@ func (s *Store) GetKV(ctx context.Context, key string) (string, bool, error) {
 		return "", false, err
 	}
 	return v, true, nil
+}
+
+func (s *Store) DeleteKV(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM kv WHERE key=?`, key)
+	return err
 }
 
 func (s *Store) GetAITranslation(ctx context.Context, workshopID, sourceSHA256, targetLanguage, provider, model string) (AITranslation, error) {

@@ -115,6 +115,21 @@ export interface MonitorSample {
   memory_available: boolean;
   memory_usage_bytes: number;
   memory_limit_bytes: number;
+  host_memory_available: boolean;
+  host_memory_total_bytes: number;
+  host_memory_available_bytes: number;
+  host_swap_total_bytes: number;
+  host_swap_free_bytes: number;
+  workload_memory_available: boolean;
+  workload_memory_usage_bytes: number;
+  workload_memory_limit_bytes: number;
+  oom_killed: boolean;
+  lifecycle_available: boolean;
+  exit_code: number;
+  restart_count: number;
+  started_at?: string;
+  finished_at?: string;
+  risk_reasons: MonitorRiskReason[];
   disk_available: boolean;
   disk_free_bytes: number;
   disk_total_bytes: number;
@@ -310,6 +325,11 @@ export interface FieldSchema {
 
 export type PalworldSettings = Record<string, string | number | boolean | undefined>;
 
+export interface MonitorRiskReason {
+  code: string;
+  message: string;
+  severity: 'warning' | 'critical';
+}
 export interface PalworldConfigResponse {
   settings: PalworldSettings;
   path: string;

@@ -126,7 +126,7 @@ func TestLiveDockerCPUCollection(t *testing.T) {
 		run: runCommand,
 	}
 	sample := db.MonitorSample{}
-	manager.fillDockerStats(t.Context(), &sample)
+	manager.fillDockerStats(t.Context(), &sample, docker.ContainerStatus{})
 	if !sample.CPUAvailable || sample.CPUPercent <= 0 {
 		t.Fatalf("live Docker CPU sample unavailable: %#v", sample)
 	}
@@ -269,7 +269,7 @@ OptionSettings=(RCONEnabled=True,RCONPort=25575)`
 
 	sample = db.MonitorSample{}
 	manager.run = func(_ context.Context, _ string, _ ...string) ([]byte, error) { return []byte("bad output"), nil }
-	manager.fillDockerStats(t.Context(), &sample)
+	manager.fillDockerStats(t.Context(), &sample, docker.ContainerStatus{})
 	if !strings.Contains(sample.UnavailableReason, "unexpected output") {
 		t.Fatalf("unexpected reason: %q", sample.UnavailableReason)
 	}
