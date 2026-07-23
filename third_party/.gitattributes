@@ -1,0 +1,5 @@
+.gitattributes -text -filter -ident
+palworld-save-pal.provenance.json -text -filter -ident
+uesave.provenance.json -text -filter -ident
+palworld-save-pal/** -text -filter -ident
+uesave/** -text -filter -ident

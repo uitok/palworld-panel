@@ -1,0 +1,31 @@
+{
+  "format_version": 1,
+  "repository_url": "https://github.com/oMaN-Rod/palworld-save-pal",
+  "commit": "0d99b04acba369ec88550d122794b9917bbf820e",
+  "git_tree_oid": "e8647b41d14fd354629316bf833dca47e0ad880d",
+  "git_tree_manifest_sha256": "21f425f9fbdd37eddd212c2b340de08a6d0d93027d2977781ff9d874483bb721",
+  "git_mode_counts": {
+    "100644": 3350,
+    "100755": 1
+  },
+  "git_mode_exceptions": [
+    "100755 scripts/build-docker.sh"
+  ],
+  "retrieval_date": "2026-07-22",
+  "archive_url": "https://codeload.github.com/oMaN-Rod/palworld-save-pal/tar.gz/0d99b04acba369ec88550d122794b9917bbf820e",
+  "archive_sha256": "d22bef8d516da0b98ba7d56c3be5eb9f49968130f58d9b83b11fc0e37427f4f8",
+  "snapshot_manifest_algorithm": "SHA-256 of UTF-8 lines '<file-sha256>  <byte-count>  <forward-slash-path>\\n', sorted by ordinal path",
+  "snapshot_manifest_sha256": "4e0106be04887c4a5e69a5b79156b1545b49f7dfbc4c9460d1a4b2192e730144",
+  "snapshot_file_count": 3351,
+  "snapshot_size_bytes": 70287397,
+  "expected_license": "README.md License section: MIT License (do whatever you want with it). No standalone LICENSE file exists at this commit.",
+  "standalone_license_file": false,
+  "license_material": "README.md",
+  "license_material_sha256": "7bf66dd3e22ac43f047be3fea34664ade3a836598ccf33618dcbc2e3e6400c2c",
+  "verification_commands": [
+    "git -C .cache/task-5a/savepal-git rev-parse 0d99b04acba369ec88550d122794b9917bbf820e^{commit}",
+    "git -C .cache/task-5a/savepal-git rev-parse 0d99b04acba369ec88550d122794b9917bbf820e^{tree}",
+    "Get-FileHash .cache/task-5a/savepal-0d99b04.tar.gz -Algorithm SHA256",
+    "& .\\scripts\\verify-uid-remapper-sources.ps1"
+  ]
+}

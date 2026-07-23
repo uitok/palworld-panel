@@ -1,0 +1,5 @@
+/target
+/web/src/lib/licenses.json
+/web/dist
+node_modules
+web/.vite

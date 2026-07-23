@@ -39,6 +39,20 @@ PalCalc breeding solver
   save reader are not linked. The complete license is included as
   licenses/PalCalc-MIT.txt.
 
+UID remapper source snapshots
+-----------------------------
+- oMaN-Rod/palworld-save-pal, pinned at commit
+  0d99b04acba369ec88550d122794b9917bbf820e. The complete tracked source
+  snapshot is under third_party/palworld-save-pal and its exact retrieval and
+  checksum record is third_party/palworld-save-pal.provenance.json. This pinned
+  commit has no standalone LICENSE file; its README License section states
+  `MIT License (do whatever you want with it).` No replacement license text has
+  been fabricated or attributed to upstream.
+- trumank/uesave, pinned at commit
+  a5271781df0ed021d72e5ad6eab1c59d5199451c: MIT. The complete tracked source,
+  including the upstream LICENSE, is under third_party/uesave; exact retrieval
+  and checksums are in third_party/uesave.provenance.json.
+
 Localization data
 -----------------
 - Palworld localization-derived catalog under backend/internal/pallocalize:

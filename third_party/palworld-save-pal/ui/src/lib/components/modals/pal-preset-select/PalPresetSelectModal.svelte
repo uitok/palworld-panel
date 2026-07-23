@@ -1,0 +1,90 @@
+<script lang="ts">
+	import { Button, Card, Tooltip, Combobox } from '$components/ui';
+	import { type SelectOption } from '$types';
+	import { Lock, Save, X } from 'lucide-svelte';
+	import { presetsData, palsData } from '$lib/data';
+	import { sortPresets } from '$states';
+	import * as m from '$i18n/messages';
+	import { c, p } from '$lib/utils/commonTranslations';
+
+	let {
+		title = m.select_a_entity({ entity: `${c.pal} ${c.preset}` }),
+		selectedPals,
+		closeModal
+	} = $props<{
+		title?: string;
+		selectedPals: { character_id: string; character_key: string }[];
+		closeModal: (value: any) => void;
+	}>();
+
+	let selectOptions: SelectOption[] = $derived.by(() => {
+		const entries = Object.entries(presetsData.presetProfiles)
+			.filter(([_, profile]) => {
+				if (profile.type !== 'pal_preset') return false;
+				if (profile.pal_preset?.lock) {
+					return selectedPals.every(
+						(pal: { character_id: string; character_key: string }) =>
+							pal.character_id === profile.pal_preset?.character_id
+					);
+				}
+				if (profile.pal_preset?.lock_element) {
+					return selectedPals.every((pal: { character_id: string; character_key: string }) => {
+						const palData = palsData.getByKey(pal.character_key);
+						if (!palData) return false;
+						return palData.element_types[0] === profile.pal_preset?.element;
+					});
+				}
+				return true;
+			})
+			.map(([id, preset]) => ({ id, name: preset.name }));
+
+		return sortPresets(entries, 'pal_preset').map((p) => ({ value: p.id, label: p.name }));
+	});
+	let selectedPreset: string = $state('');
+
+	function handleClose(confirmed: boolean) {
+		closeModal(confirmed ? selectedPreset : undefined);
+	}
+</script>
+
+<Card class="min-w-[calc(100vw/3)]">
+	<h3 class="h3">{title}</h3>
+	<Combobox options={selectOptions} bind:value={selectedPreset}>
+		{#snippet selectOption(option)}
+			{@const presetProfile = presetsData.presetProfiles[option.value]}
+			<div class="grid grid-cols-[1fr_auto_auto] items-center gap-2">
+				<span>{option.label}</span>
+				{#if presetProfile.pal_preset?.lock}
+					{@const palCharacterKey = selectedPals.find(
+						(p: { character_id: string; character_key: string }) =>
+							p.character_id === presetProfile.pal_preset?.character_id
+					).character_key}
+					<span class="text-sm">
+						{palsData.getByKey(palCharacterKey)?.localized_name ||
+							presetProfile.pal_preset?.character_id}
+					</span>
+					<Lock class="h-4 w-4" />
+				{/if}
+			</div>
+		{/snippet}
+	</Combobox>
+
+	<div class="mt-2 flex flex-row items-center space-x-2">
+		<Tooltip position="bottom">
+			<Button variant="ghost" size="icon" onclick={() => handleClose(true)}>
+				<Save />
+			</Button>
+			{#snippet popup()}
+				<span>{c.save}</span>
+			{/snippet}
+		</Tooltip>
+		<Tooltip position="bottom">
+			<Button variant="ghost" size="icon" onclick={() => handleClose(false)}>
+				<X />
+			</Button>
+			{#snippet popup()}
+				<span>{m.cancel()}</span>
+			{/snippet}
+		</Tooltip>
+	</div>
+</Card>

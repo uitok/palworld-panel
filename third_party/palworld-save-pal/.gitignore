@@ -1,0 +1,58 @@
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# UI specific (respecting the existing .gitignore in ui/)
+/ui/node_modules
+/ui/.output
+/ui/.vercel
+/ui/.svelte-kit
+/ui/build
+/ui/.env
+/ui/.env.*
+!/ui/.env.example
+!/ui/.env.test
+/ui/vite.config.js.timestamp-*
+/ui/vite.config.ts.timestamp-*
+
+# Dependency directories
+node_modules/
+
+# Distribution / packaging
+dist/
+build/
+ui_build/
+
+# dotenv
+.env
+
+backups/
+data/json/settings.json
+.claude/
+/servers/
+
+# Rust workspace build output
+/target
+/contract/tmp/
