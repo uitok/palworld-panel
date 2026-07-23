@@ -38,6 +38,9 @@ PalCalc breeding solver
   cross-platform `palcalc-bridge`; the WPF UI, GraphSharp, and Windows-only
   save reader are not linked. The complete license is included as
   licenses/PalCalc-MIT.txt.
+- The 115-entry standard passive-skill Chinese catalog is reproducibly
+  generated from PalCalc.Model/db.json v26 by
+  scripts/generate-palcalc-passives.go under the same MIT license.
 
 UID remapper source snapshots
 -----------------------------

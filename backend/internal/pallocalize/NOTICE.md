@@ -12,7 +12,10 @@ Copyright 2024 zaigie
 ```
 
 Only simplified-Chinese Pal, item, passive-skill, and technology display
-metadata plus item icon keys are retained. The technology list is reduced from
+metadata plus item icon keys are retained. The 115 standard passive-skill names
+are generated from the MIT-licensed PalCalc `v26` database pinned at commit
+`8b7e2f779e47fddae16ddcb973e828ba20c02b80` by
+`scripts/generate-palcalc-passives.go`. The technology list is reduced from
 `bingyouxue/palworld-server-tool-gm` commit
 `d45c74cf92ca3d1b081bf03a62adfebe131888ad` to TechID, Chinese name, level,
 category, ancient-technology status, and the upstream OP.GG identification-icon
@@ -22,6 +25,9 @@ Palworld 1.0 catalog was expanded to 2,455 ItemIDs.
 
 The source project is licensed under Apache License 2.0. A copy is included in
 `LICENSE.apache-2.0`.
+
+PalCalc is licensed under MIT. Its complete license text is included in the
+release inventory as `licenses/PalCalc-MIT.txt`.
 
 The item WebP files are game artwork used for identification. Palworld and its
 artwork are property of Pocketpair, Inc.; they are not relicensed by PalPanel's

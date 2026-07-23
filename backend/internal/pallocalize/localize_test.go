@@ -55,3 +55,21 @@ func TestSearchPalAndTechnologyCatalogs(t *testing.T) {
 		t.Fatalf("technology search = %#v", technologies)
 	}
 }
+
+func TestStandardPassiveCatalogMatchesPalCalcV26(t *testing.T) {
+	passives := SearchPassives("", 5000)
+	if len(passives) != 115 {
+		t.Fatalf("standard passive count = %d, want 115", len(passives))
+	}
+	for id, want := range map[string]string{
+		"MutationPal_Immortal": "不死之身",
+		"WorldTree_MoveSpeed":  "次元跳跃",
+		"WorldTree_ATK":        "双刃圣剑",
+		"WorldTree_DEF":        "守护圣盾",
+		"WorldTree_CraftSpeed": "恶魔之手",
+	} {
+		if got := PassiveName(id); got != want {
+			t.Errorf("PassiveName(%q) = %q, want %q", id, got, want)
+		}
+	}
+}

@@ -39,8 +39,8 @@ func TestCatalogLocalizesPalAndPassiveNames(t *testing.T) {
 	if catalog.Pals[1]["name"] != "棘甲龙" || catalog.Pals[1]["raw_name"] != "Aegidron" {
 		t.Fatalf("upstream localized pal = %#v", catalog.Pals[1])
 	}
-	if catalog.Passives[1]["name"] != "育儿专家" || catalog.Passives[1]["raw_name"] != "Babysitter" {
-		t.Fatalf("upstream localized passive = %#v", catalog.Passives[1])
+	if catalog.Passives[1]["name"] != "育婴师" || catalog.Passives[1]["raw_name"] != "Babysitter" {
+		t.Fatalf("PalCalc v26 localized passive = %#v", catalog.Passives[1])
 	}
 }
 
