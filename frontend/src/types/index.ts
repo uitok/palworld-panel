@@ -857,14 +857,28 @@ export interface SaveInventoryContainer {
   slots: SaveInventorySlot[];
 }
 
+export interface PlayerDataView {
+  scope: 'active' | 'server';
+  source_id: string;
+  source_kind: 'server' | 'import';
+  source_name: string;
+  online_overlay: boolean;
+}
+
+export interface PlayerListResponse extends EntityListResponse<Player> {
+  view: PlayerDataView;
+}
+
 export interface SavePlayerDetail {
   player: Player;
   status: SaveIndexStatus;
+  view: PlayerDataView;
 }
 
 export interface SavePlayerInventory {
   containers: SaveInventoryContainer[];
   status: SaveIndexStatus;
+  view: PlayerDataView;
 }
 
 export interface PalSkill {

@@ -73,6 +73,9 @@ func TestOpenAPIGeneratesPlayerAndSaveIndexContracts(t *testing.T) {
 		`"error_detail"?: string`,
 		`"PlayerListEnvelope":`,
 		`"PlayerDetailEnvelope":`,
+		`"PlayerInventoryEnvelope":`,
+		`"PlayerDataView":`,
+		`"online_overlay": boolean`,
 	} {
 		if !strings.Contains(contract, want) {
 			t.Fatalf("generated player/save-index contract does not contain %q", want)

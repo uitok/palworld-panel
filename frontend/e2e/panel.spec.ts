@@ -25,7 +25,8 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
   await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const request = route.request();
     if (request.headers().authorization) authorization = request.headers().authorization;
-    const path = new URL(request.url()).pathname;
+    const requestURL = new URL(request.url());
+    const path = requestURL.pathname;
     requestedPaths.add(path);
     if (path.startsWith('/api/backups/') && path.endsWith('/download')) {
       await route.fulfill({
@@ -158,6 +159,9 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
             counts: { players: 1, guilds: 0, bases: 0, pals: 0, containers: 0, map_entities: 0 },
           },
           summary: { total: 1, limit: 5000, offset: 0, returned: 1, page: 1 },
+          view: requestURL.searchParams.get('source') === 'server'
+            ? { scope: 'server', source_id: 'server', source_kind: 'server', source_name: '当前服务器', online_overlay: true }
+            : { scope: 'active', source_id: 'import-one', source_kind: 'import', source_name: '历史存档', online_overlay: false },
         };
         break;
       case '/api/security/paldefender/gm/status':
@@ -219,7 +223,8 @@ test('player pages consume the backend registry and show stale REST state', asyn
 
   await page.goto('/players');
   await expect(page.getByRole('row', { name: /RegistryTester/ })).toBeVisible();
-  await expect(page.getByText(/官方 REST 在线状态暂不可用/)).toBeVisible();
+  await expect(page.getByText('历史存档视图，不叠加实时在线状态')).toBeVisible();
+  await expect(page.getByText(/官方 REST 在线状态暂不可用/)).toHaveCount(0);
   await expect(page.getByRole('cell', { name: '离线' })).toBeVisible();
 });
 

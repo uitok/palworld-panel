@@ -130,6 +130,11 @@ x-player-detail: &playerDetail
   content:
     application/json:
       schema: {$ref: '#/components/schemas/PlayerDetailEnvelope'}
+x-player-inventory: &playerInventory
+  description: Player inventory containers from the selected save view.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/PlayerInventoryEnvelope'}
 x-mod-config-adapters: &modConfigAdapters
   description: Registered typed Mod configuration adapters and their opaque files.
   content:
@@ -179,6 +184,11 @@ x-id-parameter: &idParameter
   in: path
   required: true
   schema: {type: string}
+x-player-source-parameter: &playerSourceParameter
+  name: source
+  in: query
+  required: false
+  schema: {type: string, enum: [server]}
 x-idempotency-key: &idempotencyKey
   name: Idempotency-Key
   in: header
@@ -1096,13 +1106,18 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AstrBotCommunityServerRequest'}}}}
       responses: {'200': *communityServerResult, '400': *error, '401': *error, '429': *error, '502': *error, '503': *error}
   /players:
-    get: {operationId: listSavePlayers, tags: [world], x-palpanel-permission: read, responses: {'200': *playerList, '401': *error, '404': *error}}
+    get:
+      operationId: listSavePlayers
+      tags: [world]
+      x-palpanel-permission: read
+      parameters: [*playerSourceParameter]
+      responses: {'200': *playerList, '400': *error, '401': *error, '404': *error}
   /players/{id}:
-    parameters: [*idParameter]
-    get: {operationId: getSavePlayer, tags: [world], x-palpanel-permission: read, responses: {'200': *playerDetail, '401': *error, '404': *error}}
+    parameters: [*idParameter, *playerSourceParameter]
+    get: {operationId: getSavePlayer, tags: [world], x-palpanel-permission: read, responses: {'200': *playerDetail, '400': *error, '401': *error, '404': *error}}
   /players/{id}/inventory:
-    parameters: [*idParameter]
-    get: {operationId: getPlayerInventory, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    parameters: [*idParameter, *playerSourceParameter]
+    get: {operationId: getPlayerInventory, tags: [world], x-palpanel-permission: read, responses: {'200': *playerInventory, '400': *error, '401': *error, '404': *error}}
   /guilds:
     get: {operationId: listGuilds, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /guilds/{id}:
@@ -1205,6 +1220,32 @@ components:
         inventory_summary: {type: object, additionalProperties: true}
         ping: {type: number}
         ip: {type: string}
+    PlayerDataView:
+      type: object
+      required: [scope, source_id, source_kind, source_name, online_overlay]
+      properties:
+        scope: {type: string, enum: [active, server]}
+        source_id: {type: string}
+        source_kind: {type: string, enum: [server, import]}
+        source_name: {type: string}
+        online_overlay: {type: boolean}
+    SaveInventorySlot:
+      type: object
+      required: [slot, item_id, item_name, count, durability]
+      properties:
+        slot: {type: integer, minimum: 0}
+        item_id: {type: string}
+        item_name: {type: string}
+        count: {type: integer, minimum: 0}
+        durability: {anyOf: [{type: number}, {type: 'null'}]}
+    SaveInventoryContainer:
+      type: object
+      required: [container_id, owner_type, owner_id, slots]
+      properties:
+        container_id: {type: string}
+        owner_type: {type: string}
+        owner_id: {type: string}
+        slots: {type: array, items: {$ref: '#/components/schemas/SaveInventorySlot'}}
     ListSummary:
       type: object
       required: [total, limit, offset, returned, page]
@@ -1216,17 +1257,26 @@ components:
         page: {type: integer, minimum: 1}
     PlayerListResult:
       type: object
-      required: [players, status, summary]
+      required: [players, status, summary, view]
       properties:
         players: {type: array, items: {$ref: '#/components/schemas/Player'}}
         status: {$ref: '#/components/schemas/SaveIndexStatus'}
         summary: {$ref: '#/components/schemas/ListSummary'}
+        view: {$ref: '#/components/schemas/PlayerDataView'}
     PlayerDetailResult:
       type: object
-      required: [player, status]
+      required: [player, status, view]
       properties:
         player: {$ref: '#/components/schemas/Player'}
         status: {$ref: '#/components/schemas/SaveIndexStatus'}
+        view: {$ref: '#/components/schemas/PlayerDataView'}
+    PlayerInventoryResult:
+      type: object
+      required: [containers, status, view]
+      properties:
+        containers: {type: array, items: {$ref: '#/components/schemas/SaveInventoryContainer'}}
+        status: {$ref: '#/components/schemas/SaveIndexStatus'}
+        view: {$ref: '#/components/schemas/PlayerDataView'}
     SaveIndexStatusEnvelope:
       type: object
       required: [ok, data]
@@ -1245,6 +1295,12 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/PlayerDetailResult'}
+    PlayerInventoryEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PlayerInventoryResult'}
     PalworldConfigUpdateRequest:
       type: object
       additionalProperties: false

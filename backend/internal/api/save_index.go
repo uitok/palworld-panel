@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"palpanel/internal/db"
 	"palpanel/internal/paldefender"
 	"palpanel/internal/pallocalize"
 	"palpanel/internal/saveindex"
@@ -40,32 +41,44 @@ func (s Server) saveIndexRebuild(c *gin.Context) {
 }
 
 func (s Server) listSavePlayers(c *gin.Context) {
-	index, status, err := s.currentSaveIndex(c)
-	if err != nil && !status.Stale {
-		index = saveindex.EmptyIndex()
+	index, status, view, overlay, valid, err := s.currentPlayerIndex(c)
+	if !valid {
+		return
 	}
-	online := s.onlinePlayers(c)
-	status = statusWithOnlineState(status, online)
-	players := mergeSaveAndOnline(index.Players, online.Players)
+	var online onlinePlayersResult
+	if overlay {
+		online = s.onlinePlayers(c)
+		status = statusWithOnlineState(status, online)
+	}
+	players := playersForView(index.Players, online, overlay)
+	if err != nil && !status.Stale {
+		players = []saveindex.Player{}
+	}
 	players = filterPlayers(players, c)
 	limit, offset := limitOffset(c)
 	paged, summary := paginate(players, limit, offset)
-	ok(c, gin.H{"players": flattenPlayers(paged, online), "status": status, "summary": summary})
+	ok(c, gin.H{"players": flattenPlayers(paged, online), "status": status, "summary": summary, "view": view})
 }
 
 func (s Server) getSavePlayer(c *gin.Context) {
-	index, status, err := s.currentSaveIndex(c)
+	index, status, view, overlay, valid, err := s.currentPlayerIndex(c)
+	if !valid {
+		return
+	}
+	var online onlinePlayersResult
+	if overlay {
+		online = s.onlinePlayers(c)
+		status = statusWithOnlineState(status, online)
+	}
 	if err != nil && !status.Stale && status.State != "disabled" {
 		fail(c, http.StatusServiceUnavailable, "save_index_unavailable", err.Error())
 		return
 	}
 	id := c.Param("id")
-	online := s.onlinePlayers(c)
-	status = statusWithOnlineState(status, online)
-	players := mergeSaveAndOnline(index.Players, online.Players)
+	players := playersForView(index.Players, online, overlay)
 	for _, player := range players {
 		if matchesID(id, player.PlayerUID, player.SteamID) {
-			ok(c, gin.H{"player": flattenPlayer(player, online), "status": status})
+			ok(c, gin.H{"player": flattenPlayer(player, online), "status": status, "view": view})
 			return
 		}
 	}
@@ -73,7 +86,10 @@ func (s Server) getSavePlayer(c *gin.Context) {
 }
 
 func (s Server) getSavePlayerInventory(c *gin.Context) {
-	index, status, err := s.currentSaveIndex(c)
+	index, status, view, _, valid, err := s.currentPlayerIndex(c)
+	if !valid {
+		return
+	}
 	if err != nil && !status.Stale && status.State != "disabled" {
 		fail(c, http.StatusServiceUnavailable, "save_index_unavailable", err.Error())
 		return
@@ -85,7 +101,68 @@ func (s Server) getSavePlayerInventory(c *gin.Context) {
 			items = append(items, container)
 		}
 	}
-	ok(c, gin.H{"containers": flattenContainers(items), "status": status})
+	ok(c, gin.H{"containers": flattenContainers(items), "status": status, "view": view})
+}
+
+type playerDataView struct {
+	Scope         string `json:"scope"`
+	SourceID      string `json:"source_id"`
+	SourceKind    string `json:"source_kind"`
+	SourceName    string `json:"source_name"`
+	OnlineOverlay bool   `json:"online_overlay"`
+}
+
+func (s Server) currentPlayerIndex(c *gin.Context) (saveindex.Index, saveindex.Status, playerDataView, bool, bool, error) {
+	sourceQuery := strings.TrimSpace(c.Query("source"))
+	if sourceQuery != "" && sourceQuery != "server" {
+		fail(c, http.StatusBadRequest, "player_source_invalid", "source must be server when specified")
+		return saveindex.EmptyIndex(), saveindex.Status{}, playerDataView{}, false, false, nil
+	}
+
+	source := db.SaveSource{ID: "server", Name: "当前服务器存档", Kind: "server"}
+	manager := s.saveIndex
+	scope := "active"
+	if sourceQuery == "server" {
+		scope = "server"
+		manager = s.serverSaveIndex
+		if stored, err := s.store.GetSaveSource(c.Request.Context(), "server"); err == nil {
+			source = stored
+		}
+	} else {
+		active, err := s.store.ActiveSaveSource(c.Request.Context())
+		if err != nil {
+			fail(c, http.StatusInternalServerError, "save_source_read_failed", err.Error())
+			return saveindex.EmptyIndex(), saveindex.Status{}, playerDataView{}, false, false, nil
+		}
+		source = active
+	}
+
+	overlay := source.Kind == "server"
+	index, status, err := s.playerIndexCurrent(c, manager, overlay)
+	view := playerDataView{Scope: scope, SourceID: source.ID, SourceKind: source.Kind, SourceName: source.Name, OnlineOverlay: overlay}
+	return index, status, view, overlay, true, err
+}
+
+func (s Server) playerIndexCurrent(c *gin.Context, manager *saveindex.Manager, rebuildIfMissing bool) (saveindex.Index, saveindex.Status, error) {
+	manager.EnsureFresh(c.Request.Context())
+	index, status, err := manager.Current(c.Request.Context())
+	if rebuildIfMissing && err == nil && status.State == "not_indexed" {
+		return manager.Rebuild(c.Request.Context())
+	}
+	return index, status, err
+}
+
+func playersForView(players []saveindex.Player, online onlinePlayersResult, overlay bool) []saveindex.Player {
+	if overlay {
+		return mergeSaveAndOnline(players, online.Players)
+	}
+	offline := append([]saveindex.Player(nil), players...)
+	for position := range offline {
+		offline[position].IsOnline = false
+		offline[position].Ping = nil
+		offline[position].IP = ""
+	}
+	return offline
 }
 
 func (s Server) listSaveGuilds(c *gin.Context) {
@@ -751,8 +828,8 @@ func parseOnlinePlayers(bodyValue any) map[string]onlinePlayer {
 		if !ok {
 			continue
 		}
-		steamID := stringFromAny(player["steam_id"], player["userId"], player["userid"], player["playerId"])
-		playerUID := stringFromAny(player["player_uid"], player["playerUid"])
+		steamID := stringFromAny(player["steam_id"], player["userId"], player["userid"])
+		playerUID := stringFromAny(player["player_uid"], player["playerUid"], player["playerId"])
 		nickname := stringFromAny(player["nickname"], player["name"], player["playerName"])
 		pingValue, hasPing := numberFromAny(player["ping"])
 		var ping *float64

@@ -779,6 +779,13 @@ export interface components {
       "player_uid": string;
       "steam_id": string;
     };
+    "PlayerDataView": {
+      "online_overlay": boolean;
+      "scope": "active" | "server";
+      "source_id": string;
+      "source_kind": "server" | "import";
+      "source_name": string;
+    };
     "PlayerDetailEnvelope": {
       "data": components["schemas"]["PlayerDetailResult"];
       "ok": true;
@@ -786,6 +793,16 @@ export interface components {
     "PlayerDetailResult": {
       "player": components["schemas"]["Player"];
       "status": components["schemas"]["SaveIndexStatus"];
+      "view": components["schemas"]["PlayerDataView"];
+    };
+    "PlayerInventoryEnvelope": {
+      "data": components["schemas"]["PlayerInventoryResult"];
+      "ok": true;
+    };
+    "PlayerInventoryResult": {
+      "containers": Array<components["schemas"]["SaveInventoryContainer"]>;
+      "status": components["schemas"]["SaveIndexStatus"];
+      "view": components["schemas"]["PlayerDataView"];
     };
     "PlayerListEnvelope": {
       "data": components["schemas"]["PlayerListResult"];
@@ -795,6 +812,7 @@ export interface components {
       "players": Array<components["schemas"]["Player"]>;
       "status": components["schemas"]["SaveIndexStatus"];
       "summary": components["schemas"]["ListSummary"];
+      "view": components["schemas"]["PlayerDataView"];
     };
     "SafeLifecycleRequest": {
       "message"?: string;
@@ -873,6 +891,19 @@ export interface components {
     "SaveIndexStatusEnvelope": {
       "data": components["schemas"]["SaveIndexStatus"];
       "ok": true;
+    };
+    "SaveInventoryContainer": {
+      "container_id": string;
+      "owner_id": string;
+      "owner_type": string;
+      "slots": Array<components["schemas"]["SaveInventorySlot"]>;
+    };
+    "SaveInventorySlot": {
+      "count": number;
+      "durability": number | null;
+      "item_id": string;
+      "item_name": string;
+      "slot": number;
     };
     "SaveSourceImportRequest": {
       "file": string;

@@ -77,6 +77,29 @@ describe('Players archive', () => {
     expect(screen.getAllByText('离线').length).toBeGreaterThan(0);
   });
 
+  it('shows a historical view notice and suppresses the stale REST warning', async () => {
+    mocks.getPlayersList.mockResolvedValue({
+      items: [{
+        id: 'history', steam_id: 'history', player_uid: 'history-uid', nickname: 'History', level: 18,
+        guild_name: '', is_online: false, online_source: 'none', online_stale: true,
+        last_online_time: '', x: 0, y: 0, z: 0,
+      }],
+      status: {
+        enabled: true, state: 'ready', stale: true, source_path: '', updated_at: '', fingerprint: '', parser: 'sav-cli',
+        parser_available: true, counts: { players: 1, guilds: 0, bases: 0, pals: 0, map_objects: 0 },
+        warnings: ['online player REST data is stale or unavailable'],
+      },
+      summary: { total: 1, returned: 1, limit: 50, offset: 0, truncated: false },
+      view: { scope: 'active', source_id: 'import-one', source_kind: 'import', source_name: '历史存档', online_overlay: false },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('历史存档视图，不叠加实时在线状态')).toBeInTheDocument();
+    expect(screen.queryByText(/官方 REST 在线状态暂不可用/)).not.toBeInTheDocument();
+    expect(mocks.getPlayersList).toHaveBeenCalledWith({ limit: 50, offset: 0, q: '', online: undefined });
+  });
+
   it('shows stale REST state when the current page has no players', async () => {
     mocks.getPlayersList.mockResolvedValue({
       items: [],

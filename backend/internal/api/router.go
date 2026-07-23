@@ -42,27 +42,28 @@ import (
 )
 
 type Server struct {
-	cfg           appconfig.Config
-	store         *db.Store
-	server        server.Manager
-	mods          mods.Manager
-	defender      paldefender.Manager
-	palrest       palrest.Client
-	monitor       monitor.Manager
-	scheduler     scheduler.Manager
-	saveIndex     *saveindex.Manager
-	breeding      *breeding.Service
-	community     *communityservers.Service
-	communityAPI  *CommunityServersHandler
-	astrbot       *astrbotclient.Client
-	ai            *aitranslation.Service
-	networkProxy  *networkproxy.Service
-	auth          *panelauth.Service
-	authLimiter   *authRateLimiter
-	cache         *ttlCache
-	gmIdempotency *gmIdempotencyStore
-	saveImports   *saveImportInspectionStore
-	webUI         fs.FS
+	cfg             appconfig.Config
+	store           *db.Store
+	server          server.Manager
+	mods            mods.Manager
+	defender        paldefender.Manager
+	palrest         palrest.Client
+	monitor         monitor.Manager
+	scheduler       scheduler.Manager
+	saveIndex       *saveindex.Manager
+	serverSaveIndex *saveindex.Manager
+	breeding        *breeding.Service
+	community       *communityservers.Service
+	communityAPI    *CommunityServersHandler
+	astrbot         *astrbotclient.Client
+	ai              *aitranslation.Service
+	networkProxy    *networkproxy.Service
+	auth            *panelauth.Service
+	authLimiter     *authRateLimiter
+	cache           *ttlCache
+	gmIdempotency   *gmIdempotencyStore
+	saveImports     *saveImportInspectionStore
+	webUI           fs.FS
 }
 
 func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
@@ -70,6 +71,9 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 	webFiles, _ := webui.Load(cfg.FrontendDist)
 	saveManager := saveindex.NewManager(cfg)
 	initializeSaveSources(cfg, store, saveManager)
+	liveCfg := cfg
+	liveCfg.SaveIndexCacheDir = filepath.Join(cfg.SaveIndexCacheDir, "server-live")
+	serverSaveManager := saveindex.NewManager(liveCfg)
 	if err := cleanupSaveImportInspections(cfg); err != nil {
 		log.Printf("save import inspection cleanup failed: %v", err)
 	}
@@ -93,7 +97,7 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 			communityAPI = NewCommunityServersHandler(service)
 		}
 	}
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), networkProxy: networkProxyService, auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), saveImports: newSaveImportInspectionStore(defaultSaveImportInspectionTTL), webUI: webFiles}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, serverSaveIndex: serverSaveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), networkProxy: networkProxyService, auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), saveImports: newSaveImportInspectionStore(defaultSaveImportInspectionTTL), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))
@@ -565,6 +569,7 @@ func (s Server) serverRestart(c *gin.Context) {
 		return
 	}
 	s.invalidateServerCaches()
+	s.invalidateServerSaveIndex()
 	ok(c, gin.H{"status": "restarted"})
 }
 
@@ -590,6 +595,7 @@ func (s Server) serverSafeRestart(c *gin.Context) {
 		return
 	}
 	s.invalidateServerCaches()
+	s.invalidateServerSaveIndex()
 	accepted(c, j)
 }
 
@@ -1262,6 +1268,9 @@ func (s Server) palPost(path string) gin.HandlerFunc {
 		if err != nil {
 			fail(c, http.StatusBadGateway, "palworld_api_failed", err.Error())
 			return
+		}
+		if path == "save" {
+			s.invalidateServerSaveIndex()
 		}
 		ok(c, resp)
 	}

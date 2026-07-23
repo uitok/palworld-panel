@@ -54,7 +54,7 @@ export const PlayerCenter: React.FC = () => {
   const status = statusQuery.data;
   const savePlayersQuery = useQuery({
     queryKey: ['player-center', 'save-players'],
-    queryFn: () => playersApi.getPlayersList({ limit: 5000 }),
+    queryFn: () => playersApi.getPlayersList({ limit: 5000 }, { source: 'server' }),
   });
   const players = savePlayersQuery.data?.items ?? emptySavePlayers;
   const playerSourcesReady = !savePlayersQuery.isLoading;
@@ -92,12 +92,12 @@ export const PlayerCenter: React.FC = () => {
   });
   const saveDetailQuery = useQuery({
     queryKey: ['player-center', 'save-player', saveIdentifier],
-    queryFn: () => playersApi.getPlayer(saveIdentifier),
+    queryFn: () => playersApi.getPlayer(saveIdentifier, 'server'),
     enabled: Boolean(saveIdentifier),
   });
   const saveInventoryQuery = useQuery({
     queryKey: ['player-center', 'save-inventory', saveIdentifier],
-    queryFn: () => playersApi.getInventory(saveIdentifier),
+    queryFn: () => playersApi.getInventory(saveIdentifier, 'server'),
     enabled: Boolean(saveIdentifier),
   });
   const savePalsQuery = useQuery({

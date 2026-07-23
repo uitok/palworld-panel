@@ -55,6 +55,21 @@ func (s Server) invalidateSaveCaches() {
 	s.cache.DeletePrefix(cacheKeySavePrefix)
 }
 
+func (s Server) invalidateSaveIndexes() {
+	if s.saveIndex != nil {
+		s.saveIndex.Invalidate()
+	}
+	if s.serverSaveIndex != nil && s.serverSaveIndex != s.saveIndex {
+		s.serverSaveIndex.Invalidate()
+	}
+}
+
+func (s Server) invalidateServerSaveIndex() {
+	if s.serverSaveIndex != nil {
+		s.serverSaveIndex.Invalidate()
+	}
+}
+
 func (s Server) palworldRESTRead() palrest.Client {
 	client := s.palworldREST()
 	timeout := time.Duration(s.cfg.PalworldRESTReadTimeoutMS) * time.Millisecond

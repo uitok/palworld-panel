@@ -140,7 +140,9 @@ describe('PalDefender player center', () => {
     expect(screen.getByRole('button', { name: 'OfflineUser 离线' })).toBeInTheDocument();
     expect(mocks.gmApi.players).not.toHaveBeenCalled();
     await waitFor(() => expect(mocks.gmApi.player).toHaveBeenCalledWith('steam_1'));
-    expect(mocks.playersApi.getPlayer).toHaveBeenCalledWith('uid_1');
+    expect(mocks.playersApi.getPlayersList).toHaveBeenCalledWith({ limit: 5000 }, { source: 'server' });
+    expect(mocks.playersApi.getPlayer).toHaveBeenCalledWith('uid_1', 'server');
+    expect(mocks.playersApi.getInventory).toHaveBeenCalledWith('uid_1', 'server');
   });
 
   it('keeps save players available when PalDefender is not configured', async () => {

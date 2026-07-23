@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { mapAccessEntries, mapPlayer, mapSaveInventoryContainers } from './players';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AxiosResponse } from 'axios';
+import { apiClient } from './client';
+import { mapAccessEntries, mapPlayer, mapSaveInventoryContainers, playersApi } from './players';
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('mapAccessEntries', () => {
   it('treats null and non-array payloads as empty arrays', () => {
@@ -69,5 +73,27 @@ describe('save player detail mappers', () => {
         ],
       }],
     })).toEqual([{ container_id: 'bag_1', owner_type: 'player', owner_id: 'uid_1', slots: [{ slot: 0, item_id: 'Money', item_name: '金币', count: 25, durability: 0 }] }]);
+  });
+});
+
+describe('player source requests', () => {
+  it('adds the server source to list, detail, and inventory requests', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: { ok: true, data: {} }, status: 200 } as AxiosResponse);
+
+    await playersApi.getPlayersList({ limit: 50 }, { source: 'server' });
+    await playersApi.getPlayer('uid/live', 'server');
+    await playersApi.getInventory('uid/live', 'server');
+
+    expect(get).toHaveBeenNthCalledWith(1, '/players?limit=50&source=server');
+    expect(get).toHaveBeenNthCalledWith(2, '/players/uid%2Flive?source=server');
+    expect(get).toHaveBeenNthCalledWith(3, '/players/uid%2Flive/inventory?source=server');
+  });
+
+  it('keeps world archive requests on the active source by default', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: { ok: true, data: {} }, status: 200 } as AxiosResponse);
+
+    await playersApi.getPlayersList({ limit: 50 });
+
+    expect(get).toHaveBeenCalledWith('/players?limit=50');
   });
 });
