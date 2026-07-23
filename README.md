@@ -182,6 +182,30 @@ sudo /opt/palpanel/current/palpanelctl restart
 sudo /opt/palpanel/current/palpanelctl uninstall
 ```
 
+升级 Linux Docker/Wine 部署时，先校验发布包，再在解压目录执行：
+
+```bash
+sha256sum -c checksums.txt
+sudo ./palpanelctl install --docker --listen 0.0.0.0:63101
+sudo /opt/palpanel/current/palpanelctl status
+curl --fail http://127.0.0.1:63101/api/health
+```
+
+升级默认保留 `/etc/palpanel`、`/var/lib/palpanel`、游戏存档、游戏日志和
+Wine 前缀。Docker/Wine 模式不会再递归接管 `server`、`logs`、`wineprefix`
+挂载目录；已有容器时只按容器配置的 UID/GID 调整其可写权限，面板自己的
+`docker-client` 目录仍由 `palpanel` 用户保护。
+
+如果升级后出现游戏容器权限错误，可检查：
+
+```bash
+docker inspect -f '{{.Config.User}}' palworld-wine-server
+stat -c '%U:%G %a %n' /var/lib/palpanel/server /var/lib/palpanel/logs /var/lib/palpanel/wineprefix
+sudo /opt/palpanel/current/palpanelctl status
+sudo journalctl -u palpanel.service -u palpanel-sav-cli.service --no-pager -n 100
+docker logs --tail 100 palworld-wine-server
+```
+
 请不要把没有 HTTPS 和访问控制的面板直接暴露到公网。
 
 ## AstrBot 配置

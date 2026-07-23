@@ -473,6 +473,121 @@ set_config_value() {
   mv -f "$temporary" "$path"
 }
 
+resolve_system_path() {
+  local value="$1"
+  if [[ "$value" == /* ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s/%s\n' "$system_data_dir" "$value"
+  fi
+}
+
+configured_system_path() {
+  local name="$1"
+  local fallback="$2"
+  local value
+  value="$(read_config_value "$name" "$etc_dir/palpanel.env")"
+  [[ -n "$value" ]] || value="$fallback"
+  resolve_system_path "$value"
+}
+
+path_is_child_or_same() {
+  local path="$1"
+  local parent="$2"
+  [[ "$path" == "$parent" || "$path" == "$parent/"* ]]
+}
+
+docker_container_user() {
+  local docker_bin="$1"
+  local container="$2"
+  local configured_user
+  configured_user="$("$docker_bin" inspect --format '{{.Config.User}}' "$container" 2>/dev/null || true)"
+  configured_user="${configured_user//$'\r'/}"
+  configured_user="${configured_user//$'\n'/}"
+  case "$configured_user" in
+    ''|root|0|0:0)
+      return 1
+      ;;
+    *[!0-9:]*|*:*:*)
+      return 1
+      ;;
+  esac
+  local uid="${configured_user%%:*}"
+  local gid="$configured_user"
+  if [[ "$configured_user" != *:* ]]; then
+    gid="$(id -g "$service_user")"
+  else
+    gid="${configured_user##*:}"
+  fi
+  [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s:%s\n' "$uid" "$gid"
+}
+
+prepare_docker_mount() {
+  local path="$1"
+  local container_owner="$2"
+  if [[ -L "$path" ]]; then
+    fail "refusing symbolic link for Docker game mount: $path"
+  fi
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    fail "Docker game mount is not a directory: $path"
+  fi
+  if [[ ! -e "$path" ]]; then
+    mkdir -p "$path"
+    chown "$service_user:$service_user" "$path"
+  elif [[ -n "$container_owner" ]]; then
+    chown -R --no-dereference "$container_owner" "$path"
+    chmod -R g+rwX "$path"
+  fi
+}
+
+configure_data_permissions() {
+  local docker_access="$1"
+  local config_path="$etc_dir/palpanel.env"
+  if (( ! docker_access )); then
+    chown -R --no-dereference "$service_user:$service_user" "$system_data_dir"
+    return
+  fi
+
+  local server_dir
+  local logs_dir
+  local wine_prefix_dir
+  local data_dir
+  local docker_container
+  local docker_bin
+  local container_owner=""
+  data_dir="$(configured_system_path PALPANEL_DATA_DIR "$system_data_dir")"
+  server_dir="$(configured_system_path PALPANEL_SERVER_DIR "$data_dir/server")"
+  logs_dir="$(configured_system_path PALPANEL_LOGS_DIR "$data_dir/logs")"
+  wine_prefix_dir="$(configured_system_path PALPANEL_WINE_PREFIX_DIR "$data_dir/wineprefix")"
+  docker_container="$(read_config_value PALPANEL_DOCKER_CONTAINER "$config_path")"
+  [[ -n "$docker_container" ]] || docker_container="palworld-wine-server"
+  docker_bin="$(read_config_value PALPANEL_DOCKER_BIN "$config_path")"
+  [[ -n "$docker_bin" ]] || docker_bin="docker"
+
+  if container_owner="$(docker_container_user "$docker_bin" "$docker_container")"; then
+    :
+  else
+    printf 'Docker container %s is not available or has no numeric user; preserving existing game mount ownership.\n' "$docker_container" >&2
+  fi
+
+  prepare_docker_mount "$server_dir" "$container_owner"
+  prepare_docker_mount "$logs_dir" "$container_owner"
+  prepare_docker_mount "$wine_prefix_dir" "$container_owner"
+
+  chown root:"$service_user" "$system_data_dir"
+  chmod 750 "$system_data_dir"
+  local find_args=("$system_data_dir" -mindepth 1)
+  local mount
+  for mount in "$server_dir" "$logs_dir" "$wine_prefix_dir"; do
+    if path_is_child_or_same "$mount" "$system_data_dir"; then
+      find_args+=( ! -path "$mount" ! -path "$mount/*" )
+    fi
+  done
+  find_args+=( -exec chown --no-dereference "$service_user:$service_user" {} + )
+  find "${find_args[@]}"
+}
+
 install_system() {
   require_root
   require_binary "$backend_bin"
@@ -560,7 +675,7 @@ install_system() {
   if [[ "$test_mode" != "1" ]]; then
     chown "$service_user:$service_user" "$etc_dir/palpanel.env"
     chown "$service_user:$service_user" "$docker_config_dir"
-    chown -R --no-dereference "$service_user:$service_user" "$system_data_dir"
+    configure_data_permissions "$docker_access"
   fi
 
   sed -e "s|/opt/palpanel|$opt_root|g" -e "s|/etc/palpanel|$etc_dir|g" -e "s|/var/lib/palpanel|$system_data_dir|g" \

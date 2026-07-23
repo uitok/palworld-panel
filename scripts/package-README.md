@@ -46,7 +46,24 @@ preserving the rest of the index.
 Programs are installed under `/opt/palpanel/<version>`, with
 `/opt/palpanel/current` selecting the active version. Configuration is stored
 in `/etc/palpanel`, and state is stored in `/var/lib/palpanel`. Reinstalling a
-new version preserves both locations.
+new version preserves both locations, including game saves, logs, and the Wine
+prefix.
+
+To upgrade an existing Linux installation, download and verify the archive,
+extract it, then run the installer from the package directory:
+
+```bash
+sha256sum -c checksums.txt
+sudo ./palpanelctl install --docker --listen 0.0.0.0:63101
+sudo /opt/palpanel/current/palpanelctl status
+curl --fail http://127.0.0.1:63101/api/health
+```
+
+In Docker/Wine mode the installer does not recursively change ownership of the
+game mounts. Existing `server`, `logs`, and `wineprefix` contents are kept;
+when the managed container exists, those directories are made writable for its
+configured numeric UID/GID. Panel-owned state such as `docker-client` remains
+private to the `palpanel` service user.
 
 The GitHub bootstrap installer also supports migration from an older
 containerized PalPanel when its data directory is mounted on the host:
@@ -77,6 +94,17 @@ sudo ./palpanelctl install --docker
 
 Membership in the Docker group is effectively root-equivalent. Do not enable
 it when using the Windows SteamCMD runtime without Docker.
+
+If a Docker/Wine upgrade reports permission errors, inspect the container user
+and the three host mounts:
+
+```bash
+docker inspect -f '{{.Config.User}}' palworld-wine-server
+stat -c '%U:%G %a %n' /var/lib/palpanel/server /var/lib/palpanel/logs /var/lib/palpanel/wineprefix
+sudo /opt/palpanel/current/palpanelctl status
+sudo journalctl -u palpanel.service -u palpanel-sav-cli.service --no-pager -n 100
+docker logs --tail 100 palworld-wine-server
+```
 
 ## Docker/Wine server and Workshop configuration
 
