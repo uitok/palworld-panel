@@ -71,15 +71,18 @@ func PanelRESTPermissions() []string {
 }
 
 type Manager struct {
-	cfg         appconfig.Config
-	store       *db.Store
-	client      *http.Client
-	proxyURL    func() (string, error)
-	restClient  *http.Client
-	restBaseURL string
-	jobs        *jobs.Executor
-	ue4ss       *dependencyTracker
-	serverState ServerState
+	cfg                appconfig.Config
+	store              *db.Store
+	client             *http.Client
+	proxyURL           func() (string, error)
+	restClient         *http.Client
+	restBaseURL        string
+	jobs               *jobs.Executor
+	ue4ss              *dependencyTracker
+	serverState        ServerState
+	exportRCON         func(context.Context, string) (RCONResult, error)
+	exportPollInterval time.Duration
+	exportTimeout      time.Duration
 }
 
 type Release struct {
@@ -126,7 +129,11 @@ func NewManager(cfg appconfig.Config, store *db.Store, executors ...*jobs.Execut
 	}
 	directTransport, _ := networkproxy.Transport("")
 	proxyService := networkproxy.New(cfg)
-	return Manager{cfg: cfg, store: store, client: &http.Client{Transport: directTransport, Timeout: 60 * time.Second}, proxyURL: proxyService.InstallProxyURL, restClient: newRESTHTTPClient(), restBaseURL: cfg.EffectivePalDefenderRESTBaseURL(), jobs: executor, ue4ss: newDependencyTracker()}
+	return Manager{
+		cfg: cfg, store: store, client: &http.Client{Transport: directTransport, Timeout: 60 * time.Second},
+		proxyURL: proxyService.InstallProxyURL, restClient: newRESTHTTPClient(), restBaseURL: cfg.EffectivePalDefenderRESTBaseURL(),
+		jobs: executor, ue4ss: newDependencyTracker(), exportPollInterval: 500 * time.Millisecond, exportTimeout: 30 * time.Second,
+	}
 }
 
 func (m Manager) publicHTTPClient() (*http.Client, error) {

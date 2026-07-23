@@ -95,6 +95,17 @@ func (s Server) palDefenderGMGiveCustomPal(c *gin.Context) {
 	})
 }
 
+func (s Server) palDefenderGMGiveCustomPals(c *gin.Context) {
+	var request paldefender.GiveCustomPalsRequest
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RESTGiveCustomPals(ctx, c.Param("id"), request.Template, request.Count)
+	})
+}
+
 func (s Server) palDefenderGMReleasePal(c *gin.Context) {
 	var request paldefender.ReleasePalRequest
 	if err := bindPalDefenderGMJSON(c, &request); err != nil {
@@ -119,7 +130,7 @@ func (s Server) palDefenderGMGivePalTemplates(c *gin.Context) {
 
 func (s Server) palDefenderGMExportPals(c *gin.Context) {
 	s.runPalDefenderGMWrite(c, gin.H{"player": c.Param("id")}, func(ctx context.Context) (any, error) {
-		return s.defender.RCONExportPals(ctx, c.Param("id"))
+		return s.defender.ExportPals(ctx, c.Param("id"))
 	})
 }
 

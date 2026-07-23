@@ -5,6 +5,8 @@ import type {
   PalDefenderCatalogReferences,
   PalDefenderCommandCatalogEntry,
   PalDefenderExportedPalTemplateInfo,
+  PalDefenderExportPalsResult,
+  PalDefenderGiveCustomPalsRequest,
   PalDefenderGivePalsRequest,
   PalDefenderGivePalsResult,
   PalDefenderGivePalTemplatesRequest,
@@ -286,6 +288,19 @@ const mapExportedTemplateInfo = (raw: unknown): PalDefenderExportedPalTemplateIn
   };
 };
 
+const mapExportPalsResult = (raw: unknown): PalDefenderExportPalsResult => {
+  const data = asRecord(raw);
+  const template = asRecord(data.template);
+  return {
+    player_id: String(data.player_id || ''),
+    command: String(data.command || ''),
+    output: String(data.output || ''),
+    templates: Array.isArray(data.templates) ? data.templates.map(mapExportedTemplateInfo) : [],
+    template_info: mapExportedTemplateInfo(data.template_info),
+    template: { ...template, PalID: String(template.PalID || '') } as PalDefenderPalTemplate,
+  };
+};
+
 const mapAccessSettings = (raw: unknown): PalDefenderAccessSettings => {
   const data = asRecord(raw);
   return {
@@ -412,6 +427,13 @@ export const palDefenderGMApi = {
       { quiet: true, fallbackOnError: false },
     ),
 
+  giveCustomPals: (identifier: string, request: PalDefenderGiveCustomPalsRequest, idempotencyKey?: string) =>
+    handleRequest<unknown, PalDefenderGivePalTemplatesResult>(
+      () => apiClient.post(`${playerPath(identifier)}/custom-pals`, request, idempotencyConfig(idempotencyKey)),
+      { Granted: { PalTemplates: 0 } },
+      { quiet: true, fallbackOnError: false },
+    ),
+
   releasePal: (identifier: string, request: PalDefenderReleasePalRequest, idempotencyKey?: string) =>
     handleRequest<unknown, PalDefenderRCONResult>(
       () => apiClient.post(`${playerPath(identifier)}/pals/release`, request, idempotencyConfig(idempotencyKey)),
@@ -427,10 +449,10 @@ export const palDefenderGMApi = {
     ),
 
   exportPals: (identifier: string, idempotencyKey?: string) =>
-    handleRequest<unknown, PalDefenderRCONResult>(
+    handleRequest<unknown, PalDefenderExportPalsResult>(
       () => apiClient.post(`${playerPath(identifier)}/export-pals`, {}, idempotencyConfig(idempotencyKey)),
-      { command: '', output: '', entries: [] },
-      { map: mapRCONResult, quiet: true, fallbackOnError: false },
+      { player_id: identifier, command: '', output: '', templates: [], template_info: { player_id: identifier, name: '', path: '', size: 0, modified_at: '' }, template: { PalID: '' } },
+      { map: mapExportPalsResult, quiet: true, fallbackOnError: false },
     ),
 
   exportedPalTemplates: (identifier: string) =>

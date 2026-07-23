@@ -385,7 +385,17 @@ paths:
   /server/bootstrap:
     post: {operationId: bootstrapServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/logs:
-    get: {operationId: getServerLogs, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    get:
+      operationId: getServerLogs
+      tags: [server]
+      x-palpanel-permission: read
+      parameters:
+        - {name: channel, in: query, required: false, schema: {type: string, enum: [game, launcher, paldefender-rest]}}
+        - {name: tail, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 5000, default: 200}}
+        - {name: search, in: query, required: false, schema: {type: string}}
+        - {name: level, in: query, required: false, schema: {type: string}}
+        - {name: since, in: query, required: false, schema: {type: string}}
+      responses: *readResponses
   /server/world:
     get: {operationId: getWorld, tags: [server], x-palpanel-permission: read, responses: *readResponses}
   /server/world/reset:
@@ -837,6 +847,9 @@ paths:
   /security/paldefender/gm/players/{id}/custom-pal:
     parameters: [*idParameter]
     post: {operationId: givePalDefenderGMCustomPal, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPalTemplate'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/custom-pals:
+    parameters: [*idParameter]
+    post: {operationId: givePalDefenderGMCustomPals, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGiveCustomPalsRequest'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/pals/release:
     parameters: [*idParameter]
     post: {operationId: releasePalDefenderGMPal, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderReleasePalRequest'}}}}, responses: *writeResponses}
@@ -845,7 +858,25 @@ paths:
     post: {operationId: givePalDefenderGMPalTemplates, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGivePalTemplatesRequest'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/export-pals:
     parameters: [*idParameter]
-    post: {operationId: exportPalDefenderGMPals, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], responses: *writeResponses}
+    post:
+      operationId: exportPalDefenderGMPals
+      tags: [security]
+      x-palpanel-permission: 'players:write'
+      parameters: [*idempotencyKey]
+      responses:
+        '200':
+          description: Newly generated PalDefender export templates.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PalDefenderExportPalsEnvelope'}
+        '400': *error
+        '401': *error
+        '403': *error
+        '404': *error
+        '409': *error
+        '502': *error
+        '503': *error
+        '504': *error
   /security/paldefender/gm/players/{id}/exported-pal-templates:
     parameters: [*idParameter]
     get: {operationId: listExportedPalDefenderGMPalTemplates, tags: [security], x-palpanel-permission: read, responses: *readResponses}
@@ -2252,6 +2283,13 @@ components:
       additionalProperties: false
       properties:
         PalTemplates: {type: array, minItems: 1, maxItems: 20, items: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(\.json)?$'}}
+    PalDefenderGiveCustomPalsRequest:
+      type: object
+      required: [Template, Count]
+      additionalProperties: false
+      properties:
+        Template: {$ref: '#/components/schemas/PalDefenderPalTemplate'}
+        Count: {type: integer, minimum: 1, maximum: 20}
     PalDefenderPalTemplate:
       type: object
       required: [PalID]
@@ -2265,8 +2303,8 @@ components:
         Level: {type: integer, minimum: 1, maximum: 255}
         Exp: {type: integer, format: int64, minimum: 0, maximum: 2147483647}
         Shiny: {type: boolean}
-        PartnerSkillLevel: {type: integer, minimum: 1, maximum: 255}
-        CondensedPals: {type: integer, minimum: 0, maximum: 2147483647}
+        PartnerSkillLevel: {type: integer, minimum: 1, maximum: 5}
+        CondensedPals: {type: integer, minimum: 0, maximum: 116}
         UnusedStatusPoints: {type: integer, minimum: 0, maximum: 2147483647}
         FriendshipPoints: {type: integer, format: int64, minimum: 0, maximum: 2147483647}
         IsAwakening: {type: boolean}
@@ -2282,8 +2320,8 @@ components:
         SAN: {type: number, minimum: 0, maximum: 2147483647}
         Support: {type: integer, minimum: 0, maximum: 2147483647}
         CraftSpeed: {type: integer, minimum: 0, maximum: 2147483647}
-        PalSouls: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 255}}
-        IVs: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 255}}
+        PalSouls: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 20}}
+        IVs: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 100}}
         ActiveSkills: {type: array, maxItems: 3, items: {type: string}}
         LearntSkills: {type: array, maxItems: 64, items: {type: string}}
         Passives: {type: array, maxItems: 64, items: {type: string}}
@@ -2298,6 +2336,22 @@ components:
         path: {type: string}
         size: {type: integer, format: int64}
         modified_at: {type: string, format: date-time}
+    PalDefenderExportPalsResult:
+      type: object
+      required: [player_id, command, output, templates, template_info, template]
+      properties:
+        player_id: {type: string}
+        command: {type: string}
+        output: {type: string}
+        templates: {type: array, minItems: 1, items: {$ref: '#/components/schemas/PalDefenderExportedPalTemplateInfo'}}
+        template_info: {$ref: '#/components/schemas/PalDefenderExportedPalTemplateInfo'}
+        template: {$ref: '#/components/schemas/PalDefenderPalTemplate'}
+    PalDefenderExportPalsEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalDefenderExportPalsResult'}
     PalDefenderAccessSettingsUpdate:
       type: object
       required: [use_whitelist, whitelist_message, use_admin_whitelist, admin_auto_login, admin_ips]

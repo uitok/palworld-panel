@@ -25,12 +25,16 @@ export const PalWorkspace: React.FC<{
   const queryClient = useQueryClient();
   const [palID, setPalID] = useState('');
   const [palLevel, setPalLevel] = useState('1');
+  const [palCount, setPalCount] = useState('1');
   const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [templateCount, setTemplateCount] = useState('1');
   const [selectedExport, setSelectedExport] = useState('');
   const [editor, setEditor] = useState<TemplateEditor>(() => emptyTemplateEditor());
   const [templateBase, setTemplateBase] = useState<PalDefenderPalTemplate | null>(null);
   const [templateImportMessage, setTemplateImportMessage] = useState('');
   const [templateImportError, setTemplateImportError] = useState('');
+  const [customCount, setCustomCount] = useState('1');
+  const [grantMessage, setGrantMessage] = useState('');
   const [palSearch, setPalSearch] = useState('');
   const [passiveSearch, setPassiveSearch] = useState('');
   const [releaseTarget, setReleaseTarget] = useState<Pal | null>(null);
@@ -72,42 +76,51 @@ export const PalWorkspace: React.FC<{
 
   const directGrant = async () => {
     const level = Number(palLevel);
+    const count = Number(palCount);
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      setGrantMessage('普通帕鲁发放数量必须是 1–100 的整数。');
+      return;
+    }
     if (!palID.trim() || !Number.isInteger(level) || level < 1 || level > 255) return;
+    if (!window.confirm(`向 ${playerName} 发放 ${palID.trim()} Lv.${level}，共 ${count} 只？`)) return;
     await onRun('give-pal', async () => {
-      await palDefenderGMApi.givePals(identifier, { Pals: [{ PalID: palID.trim(), Level: level }] });
+      const result = await palDefenderGMApi.givePals(identifier, { Pals: Array.from({ length: count }, () => ({ PalID: palID.trim(), Level: level })) });
+      setGrantMessage(`普通发放：请求 ${count} 只，实际发放 ${result.Granted.Pals} 只。`);
       await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'pals', identifier] });
-    }, `已向 ${playerName} 发放 ${palID.trim()} Lv.${level}`);
+    }, `已向 ${playerName} 提交 ${count} 只 ${palID.trim()} Lv.${level}`);
   };
 
   const giveTemplate = async () => {
+    const count = Number(templateCount);
+    if (!Number.isInteger(count) || count < 1 || count > 20) {
+      setGrantMessage('模板发放数量必须是 1–20 的整数。');
+      return;
+    }
     if (!selectedTemplate) return;
+    if (!window.confirm(`向 ${playerName} 发放模板 ${selectedTemplate}，共 ${count} 只？`)) return;
     await onRun('give-template', async () => {
-      await palDefenderGMApi.givePalTemplates(identifier, { PalTemplates: [selectedTemplate] });
+      const result = await palDefenderGMApi.givePalTemplates(identifier, { PalTemplates: Array.from({ length: count }, () => selectedTemplate) });
+      setGrantMessage(`模板发放：请求 ${count} 只，实际发放 ${result.Granted.PalTemplates} 只。`);
       await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'pals', identifier] });
-    }, `已向 ${playerName} 发放模板 ${selectedTemplate}`);
+    }, `已向 ${playerName} 提交模板 ${selectedTemplate} × ${count}`);
   };
 
   const exportPals = async () => {
     await onRun('export-pals', async () => {
-      await palDefenderGMApi.exportPals(identifier);
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        const exported = await palDefenderGMApi.exportedPalTemplates(identifier);
-        queryClient.setQueryData(['paldefender-gm', 'exported-templates', identifier], exported);
-        const latest = [...exported.templates].sort((left, right) => right.modified_at.localeCompare(left.modified_at))[0];
-        if (latest) {
-          setSelectedExport(latest.name);
-          const template = await palDefenderGMApi.exportedPalTemplate(identifier, latest.name);
-          const defaultName = latest.name.replace(/\.json$/i, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64);
-          setTemplateBase(template);
-          setEditor(editorFromTemplate(defaultName || 'exported_pal', template));
-          setTemplateImportError('');
-          setTemplateImportMessage(`已导出玩家帕鲁并自动载入 ${latest.name}；可直接编辑或另存模板`);
-          showEditor();
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-      throw new Error('PalDefender 已接受导出命令，但 5 秒内没有生成模板文件。请确认玩家拥有帕鲁，并检查 PalDefender/Pals/Exported 目录。');
+      const exported = await palDefenderGMApi.exportPals(identifier);
+      const latest = exported.template_info;
+      queryClient.setQueryData(['paldefender-gm', 'exported-templates', identifier], (current: { player_id: string; templates: typeof exported.templates; reference_url: string } | undefined) => ({
+        player_id: exported.player_id,
+        templates: [...exported.templates, ...(current?.templates ?? []).filter((item) => !exported.templates.some((fresh) => fresh.name.toLowerCase() === item.name.toLowerCase()))],
+        reference_url: current?.reference_url ?? '',
+      }));
+      setSelectedExport(latest.name);
+      const defaultName = latest.name.replace(/\.json$/i, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64);
+      setTemplateBase(exported.template);
+      setEditor(editorFromTemplate(defaultName || 'exported_pal', exported.template));
+      setTemplateImportError('');
+      setTemplateImportMessage(`已导出玩家帕鲁并自动载入 ${latest.name}；可直接编辑或另存模板`);
+      showEditor();
     }, `已导出 ${playerName} 的帕鲁并载入模板编辑器`);
   };
 
@@ -192,12 +205,26 @@ export const PalWorkspace: React.FC<{
 
   const giveCustomPal = async () => {
     const template = templateFromEditor(editor, templateBase);
+    const count = Number(customCount);
+    if (!Number.isInteger(count) || count < 1 || count > 20) {
+      setGrantMessage('自定义发放数量必须是 1–20 的整数。');
+      return;
+    }
     if (!template.PalID) return;
+    if (!window.confirm(`向 ${playerName} 发放 ${template.PalID} Lv.${template.Level ?? 1}，完全相同配置共 ${count} 只？`)) return;
     await onRun('give-custom-pal', async () => {
-      await palDefenderGMApi.giveCustomPal(identifier, template);
+      const result = await palDefenderGMApi.giveCustomPals(identifier, { Template: template, Count: count });
+      setGrantMessage(`自定义发放：请求 ${count} 只，实际发放 ${result.Granted.PalTemplates} 只。`);
       await queryClient.invalidateQueries({ queryKey: ['paldefender-gm', 'pals', identifier] });
-    }, `已向 ${playerName} 发放自定义 ${template.PalID}${template.Passives?.length ? `（${template.Passives.length} 个指定词条）` : ''}`);
+    }, `已向 ${playerName} 提交自定义 ${template.PalID} × ${count}${template.Passives?.length ? `（${template.Passives.length} 个指定词条）` : ''}`);
   };
+
+  const applyLegalMaximums = () => setEditor({
+    ...editor,
+    partnerSkillLevel: '5', condensedPals: '116',
+    ivHealth: '100', ivAttackMelee: '100', ivAttackShot: '100', ivDefense: '100',
+    soulHealth: '20', soulAttack: '20', soulDefense: '20', soulCraftSpeed: '20',
+  });
 
   const addPassive = (id: string) => {
     setEditor({ ...editor, passives: [...selectedPassiveIDs, id].join(', ') });
@@ -215,9 +242,10 @@ export const PalWorkspace: React.FC<{
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><Sword size={16} className="text-sky-500" />按 ID 发放帕鲁</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">适合普通帕鲁；需要指定词条、IV、魂强化或工作适性时使用下方自定义编辑器。</p></div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
+		  <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px_110px]">
             <label className="text-xs font-bold text-slate-600">PalID<input aria-label="帕鲁 ID" value={palID} onChange={(event) => setPalID(event.target.value)} placeholder="例如 Anubis" className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
             <label className="text-xs font-bold text-slate-600">等级<input aria-label="帕鲁等级" type="number" min={1} max={255} value={palLevel} onChange={(event) => setPalLevel(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
+			<label className="text-xs font-bold text-slate-600">数量<input aria-label="普通帕鲁发放数量" type="number" min={1} max={100} value={palCount} onChange={(event) => setPalCount(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
           </div>
           <label className="relative mt-3 block"><Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input aria-label="搜索帕鲁目录" value={palSearch} onChange={(event) => setPalSearch(event.target.value)} placeholder="搜索中文名或 PalID" className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>
           <div className="mt-3 grid max-h-56 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3">
@@ -236,9 +264,10 @@ export const PalWorkspace: React.FC<{
 
         <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <div><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800"><FileJson size={16} className="text-violet-500" />模板发放与导出</h3><p className="mt-1 text-[11px] font-semibold text-slate-400">导出的现有帕鲁先读取到编辑器，再另存为可发放模板。</p></div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+		  <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label className="text-xs font-bold text-slate-600">已保存模板<select aria-label="已保存模板" value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700"><option value="">请选择</option>{(templatesQuery.data?.templates ?? []).map((template) => <option key={template.name} value={template.name}>{template.name}</option>)}</select></label>
             <label className="text-xs font-bold text-slate-600">导出文件<select aria-label="导出帕鲁模板" value={selectedExport} onChange={(event) => setSelectedExport(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700"><option value="">请选择</option>{(exportedQuery.data?.templates ?? []).map((template) => <option key={template.name} value={template.name}>{template.name}</option>)}</select></label>
+			<label className="text-xs font-bold text-slate-600">发放数量<input aria-label="模板发放数量" type="number" min={1} max={20} value={templateCount} onChange={(event) => setTemplateCount(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-500 focus:outline-none" /></label>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <button type="button" onClick={() => void giveTemplate()} disabled={disabled || !selectedTemplate} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'give-template' ? <LoaderCircle size={14} className="animate-spin" /> : <Upload size={14} />}发放模板</button>
@@ -262,23 +291,28 @@ export const PalWorkspace: React.FC<{
         </div>
         {templateImportMessage && <p role="status" className="mt-2 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-semibold text-emerald-700">{templateImportMessage}</p>}
         {templateImportError && <p role="alert" className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-700">导入失败：{templateImportError}</p>}
+		{grantMessage && <p role="status" className="mt-2 rounded-xl bg-sky-50 px-3 py-2 text-[11px] font-semibold text-sky-700">{grantMessage}</p>}
+		<div className="mt-3 flex flex-wrap items-center gap-2">
+		  <button type="button" onClick={applyLegalMaximums} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">一键合法满值</button>
+		  <span className="text-[10px] font-semibold text-slate-400">IV 100 · 魂强化 20 · 伙伴技能 5 · 浓缩 116</span>
+		</div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <TextField label="模板名称" value={editor.name} onChange={(value) => setEditor({ ...editor, name: value })} placeholder="reward_anubis" />
           <TextField label="PalID" value={editor.palID} onChange={(value) => setEditor({ ...editor, palID: value })} placeholder="Anubis" />
           <TextField label="昵称" value={editor.nickname} onChange={(value) => setEditor({ ...editor, nickname: value })} placeholder="可选" />
           <TextField label="皮肤 ID" value={editor.skinID} onChange={(value) => setEditor({ ...editor, skinID: value })} placeholder="可选" />
           <label className="text-xs font-bold text-slate-600">性别<select aria-label="性别" value={editor.gender} onChange={(event) => setEditor({ ...editor, gender: event.target.value })} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700"><option value="">默认</option><option value="Male">Male</option><option value="Female">Female</option><option value="None">None</option></select></label>
-          <NumberEditor label="等级" value={editor.level} onChange={(value) => setEditor({ ...editor, level: value })} />
-          <NumberEditor label="伙伴技能等级" value={editor.partnerSkillLevel} onChange={(value) => setEditor({ ...editor, partnerSkillLevel: value })} />
-          <NumberEditor label="浓缩数量 / 星级进度" value={editor.condensedPals} onChange={(value) => setEditor({ ...editor, condensedPals: value })} />
-          <NumberEditor label="IV 生命" value={editor.ivHealth} onChange={(value) => setEditor({ ...editor, ivHealth: value })} />
-          <NumberEditor label="IV 近战攻击" value={editor.ivAttackMelee} onChange={(value) => setEditor({ ...editor, ivAttackMelee: value })} />
-          <NumberEditor label="IV 远程攻击" value={editor.ivAttackShot} onChange={(value) => setEditor({ ...editor, ivAttackShot: value })} />
-          <NumberEditor label="IV 防御" value={editor.ivDefense} onChange={(value) => setEditor({ ...editor, ivDefense: value })} />
-          <NumberEditor label="魂强化 生命" value={editor.soulHealth} onChange={(value) => setEditor({ ...editor, soulHealth: value })} />
-          <NumberEditor label="魂强化 攻击" value={editor.soulAttack} onChange={(value) => setEditor({ ...editor, soulAttack: value })} />
-          <NumberEditor label="魂强化 防御" value={editor.soulDefense} onChange={(value) => setEditor({ ...editor, soulDefense: value })} />
-          <NumberEditor label="魂强化 作业速度" value={editor.soulCraftSpeed} onChange={(value) => setEditor({ ...editor, soulCraftSpeed: value })} />
+		  <NumberEditor label="等级" min={1} max={255} value={editor.level} onChange={(value) => setEditor({ ...editor, level: value })} />
+		  <NumberEditor label="伙伴技能等级" min={1} max={5} value={editor.partnerSkillLevel} onChange={(value) => setEditor({ ...editor, partnerSkillLevel: value })} />
+		  <NumberEditor label="浓缩数量 / 星级进度" max={116} value={editor.condensedPals} onChange={(value) => setEditor({ ...editor, condensedPals: value })} />
+		  <NumberEditor label="IV 生命" max={100} value={editor.ivHealth} onChange={(value) => setEditor({ ...editor, ivHealth: value })} />
+		  <NumberEditor label="IV 近战攻击" max={100} value={editor.ivAttackMelee} onChange={(value) => setEditor({ ...editor, ivAttackMelee: value })} />
+		  <NumberEditor label="IV 远程攻击" max={100} value={editor.ivAttackShot} onChange={(value) => setEditor({ ...editor, ivAttackShot: value })} />
+		  <NumberEditor label="IV 防御" max={100} value={editor.ivDefense} onChange={(value) => setEditor({ ...editor, ivDefense: value })} />
+		  <NumberEditor label="魂强化 生命" max={20} value={editor.soulHealth} onChange={(value) => setEditor({ ...editor, soulHealth: value })} />
+		  <NumberEditor label="魂强化 攻击" max={20} value={editor.soulAttack} onChange={(value) => setEditor({ ...editor, soulAttack: value })} />
+		  <NumberEditor label="魂强化 防御" max={20} value={editor.soulDefense} onChange={(value) => setEditor({ ...editor, soulDefense: value })} />
+		  <NumberEditor label="魂强化 作业速度" max={20} value={editor.soulCraftSpeed} onChange={(value) => setEditor({ ...editor, soulCraftSpeed: value })} />
           <CheckboxEditor label="稀有 / 闪光" checked={editor.shiny} onChange={(checked) => setEditor({ ...editor, shiny: checked })} />
           <CheckboxEditor label="觉醒个体" checked={editor.isAwakening} onChange={(checked) => setEditor({ ...editor, isAwakening: checked })} />
         </div>
@@ -295,6 +329,7 @@ export const PalWorkspace: React.FC<{
         </div>
         <section className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/60 p-3"><h4 className="text-xs font-black text-slate-700">额外工作适性</h4><p className="mt-1 text-[10px] font-semibold text-slate-400">仅填写需要额外覆盖的等级；留空不会修改。</p><div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">{WORK_SUITABILITY_FIELDS.map(([key, label]) => <NumberEditor key={key} label={label} value={editor.workSuitabilities[key] || ''} onChange={(value) => setEditor({ ...editor, workSuitabilities: { ...editor.workSuitabilities, [key]: value } })} />)}</div></section>
         <div className="mt-4 flex flex-wrap gap-2">
+		  <label className="text-xs font-bold text-slate-600">发放数量<input aria-label="自定义发放数量" type="number" min={1} max={20} value={customCount} onChange={(event) => setCustomCount(event.target.value)} className="ml-2 w-20 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700" /></label>
           <button type="button" onClick={() => void giveCustomPal()} disabled={disabled || !editor.palID.trim()} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'give-custom-pal' ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}直接发放当前配置</button>
           <button type="button" onClick={() => void saveTemplate()} disabled={busy || !available || !canManageTemplates || !editor.name.trim() || !editor.palID.trim()} title={canManageTemplates ? '保存为持久模板' : '需要 security:write 权限'} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">{pending === 'save-template' ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}保存模板</button>
         </div>
@@ -381,6 +416,6 @@ const editorFromTemplate = (name: string, template: PalDefenderPalTemplate): Tem
 
 const SmallCount: React.FC<{ label: string; value: number }> = ({ label, value }) => <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-center"><p className="text-[9px] font-bold text-slate-400">{label}</p><p className="mt-1 text-sm font-black text-slate-700">{value}</p></div>;
 const TextField: React.FC<{ label: string; value: string; onChange: (value: string) => void; placeholder: string }> = ({ label, value, onChange, placeholder }) => <label className="text-xs font-bold text-slate-600">{label}<input aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>;
-const NumberEditor: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => <label className="text-xs font-bold text-slate-600">{label}<input aria-label={label} type="number" min={0} max={255} value={value} onChange={(event) => onChange(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>;
+const NumberEditor: React.FC<{ label: string; value: string; onChange: (value: string) => void; min?: number; max?: number }> = ({ label, value, onChange, min = 0, max = 255 }) => <label className="text-xs font-bold text-slate-600">{label}<input aria-label={label} type="number" min={min} max={max} value={value} onChange={(event) => onChange(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none" /></label>;
 const CheckboxEditor: React.FC<{ label: string; checked: boolean; onChange: (checked: boolean) => void }> = ({ label, checked, onChange }) => <label className="flex min-h-[62px] items-center justify-between rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600"><span>{label}</span><input aria-label={label} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-violet-600" /></label>;
 const TextArea: React.FC<{ label: string; value: string; onChange: (value: string) => void; placeholder: string }> = ({ label, value, onChange, placeholder }) => <label className="text-xs font-bold text-slate-600">{label}<textarea aria-label={label} rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 p-3 font-mono text-xs text-slate-700 focus:border-sky-500 focus:outline-none" /></label>;

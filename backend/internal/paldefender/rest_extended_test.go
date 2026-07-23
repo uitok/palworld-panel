@@ -123,3 +123,106 @@ func TestExtendedRESTValidationDoesNotSendRequests(t *testing.T) {
 		t.Fatalf("long technology identifier error = %v", err)
 	}
 }
+
+func TestRESTGiveCustomPalsRepeatsOneTemporaryTemplate(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	prepareGMRESTFixture(t, manager)
+	setTestRESTToken(t, manager, "rest-secret")
+
+	var captured GivePalTemplatesRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/pdapi/give/paltemplate/steam_1" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"PalTemplates": len(captured.PalTemplates)}})
+	}))
+	defer server.Close()
+	manager.restBaseURL = server.URL
+
+	response, err := manager.RESTGiveCustomPals(t.Context(), "steam_1", PalTemplate{PalID: "Anubis", Passives: []string{"Legend"}}, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Granted.PalTemplates != 20 || len(captured.PalTemplates) != 20 {
+		t.Fatalf("unexpected batch response=%#v request=%#v", response, captured)
+	}
+	for _, name := range captured.PalTemplates {
+		if name != captured.PalTemplates[0] {
+			t.Fatalf("batch must repeat one template: %#v", captured.PalTemplates)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(manager.palTemplatesDir(), captured.PalTemplates[0])); !os.IsNotExist(err) {
+		t.Fatalf("temporary custom Pal template was not removed: %v", err)
+	}
+}
+
+func TestRESTGiveCustomPalsRejectsCountAboveLimit(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	prepareGMRESTFixture(t, manager)
+	setTestRESTToken(t, manager, "rest-secret")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	manager.restBaseURL = server.URL
+
+	_, err := manager.RESTGiveCustomPals(t.Context(), "steam_1", PalTemplate{PalID: "Anubis"}, 21)
+	if !errors.Is(err, ErrInvalidRESTRequest) {
+		t.Fatalf("count validation error = %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("sent %d requests for invalid count", requests.Load())
+	}
+}
+
+func TestRESTPalGrantBatchLimits(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	prepareGMRESTFixture(t, manager)
+	setTestRESTToken(t, manager, "rest-secret")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/pdapi/give/pals/steam_1":
+			var request GivePalsRequest
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"Pals": len(request.Pals)}})
+		case "/v1/pdapi/give/paltemplate/steam_1":
+			var request GivePalTemplatesRequest
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"PalTemplates": len(request.PalTemplates)}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	manager.restBaseURL = server.URL
+
+	pals := make([]PalGrant, 100)
+	for index := range pals {
+		pals[index] = PalGrant{PalID: "Anubis", Level: 50}
+	}
+	if response, err := manager.RESTGivePals(t.Context(), "steam_1", GivePalsRequest{Pals: pals}); err != nil || response.Granted.Pals != 100 {
+		t.Fatalf("100 Pal grants = %#v, %v", response, err)
+	}
+	if _, err := manager.RESTGivePals(t.Context(), "steam_1", GivePalsRequest{Pals: append(pals, PalGrant{PalID: "Anubis", Level: 50})}); !errors.Is(err, ErrInvalidRESTRequest) {
+		t.Fatalf("101 Pal grants error = %v", err)
+	}
+
+	templates := make([]string, 20)
+	for index := range templates {
+		templates[index] = "reward_anubis"
+	}
+	if response, err := manager.RESTGivePalTemplates(t.Context(), "steam_1", GivePalTemplatesRequest{PalTemplates: templates}); err != nil || response.Granted.PalTemplates != 20 {
+		t.Fatalf("20 template grants = %#v, %v", response, err)
+	}
+	if _, err := manager.RESTGivePalTemplates(t.Context(), "steam_1", GivePalTemplatesRequest{PalTemplates: append(templates, "reward_anubis")}); !errors.Is(err, ErrInvalidRESTRequest) {
+		t.Fatalf("21 template grants error = %v", err)
+	}
+}

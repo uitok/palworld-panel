@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -73,6 +74,11 @@ type ExportedPalTemplateInfo struct {
 	ModifiedAt time.Time `json:"modified_at"`
 }
 
+type GiveCustomPalsRequest struct {
+	Template PalTemplate `json:"Template"`
+	Count    int         `json:"Count"`
+}
+
 func normalizePalTemplateName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if strings.EqualFold(filepath.Ext(name), ".json") {
@@ -89,9 +95,17 @@ func (m Manager) palTemplatesDir() string {
 }
 
 func (m Manager) exportedPalsDir(identifier string) (string, error) {
-	identifier, err := validatePlayerIdentifier(identifier)
+	dirs, err := m.exportedPalsDirs(identifier)
 	if err != nil {
 		return "", err
+	}
+	return dirs[0], nil
+}
+
+func (m Manager) exportedPalsDirs(identifier string) ([]string, error) {
+	identifier, err := validatePlayerIdentifier(identifier)
+	if err != nil {
+		return nil, err
 	}
 	candidates := []string{
 		filepath.Join(m.cfg.PalDefenderDir(), "Pals", "Exported", identifier),
@@ -99,17 +113,28 @@ func (m Manager) exportedPalsDir(identifier string) (string, error) {
 		filepath.Join(m.cfg.PalDefenderDir(), "pals", "Exported", identifier),
 		filepath.Join(m.cfg.PalDefenderDir(), "pals", "exported", identifier),
 	}
-	dir := candidates[0]
+	dirs := make([]string, 0, len(candidates))
+	seen := map[string]bool{}
 	for _, candidate := range candidates {
-		if dirExists(candidate) {
-			dir = candidate
-			break
+		if err := m.cfg.ValidateManagedPath(candidate, false); err != nil {
+			return nil, err
+		}
+		if !dirExists(candidate) {
+			continue
+		}
+		identity := filepath.Clean(candidate)
+		if runtime.GOOS == "windows" {
+			identity = strings.ToLower(identity)
+		}
+		if !seen[identity] {
+			seen[identity] = true
+			dirs = append(dirs, candidate)
 		}
 	}
-	if err := m.cfg.ValidateManagedPath(dir, false); err != nil {
-		return "", err
+	if len(dirs) == 0 {
+		dirs = append(dirs, candidates[0])
 	}
-	return dir, nil
+	return dirs, nil
 }
 
 func normalizeExportedPalTemplateName(name string) (string, error) {
@@ -160,31 +185,41 @@ func (m Manager) ListPalTemplates() ([]PalTemplateInfo, error) {
 }
 
 func (m Manager) ListExportedPalTemplates(identifier string) ([]ExportedPalTemplateInfo, error) {
-	dir, err := m.exportedPalsDir(identifier)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return []ExportedPalTemplateInfo{}, nil
-	}
+	dirs, err := m.exportedPalsDirs(identifier)
 	if err != nil {
 		return nil, err
 	}
 	identifier = strings.TrimSpace(identifier)
-	out := make([]ExportedPalTemplateInfo, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+	byName := map[string]ExportedPalTemplateInfo{}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if os.IsNotExist(err) {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil || !info.Mode().IsRegular() {
-			continue
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, ExportedPalTemplateInfo{
-			PlayerID: identifier, Name: entry.Name(), Path: filepath.Join(dir, entry.Name()),
-			Size: info.Size(), ModifiedAt: info.ModTime().UTC(),
-		})
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			current := ExportedPalTemplateInfo{
+				PlayerID: identifier, Name: entry.Name(), Path: filepath.Join(dir, entry.Name()),
+				Size: info.Size(), ModifiedAt: info.ModTime().UTC(),
+			}
+			key := strings.ToLower(entry.Name())
+			if previous, exists := byName[key]; !exists || current.ModifiedAt.After(previous.ModifiedAt) {
+				byName[key] = current
+			}
+		}
+	}
+	out := make([]ExportedPalTemplateInfo, 0, len(byName))
+	for _, info := range byName {
+		out = append(out, info)
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	return out, nil
@@ -203,7 +238,7 @@ func (m Manager) ReadPalTemplate(name string) (PalTemplate, error) {
 }
 
 func (m Manager) ReadExportedPalTemplate(identifier, name string) (PalTemplate, error) {
-	dir, err := m.exportedPalsDir(identifier)
+	dirs, err := m.exportedPalsDirs(identifier)
 	if err != nil {
 		return PalTemplate{}, err
 	}
@@ -211,7 +246,20 @@ func (m Manager) ReadExportedPalTemplate(identifier, name string) (PalTemplate, 
 	if err != nil {
 		return PalTemplate{}, err
 	}
-	path := filepath.Join(dir, name)
+	for _, dir := range dirs {
+		path := filepath.Join(dir, name)
+		template, err := m.readExportedPalTemplateFile(path)
+		if err == nil {
+			return template, nil
+		}
+		if !os.IsNotExist(err) {
+			return PalTemplate{}, err
+		}
+	}
+	return PalTemplate{}, os.ErrNotExist
+}
+
+func (m Manager) readExportedPalTemplateFile(path string) (PalTemplate, error) {
 	if err := m.cfg.ValidateManagedPath(path, false); err != nil {
 		return PalTemplate{}, err
 	}
@@ -323,13 +371,24 @@ func (m Manager) DeletePalTemplate(name string) error {
 // validated Pal attributes supplied by the administrator are persisted, and
 // the file is removed after PalDefender has processed the request.
 func (m Manager) RESTGiveCustomPal(ctx context.Context, identifier string, template PalTemplate) (GivePalTemplatesResponse, error) {
+	return m.RESTGiveCustomPals(ctx, identifier, template, 1)
+}
+
+func (m Manager) RESTGiveCustomPals(ctx context.Context, identifier string, template PalTemplate, count int) (GivePalTemplatesResponse, error) {
+	if count < 1 || count > maxPalTemplateGrants {
+		return GivePalTemplatesResponse{}, invalidRESTRequest("Count must be between 1 and %d", maxPalTemplateGrants)
+	}
 	name := id.New("palpanel_grant")
 	info, err := m.WritePalTemplate(name, template)
 	if err != nil {
 		return GivePalTemplatesResponse{}, err
 	}
 	defer func() { _ = m.DeletePalTemplate(info.Name) }()
-	return m.RESTGivePalTemplates(ctx, identifier, GivePalTemplatesRequest{PalTemplates: []string{info.Name}})
+	templates := make([]string, count)
+	for index := range templates {
+		templates[index] = info.Name
+	}
+	return m.RESTGivePalTemplates(ctx, identifier, GivePalTemplatesRequest{PalTemplates: templates})
 }
 
 func validatePalTemplate(template *PalTemplate) error {
@@ -365,12 +424,15 @@ func validatePalTemplate(template *PalTemplate) error {
 	if err := validateOptionalInt("Level", template.Level, 1, 255); err != nil {
 		return err
 	}
-	if err := validateOptionalInt("PartnerSkillLevel", template.PartnerSkillLevel, 1, 255); err != nil {
+	if err := validateOptionalInt("PartnerSkillLevel", template.PartnerSkillLevel, 1, 5); err != nil {
+		return err
+	}
+	if err := validateOptionalInt("CondensedPals", template.CondensedPals, 0, 116); err != nil {
 		return err
 	}
 	for name, value := range map[string]*int{
-		"CondensedPals": template.CondensedPals, "UnusedStatusPoints": template.UnusedStatusPoints,
-		"Support": template.Support, "CraftSpeed": template.CraftSpeed,
+		"UnusedStatusPoints": template.UnusedStatusPoints,
+		"Support":            template.Support, "CraftSpeed": template.CraftSpeed,
 	} {
 		if err := validateOptionalInt(name, value, 0, 2_147_483_647); err != nil {
 			return err
@@ -397,10 +459,10 @@ func validatePalTemplate(template *PalTemplate) error {
 	if !workerStates[template.WorkerSick] {
 		return invalidRESTRequest("unsupported WorkerSick value")
 	}
-	if err := validateRankMap("PalSouls", template.PalSouls, map[string]bool{"Health": true, "Attack": true, "Defense": true, "CraftSpeed": true}); err != nil {
+	if err := validateRankMap("PalSouls", template.PalSouls, map[string]bool{"Health": true, "Attack": true, "Defense": true, "CraftSpeed": true}, 20); err != nil {
 		return err
 	}
-	if err := validateRankMap("IVs", template.IVs, map[string]bool{"Health": true, "AttackMelee": true, "AttackShot": true, "Defense": true}); err != nil {
+	if err := validateRankMap("IVs", template.IVs, map[string]bool{"Health": true, "AttackMelee": true, "AttackShot": true, "Defense": true}, 100); err != nil {
 		return err
 	}
 	for name, list := range map[string][]string{"ActiveSkills": template.ActiveSkills, "LearntSkills": template.LearntSkills, "Passives": template.Passives} {
@@ -431,9 +493,9 @@ func validateOptionalInt(name string, value *int, minimum, maximum int) error {
 	return nil
 }
 
-func validateRankMap(name string, values map[string]int, allowed map[string]bool) error {
+func validateRankMap(name string, values map[string]int, allowed map[string]bool, maximum int) error {
 	for key, value := range values {
-		if !allowed[key] || value < 0 || value > 255 {
+		if !allowed[key] || value < 0 || value > maximum {
 			return invalidRESTRequest("invalid %s entry %q", name, key)
 		}
 	}

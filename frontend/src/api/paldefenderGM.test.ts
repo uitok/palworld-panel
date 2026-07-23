@@ -193,6 +193,28 @@ describe('PalDefender GM API', () => {
     expect(del).toHaveBeenCalledWith('/security/paldefender/gm/pal-templates/combat_fox');
   });
 
+  it('sends one custom template batch and maps the confirmed export', async () => {
+	const post = vi.spyOn(apiClient, 'post');
+	post.mockResolvedValueOnce({ status: 200, data: { ok: true, data: { Granted: { PalTemplates: 20 } } } });
+	post.mockResolvedValueOnce({
+		status: 200,
+		data: { ok: true, data: {
+			player_id: 'steam_1', command: '/exportpals steam_1', output: 'accepted',
+			templates: [{ player_id: 'steam_1', name: 'Anubis new.json', path: 'exported/Anubis new.json', size: 128, modified_at: '2026-07-23T00:00:00Z' }],
+			template_info: { player_id: 'steam_1', name: 'Anubis new.json', path: 'exported/Anubis new.json', size: 128, modified_at: '2026-07-23T00:00:00Z' },
+			template: { PalID: 'Anubis', Level: 50, Passives: ['MutationPal_Immortal'] },
+		} },
+	});
+
+	const batch = await palDefenderGMApi.giveCustomPals('steam_1', { Template: { PalID: 'Anubis', Level: 50 }, Count: 20 }, 'gm-custom-batch');
+	const exported = await palDefenderGMApi.exportPals('steam_1', 'gm-export');
+
+	expect(batch.Granted.PalTemplates).toBe(20);
+	expect(exported).toMatchObject({ player_id: 'steam_1', template_info: { name: 'Anubis new.json' }, template: { PalID: 'Anubis' } });
+	expect(post).toHaveBeenNthCalledWith(1, '/security/paldefender/gm/players/steam_1/custom-pals', { Template: { PalID: 'Anubis', Level: 50 }, Count: 20 }, { headers: { 'Idempotency-Key': 'gm-custom-batch' } });
+	expect(post).toHaveBeenNthCalledWith(2, '/security/paldefender/gm/players/steam_1/export-pals', {}, { headers: { 'Idempotency-Key': 'gm-export' } });
+  });
+
   it('maps access settings, references, and typed RCON operations', async () => {
     const get = vi.spyOn(apiClient, 'get');
     const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ status: 200, data: { ok: true, data: { command: '/setadmin steam/user', output: 'ok', entries: ['steam/user'] } } });

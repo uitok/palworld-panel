@@ -180,6 +180,18 @@ func failPalDefenderGM(c *gin.Context, err error) {
 	case errors.Is(err, paldefender.ErrRCONAuthentication), errors.Is(err, paldefender.ErrRCONInvalidResponse):
 		fail(c, http.StatusBadGateway, "paldefender_rcon_failed", err.Error())
 		return
+	case errors.Is(err, paldefender.ErrExportPlayerUnavailable):
+		fail(c, http.StatusConflict, "paldefender_export_player_unavailable", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrExportNoPals):
+		fail(c, http.StatusConflict, "paldefender_export_no_pals", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrExportCommandRejected):
+		fail(c, http.StatusBadGateway, "paldefender_export_rejected", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrExportPalsTimeout):
+		fail(c, http.StatusGatewayTimeout, "paldefender_export_timeout", err.Error())
+		return
 	}
 	var restErr *paldefender.RESTError
 	if errors.As(err, &restErr) {

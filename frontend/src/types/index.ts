@@ -92,7 +92,7 @@ export interface ServerMetrics {
 
 export interface ServerLogResponse {
   logs: string;
-  source: 'file' | 'docker' | 'none';
+  source: 'file' | 'docker' | 'paldefender-game' | 'paldefender-rest' | 'none';
   available: boolean;
   reason?: string;
   updated_at?: string;
@@ -717,8 +717,10 @@ export type PalDefenderProgressionGrantRequest = components['schemas']['PalDefen
 export type PalDefenderPalGrant = components['schemas']['PalDefenderPalGrant'];
 export type PalDefenderGivePalsRequest = components['schemas']['PalDefenderGivePalsRequest'];
 export type PalDefenderGivePalTemplatesRequest = components['schemas']['PalDefenderGivePalTemplatesRequest'];
+export type PalDefenderGiveCustomPalsRequest = components['schemas']['PalDefenderGiveCustomPalsRequest'];
 export type PalDefenderPalTemplate = components['schemas']['PalDefenderPalTemplate'];
 export type PalDefenderExportedPalTemplateInfo = components['schemas']['PalDefenderExportedPalTemplateInfo'];
+export type PalDefenderExportPalsResult = components['schemas']['PalDefenderExportPalsResult'];
 export type PalDefenderAccessSettingsUpdate = components['schemas']['PalDefenderAccessSettingsUpdate'];
 
 export type PalDefenderTeleportRequest =

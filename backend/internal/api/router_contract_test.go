@@ -387,10 +387,12 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 		t.Errorf("save import 409 response schema = %q", got)
 	}
 	assertRequestSchema("/security/paldefender/gm/players/{id}/items", "application/json", "PalDefenderGiveItemsRequest")
+	assertRequestSchema("/security/paldefender/gm/players/{id}/custom-pals", "application/json", "PalDefenderGiveCustomPalsRequest")
 	assertRequestSchema("/security/paldefender/gm/players/{id}/message", "application/json", "PalDefenderMessageRequest")
 	assertRequestSchema("/security/paldefender/gm/broadcast", "application/json", "PalDefenderBroadcastRequest")
 	for _, path := range []string{
 		"/security/paldefender/gm/players/{id}/items",
+		"/security/paldefender/gm/players/{id}/custom-pals",
 		"/security/paldefender/gm/players/{id}/message",
 		"/security/paldefender/gm/players/{id}/kick",
 		"/security/paldefender/gm/players/{id}/ban",

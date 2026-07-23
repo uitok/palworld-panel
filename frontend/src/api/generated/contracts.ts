@@ -490,6 +490,18 @@ export interface components {
       "alert"?: boolean;
       "message": string;
     };
+    "PalDefenderExportPalsEnvelope": {
+      "data": components["schemas"]["PalDefenderExportPalsResult"];
+      "ok": true;
+    };
+    "PalDefenderExportPalsResult": {
+      "command": string;
+      "output": string;
+      "player_id": string;
+      "template": components["schemas"]["PalDefenderPalTemplate"];
+      "template_info": components["schemas"]["PalDefenderExportedPalTemplateInfo"];
+      "templates": Array<components["schemas"]["PalDefenderExportedPalTemplateInfo"]>;
+    };
     "PalDefenderExportedPalTemplateInfo": {
       "modified_at": string;
       "name": string;
@@ -531,6 +543,10 @@ export interface components {
       "rest_enabled": boolean;
       "state": "ready" | "not_installed" | "not_loaded" | "not_configured" | "rest_disabled" | "server_not_running" | "failed";
       "version"?: components["schemas"]["PalDefenderRESTVersion"];
+    };
+    "PalDefenderGiveCustomPalsRequest": {
+      "Count": number;
+      "Template": components["schemas"]["PalDefenderPalTemplate"];
     };
     "PalDefenderGiveItemsRequest": {
       "Items": Array<components["schemas"]["PalDefenderItemGrant"]>;

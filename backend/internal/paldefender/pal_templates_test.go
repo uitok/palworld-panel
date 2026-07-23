@@ -68,6 +68,38 @@ func TestPalTemplateValidationRejectsUnsafeOrInvalidValues(t *testing.T) {
 	}
 }
 
+func TestPalTemplateValidationUsesLegalGameLimits(t *testing.T) {
+	maximumPartnerSkill := 5
+	maximumCondensedPals := 116
+	valid := PalTemplate{
+		PalID:             "Anubis",
+		PartnerSkillLevel: &maximumPartnerSkill,
+		CondensedPals:     &maximumCondensedPals,
+		IVs:               map[string]int{"Health": 100, "AttackMelee": 100, "AttackShot": 100, "Defense": 100},
+		PalSouls:          map[string]int{"Health": 20, "Attack": 20, "Defense": 20, "CraftSpeed": 20},
+	}
+	if err := validatePalTemplate(&valid); err != nil {
+		t.Fatalf("legal maximum template should pass: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		template PalTemplate
+	}{
+		{"partner-skill", PalTemplate{PalID: "Anubis", PartnerSkillLevel: intPointer(6)}},
+		{"condensed-pals", PalTemplate{PalID: "Anubis", CondensedPals: intPointer(117)}},
+		{"iv", PalTemplate{PalID: "Anubis", IVs: map[string]int{"Health": 101}}},
+		{"soul", PalTemplate{PalID: "Anubis", PalSouls: map[string]int{"Health": 21}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validatePalTemplate(&test.template); err == nil {
+				t.Fatal("out-of-range template should fail")
+			}
+		})
+	}
+}
+
 func TestListAndReadExportedPalTemplates(t *testing.T) {
 	manager, cleanup := testManager(t)
 	defer cleanup()
@@ -112,3 +144,4 @@ func TestReadPalTemplateRejectsTrailingJSON(t *testing.T) {
 }
 
 func boolPointer(value bool) *bool { return &value }
+func intPointer(value int) *int    { return &value }
