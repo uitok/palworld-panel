@@ -6,10 +6,132 @@ import (
 	"palpanel/internal/saveindex"
 )
 
+func TestOnlinePlayerUnknownStateDefaultsOffline(t *testing.T) {
+	if (onlinePlayer{}).online() {
+		t.Fatal("an online player without a known state must default to offline")
+	}
+}
+
+func knownOnlinePlayer(player onlinePlayer) onlinePlayer {
+	player.OnlineStateKnown = true
+	player.IsOnline = true
+	return player
+}
+
+func TestMergeOnlinePlayersWithRESTAuthorityDoesNotExpandPresence(t *testing.T) {
+	rest := map[string]onlinePlayer{
+		identityKey("uid-online"): {
+			PlayerUID:        "uid-online",
+			SteamID:          "steam-online",
+			OnlineStateKnown: true,
+			IsOnline:         true,
+			RESTOnline:       true,
+		},
+	}
+	defender := map[string]onlinePlayer{
+		identityKey("steam-online"): {
+			PlayerUID:         "uid-online",
+			SteamID:           "steam-online",
+			GMUserID:          "steam-online",
+			Location:          saveindex.Coordinates{X: 10},
+			OnlineStateKnown:  true,
+			IsOnline:          true,
+			PalDefenderOnline: true,
+		},
+		identityKey("uid-ghost"): {
+			PlayerUID:         "uid-ghost",
+			SteamID:           "steam-ghost",
+			GMUserID:          "steam-ghost",
+			OnlineStateKnown:  true,
+			IsOnline:          true,
+			PalDefenderOnline: true,
+		},
+	}
+
+	merged := mergeOnlinePlayersWithRESTAuthority(rest, defender)
+	matched := merged[identityKey("uid-online")]
+	if !matched.online() || matched.onlineSource() != "rest+paldefender" {
+		t.Fatalf("matching PalDefender state should enrich the REST player: %#v", matched)
+	}
+	if matched.Location.X != 10 {
+		t.Fatalf("matching PalDefender coordinates should enrich the REST player: %#v", matched)
+	}
+	ghost := merged[identityKey("uid-ghost")]
+	if ghost.online() || ghost.PalDefenderOnline {
+		t.Fatalf("PalDefender-only status must not expand authoritative REST presence: %#v", ghost)
+	}
+	if ghost.GMUserID != "steam-ghost" {
+		t.Fatalf("offline PalDefender identity metadata should be retained: %#v", ghost)
+	}
+}
+
+func TestMergeOnlinePlayersWithRESTAuthorityUsesUntrustedCoordinatesWithoutClaimingSource(t *testing.T) {
+	rest := map[string]onlinePlayer{
+		identityKey("uid-online"): {
+			PlayerUID:        "uid-online",
+			SteamID:          "steam-online",
+			OnlineStateKnown: true,
+			IsOnline:         true,
+			RESTOnline:       true,
+		},
+	}
+	defender := map[string]onlinePlayer{
+		identityKey("steam-online"): {
+			PlayerUID:           "uid-online",
+			SteamID:             "steam-online",
+			GMUserID:            "steam-online",
+			Location:            saveindex.Coordinates{X: 10},
+			OnlineStateKnown:    false,
+			IsOnline:            false,
+			PalDefenderOnline:   false,
+			PalDefenderLiveData: true,
+		},
+	}
+
+	merged := mergeOnlinePlayersWithRESTAuthority(rest, defender)
+	matched := merged[identityKey("uid-online")]
+	if !matched.online() || matched.onlineSource() != "rest" {
+		t.Fatalf("untrusted PalDefender status must not be reported as an online source: %#v", matched)
+	}
+	if matched.Location.X != 10 || matched.GMUserID != "steam-online" {
+		t.Fatalf("REST-confirmed player should retain PalDefender enrichment: %#v", matched)
+	}
+}
+
+func TestMergeOnlinePlayersWithRESTAuthorityKeepsBridgedAliasesConsistent(t *testing.T) {
+	rest := map[string]onlinePlayer{
+		identityKey("steam-old"): {
+			PlayerUID:        "uid-old",
+			SteamID:          "steam-old",
+			OnlineStateKnown: true,
+			IsOnline:         true,
+			RESTOnline:       true,
+		},
+	}
+	defender := map[string]onlinePlayer{
+		identityKey("uid-old"): {
+			PlayerUID:         "uid-new",
+			SteamID:           "steam-new",
+			GMUserID:          "steam-new",
+			OnlineStateKnown:  true,
+			IsOnline:          true,
+			PalDefenderOnline: true,
+		},
+	}
+
+	merged := mergeOnlinePlayersWithRESTAuthority(rest, defender)
+	for _, id := range []string{"uid-old", "steam-old", "uid-new", "steam-new"} {
+		player, ok := merged[identityKey(id)]
+		if !ok || !player.online() || player.onlineSource() != "rest+paldefender" {
+			t.Fatalf("bridged alias %q lost authoritative online state: %#v", id, merged)
+		}
+	}
+}
+
 func TestMergeSaveAndOnline_MatchesByUID(t *testing.T) {
 	save := []saveindex.Player{{PlayerUID: "uid-1", Nickname: "存档名", Level: 10}}
 	online := map[string]onlinePlayer{
-		"uid-1": {PlayerUID: "uid-1", Nickname: "在线名", Location: saveindex.Coordinates{X: 5}},
+		"uid-1": knownOnlinePlayer(onlinePlayer{PlayerUID: "uid-1", Nickname: "在线名", Location: saveindex.Coordinates{X: 5}}),
 	}
 	got := mergeSaveAndOnline(save, indexOnline(online))
 	if len(got) != 1 {
@@ -24,7 +146,7 @@ func TestMergeSaveAndOnline_MatchesBySteamIDWhenSaveHasOnlyUID(t *testing.T) {
 	// Save entry has both keys; online source only knows the SteamID.
 	save := []saveindex.Player{{PlayerUID: "uid-1", SteamID: "steamabc", Nickname: "存档名"}}
 	online := map[string]onlinePlayer{
-		"steamabc": {SteamID: "steamabc"},
+		"steamabc": knownOnlinePlayer(onlinePlayer{SteamID: "steamabc"}),
 	}
 	got := mergeSaveAndOnline(save, indexOnline(online))
 	if len(got) != 1 {
@@ -38,7 +160,7 @@ func TestMergeSaveAndOnline_MatchesBySteamIDWhenSaveHasOnlyUID(t *testing.T) {
 func TestMergeSaveAndOnline_ReconcilesSteamPrefix(t *testing.T) {
 	save := []saveindex.Player{{PlayerUID: "uid-1", SteamID: "steam_ABC"}}
 	online := map[string]onlinePlayer{
-		"abc": {SteamID: "abc"},
+		"abc": knownOnlinePlayer(onlinePlayer{SteamID: "abc"}),
 	}
 	got := mergeSaveAndOnline(save, indexOnline(online))
 	if len(got) != 1 {
@@ -53,7 +175,7 @@ func TestMergeSaveAndOnline_PalDefenderOnlyUserID(t *testing.T) {
 	// PalDefender supplies only a UserID (mapped into SteamID) matching the save.
 	save := []saveindex.Player{{PlayerUID: "uid-1", SteamID: "user-99", Nickname: "存档名"}}
 	online := map[string]onlinePlayer{
-		"user-99": {SteamID: "user-99", Location: saveindex.Coordinates{X: 1, Y: 2, Z: 3}},
+		"user-99": knownOnlinePlayer(onlinePlayer{SteamID: "user-99", Location: saveindex.Coordinates{X: 1, Y: 2, Z: 3}}),
 	}
 	got := mergeSaveAndOnline(save, indexOnline(online))
 	if len(got) != 1 {
@@ -67,7 +189,7 @@ func TestMergeSaveAndOnline_PalDefenderOnlyUserID(t *testing.T) {
 func TestMergeSaveAndOnline_NoDuplicateWhenOnlineKeyedTwice(t *testing.T) {
 	save := []saveindex.Player{{PlayerUID: "uid-1", SteamID: "steamabc"}}
 	// The same online player indexed under both keys must not duplicate.
-	item := onlinePlayer{PlayerUID: "uid-1", SteamID: "steamabc"}
+	item := knownOnlinePlayer(onlinePlayer{PlayerUID: "uid-1", SteamID: "steamabc"})
 	online := map[string]onlinePlayer{"uid-1": item, "steamabc": item}
 	got := mergeSaveAndOnline(save, indexOnline(online))
 	if len(got) != 1 {
@@ -77,7 +199,7 @@ func TestMergeSaveAndOnline_NoDuplicateWhenOnlineKeyedTwice(t *testing.T) {
 
 func TestMergeSaveAndOnline_OnlineOnlyPlayerAppendedOnce(t *testing.T) {
 	save := []saveindex.Player{{PlayerUID: "uid-save"}}
-	item := onlinePlayer{PlayerUID: "uid-online", SteamID: "steam-online", Nickname: "闯入者"}
+	item := knownOnlinePlayer(onlinePlayer{PlayerUID: "uid-online", SteamID: "steam-online", Nickname: "闯入者"})
 	// Online player absent from the save, indexed under both keys.
 	online := map[string]onlinePlayer{"uid-online": item, "steam-online": item}
 	got := mergeSaveAndOnline(save, indexOnline(online))
@@ -106,8 +228,8 @@ func TestMergeSaveAndOnline_ThreeSourcesNoGhosts(t *testing.T) {
 		{PlayerUID: "uid-2", SteamID: "steam-2", Nickname: "玩家二"},
 	}
 	online := map[string]onlinePlayer{
-		"uid-1":   {PlayerUID: "uid-1"},
-		"steam-2": {SteamID: "steam-2"},
+		"uid-1":   knownOnlinePlayer(onlinePlayer{PlayerUID: "uid-1"}),
+		"steam-2": knownOnlinePlayer(onlinePlayer{SteamID: "steam-2"}),
 	}
 	got := mergeSaveAndOnline(save, indexOnline(online))
 	if len(got) != 2 {
@@ -126,10 +248,10 @@ func TestMergeSaveAndOnline_BridgeIdentityMergesExistingRecords(t *testing.T) {
 		{SteamID: "steam-bridge", GuildID: "guild-1", GuildName: "桥接公会"},
 	}
 	online := map[string]onlinePlayer{
-		"uid-bridge": {
+		"uid-bridge": knownOnlinePlayer(onlinePlayer{
 			PlayerUID: "uid-bridge",
 			SteamID:   "steam-bridge",
-		},
+		}),
 	}
 
 	got := mergeSaveAndOnline(save, online)
@@ -179,21 +301,21 @@ func TestMergeSaveAndOnline_PreservesOverwrittenOnlineAlias(t *testing.T) {
 func TestMergeOnlinePlayers_PalDefenderPriorityIsDeterministic(t *testing.T) {
 	ping := 42.0
 	primary := map[string]onlinePlayer{
-		"uid-priority": {
+		"uid-priority": knownOnlinePlayer(onlinePlayer{
 			PlayerUID: "uid-priority",
 			SteamID:   "steam-priority",
 			Location:  saveindex.Coordinates{X: 1},
 			Ping:      &ping,
 			IP:        "rest-ip",
-		},
+		}),
 	}
 	preferred := map[string]onlinePlayer{
-		"steam-priority": {
+		"steam-priority": knownOnlinePlayer(onlinePlayer{
 			PlayerUID: "uid-priority",
 			SteamID:   "steam-priority",
 			Location:  saveindex.Coordinates{X: 99},
 			IP:        "paldefender-ip",
-		},
+		}),
 	}
 
 	merged := mergeOnlinePlayers(primary, preferred)
@@ -263,15 +385,17 @@ func TestMergeSaveAndOnline_StaleIdentityDoesNotSetOnlineOrLiveFields(t *testing
 
 func TestFlattenPlayerReportsMergedOnlineSourcesAndGMIdentifier(t *testing.T) {
 	rest := onlinePlayer{
-		PlayerUID:  "uid-source",
-		SteamID:    "steam-source",
-		IsOnline:   true,
-		RESTOnline: true,
+		PlayerUID:        "uid-source",
+		SteamID:          "steam-source",
+		OnlineStateKnown: true,
+		IsOnline:         true,
+		RESTOnline:       true,
 	}
 	defender := onlinePlayer{
 		PlayerUID:         "UID-SOURCE",
 		SteamID:           "steam_source",
 		GMUserID:          "gm-user-1",
+		OnlineStateKnown:  true,
 		IsOnline:          true,
 		PalDefenderOnline: true,
 	}

@@ -351,7 +351,9 @@ func mergeOnlinePlayer(target *onlinePlayer, source onlinePlayer, preferred bool
 	target.IsOnline = targetOnline || sourceOnline
 	target.RESTOnline = target.RESTOnline || source.RESTOnline
 	target.PalDefenderOnline = target.PalDefenderOnline || source.PalDefenderOnline
-	if !sourceOnline {
+	target.PalDefenderLiveData = target.PalDefenderLiveData || source.PalDefenderLiveData
+	sourceLive := sourceOnline || (targetOnline && source.PalDefenderLiveData)
+	if !sourceLive {
 		return
 	}
 	if !coordinatesAvailable(target.Location) || preferred && coordinatesAvailable(source.Location) {

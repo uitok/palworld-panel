@@ -277,13 +277,8 @@ func (s Server) listMapEntities(c *gin.Context) {
 	}
 	online := s.onlinePlayers(c)
 	status = statusWithOnlineState(status, online)
-	liveSource := online.Source
-	liveAvailable := online.Available
-	if palDefenderOnline, available := s.palDefenderMapPlayers(c); available {
-		online.Players = mergeOnlinePlayers(online.Players, palDefenderOnline)
-		liveSource = "paldefender"
-		liveAvailable = true
-	}
+	palDefenderOnline, palDefenderAvailable, palDefenderReliable := s.palDefenderMapPlayers(c)
+	online, liveSource, liveAvailable := mergeMapOnlinePlayers(online, palDefenderOnline, palDefenderAvailable, palDefenderReliable)
 	entities := buildMapEntities(index, online.Players)
 	limit, offset := limitOffset(c)
 	paged, summary := paginate(entities, limit, offset)
@@ -648,8 +643,9 @@ type onlinePlayersResult struct {
 }
 
 type palDefenderPlayersCacheEntry struct {
-	Players   map[string]onlinePlayer
-	Available bool
+	Players        map[string]onlinePlayer
+	Available      bool
+	OnlineReliable bool
 }
 
 func normalizedPlayerKey(value string) string {
@@ -670,22 +666,23 @@ func coordinatesAvailable(location saveindex.Coordinates) bool {
 }
 
 type onlinePlayer struct {
-	PlayerUID         string
-	SteamID           string
-	Nickname          string
-	Location          saveindex.Coordinates
-	Ping              *float64
-	IP                string
-	GMUserID          string
-	OnlineStateKnown  bool
-	IsOnline          bool
-	RESTOnline        bool
-	PalDefenderOnline bool
+	PlayerUID           string
+	SteamID             string
+	Nickname            string
+	Location            saveindex.Coordinates
+	Ping                *float64
+	IP                  string
+	GMUserID            string
+	OnlineStateKnown    bool
+	IsOnline            bool
+	RESTOnline          bool
+	PalDefenderOnline   bool
+	PalDefenderLiveData bool
 }
 
 func (p onlinePlayer) online() bool {
 	if !p.OnlineStateKnown {
-		return true
+		return false
 	}
 	return p.IsOnline
 }
@@ -717,9 +714,18 @@ func (s Server) onlinePlayers(c *gin.Context) onlinePlayersResult {
 	} else if restStale {
 		restPlayers = offlineIdentityPlayers(restPlayers)
 	}
-	defenderPlayers, _ := s.palDefenderMapPlayers(c)
+	defenderPlayers, _, defenderReliable := s.palDefenderMapPlayers(c)
+	if restStale {
+		defenderPlayers = palDefenderPlayersForFallback(defenderPlayers, defenderReliable)
+	}
+	var mergedPlayers map[string]onlinePlayer
+	if restStale {
+		mergedPlayers = mergeOnlinePlayers(restPlayers, defenderPlayers)
+	} else {
+		mergedPlayers = mergeOnlinePlayersWithRESTAuthority(restPlayers, defenderPlayers)
+	}
 	result := onlinePlayersResult{
-		Players:   mergeOnlinePlayers(restPlayers, defenderPlayers),
+		Players:   mergedPlayers,
 		Available: !restStale,
 		Source:    "palworld_rest+paldefender",
 		Stale:     restStale,
@@ -730,7 +736,7 @@ func (s Server) onlinePlayers(c *gin.Context) onlinePlayersResult {
 	return result
 }
 
-func (s Server) palDefenderMapPlayers(c *gin.Context) (map[string]onlinePlayer, bool) {
+func (s Server) palDefenderMapPlayers(c *gin.Context) (map[string]onlinePlayer, bool, bool) {
 	const cacheTTL = 2 * time.Second
 	key := cacheKey(cacheKeySavePrefix, "paldefender-map-players")
 	entry, status, err := cachedAs(s, c, key, cacheTTL, func(ctx context.Context) (palDefenderPlayersCacheEntry, error) {
@@ -740,22 +746,24 @@ func (s Server) palDefenderMapPlayers(c *gin.Context) (map[string]onlinePlayer, 
 		if err != nil {
 			return palDefenderPlayersCacheEntry{}, err
 		}
-		return palDefenderPlayersCacheEntry{Players: onlinePlayersFromPalDefender(response), Available: true}, nil
+		players, reliable := onlinePlayersFromPalDefender(response)
+		return palDefenderPlayersCacheEntry{Players: players, Available: true, OnlineReliable: reliable}, nil
 	})
 	if err != nil {
-		entry = palDefenderPlayersCacheEntry{Players: map[string]onlinePlayer{}, Available: false}
+		entry = palDefenderPlayersCacheEntry{Players: map[string]onlinePlayer{}, Available: false, OnlineReliable: false}
 		s.cache.Set(key, entry, cacheTTL)
-		return entry.Players, false
+		return entry.Players, false, false
 	}
 	if status == cacheStatusStale {
 		entry.Players = offlineIdentityPlayers(entry.Players)
 		entry.Available = false
+		entry.OnlineReliable = false
 		s.cache.Set(key, entry, cacheTTL)
 	}
 	if entry.Players == nil {
 		entry.Players = map[string]onlinePlayer{}
 	}
-	return entry.Players, entry.Available
+	return entry.Players, entry.Available, entry.OnlineReliable
 }
 
 func offlineIdentityPlayers(players map[string]onlinePlayer) map[string]onlinePlayer {
@@ -765,6 +773,7 @@ func offlineIdentityPlayers(players map[string]onlinePlayer) map[string]onlinePl
 		player.IsOnline = false
 		player.RESTOnline = false
 		player.PalDefenderOnline = false
+		player.PalDefenderLiveData = false
 		player.Location = saveindex.Coordinates{}
 		player.Ping = nil
 		player.IP = ""
@@ -773,24 +782,29 @@ func offlineIdentityPlayers(players map[string]onlinePlayer) map[string]onlinePl
 	return out
 }
 
-func onlinePlayersFromPalDefender(response paldefender.RESTPlayersResponse) map[string]onlinePlayer {
+func onlinePlayersFromPalDefender(response paldefender.RESTPlayersResponse) (map[string]onlinePlayer, bool) {
 	out := map[string]onlinePlayer{}
+	onlineCount := 0
 	for _, player := range response.Players {
 		isOnline := strings.EqualFold(strings.TrimSpace(player.Status), "online")
+		if isOnline {
+			onlineCount++
+		}
 		location := player.WorldLocation
 		if location.X == 0 && location.Y == 0 && location.Z == 0 {
 			location = player.MapLocation
 		}
 		item := onlinePlayer{
-			PlayerUID:         player.PlayerUID,
-			SteamID:           player.UserID,
-			Nickname:          player.Name,
-			Location:          saveindex.Coordinates{X: location.X, Y: location.Y, Z: location.Z},
-			IP:                player.IP,
-			GMUserID:          player.UserID,
-			OnlineStateKnown:  true,
-			IsOnline:          isOnline,
-			PalDefenderOnline: isOnline,
+			PlayerUID:           player.PlayerUID,
+			SteamID:             player.UserID,
+			Nickname:            player.Name,
+			Location:            saveindex.Coordinates{X: location.X, Y: location.Y, Z: location.Z},
+			IP:                  player.IP,
+			GMUserID:            player.UserID,
+			OnlineStateKnown:    true,
+			IsOnline:            isOnline,
+			PalDefenderOnline:   isOnline,
+			PalDefenderLiveData: isOnline,
 		}
 		for _, key := range []string{player.PlayerUID, player.UserID} {
 			key = normalizedPlayerKey(key)
@@ -799,13 +813,78 @@ func onlinePlayersFromPalDefender(response paldefender.RESTPlayersResponse) map[
 			}
 		}
 	}
-	return out
+	reliable := response.Meta.PlayerCount == len(response.Players) && response.Meta.OnlineCount == onlineCount
+	if !reliable {
+		for key, player := range out {
+			if !player.PalDefenderLiveData {
+				continue
+			}
+			player.OnlineStateKnown = false
+			player.IsOnline = false
+			player.PalDefenderOnline = false
+			out[key] = player
+		}
+	}
+	return out, reliable
+}
+
+func palDefenderPlayersForFallback(players map[string]onlinePlayer, reliable bool) map[string]onlinePlayer {
+	if reliable {
+		return players
+	}
+	return offlineIdentityPlayers(players)
+}
+
+func mergeMapOnlinePlayers(online onlinePlayersResult, defender map[string]onlinePlayer, defenderAvailable, defenderReliable bool) (onlinePlayersResult, string, bool) {
+	liveSource := online.Source
+	liveAvailable := online.Available
+	if !defenderAvailable {
+		return online, liveSource, liveAvailable
+	}
+	if online.Available {
+		online.Players = mergeOnlinePlayersWithRESTAuthority(online.Players, defender)
+		return online, "paldefender", true
+	}
+	if !defenderReliable {
+		return online, liveSource, liveAvailable
+	}
+	online.Players = mergeOnlinePlayers(online.Players, defender)
+	return online, "paldefender", true
 }
 
 func mergeOnlinePlayers(primary, preferred map[string]onlinePlayer) map[string]onlinePlayer {
 	registry := newOnlinePlayerRegistry()
 	registry.overlay(primary, false)
 	registry.overlay(preferred, true)
+	return registry.players()
+}
+
+func mergeOnlinePlayersWithRESTAuthority(rest, defender map[string]onlinePlayer) map[string]onlinePlayer {
+	registry := newOnlinePlayerRegistry()
+	registry.overlay(rest, false)
+	registry.overlay(defender, true)
+	authoritative := make(map[*onlinePlayer]bool, len(rest))
+	for alias, player := range rest {
+		if !player.online() {
+			continue
+		}
+		if record := registry.coalesce(alias, player.PlayerUID, player.SteamID); record != nil {
+			authoritative[record] = true
+		}
+	}
+	for _, player := range registry.records {
+		if authoritative[player] {
+			continue
+		}
+		player.OnlineStateKnown = true
+		player.IsOnline = false
+		player.RESTOnline = false
+		player.PalDefenderOnline = false
+		player.PalDefenderLiveData = false
+		player.Location = saveindex.Coordinates{}
+		player.Ping = nil
+		player.IP = ""
+	}
 	return registry.players()
 }
 

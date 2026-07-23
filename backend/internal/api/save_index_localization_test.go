@@ -78,12 +78,12 @@ func TestFilterPalsAcceptsChineseName(t *testing.T) {
 
 func TestOverlayOnlinePlayersUsesLiveCoordinatesWithoutDuplicates(t *testing.T) {
 	location := saveindex.Coordinates{X: 123, Y: 456, Z: 789}
-	live := onlinePlayer{
+	live := knownOnlinePlayer(onlinePlayer{
 		PlayerUID: "player-uid",
 		SteamID:   "steam-id",
 		Nickname:  "在线玩家",
 		Location:  location,
-	}
+	})
 	online := map[string]onlinePlayer{
 		"player-uid": live,
 		"steam-id":   live,
@@ -103,11 +103,11 @@ func TestOverlayOnlinePlayersUsesLiveCoordinatesWithoutDuplicates(t *testing.T) 
 }
 
 func TestOverlayOnlinePlayersMatchesSteamPrefixVariants(t *testing.T) {
-	live := onlinePlayer{
+	live := knownOnlinePlayer(onlinePlayer{
 		PlayerUID: "live-player-uid",
 		SteamID:   "steam_76561198370732375",
 		Nickname:  "玛卡巴卡",
-	}
+	})
 	online := map[string]onlinePlayer{
 		normalizedPlayerKey(live.PlayerUID): live,
 		normalizedPlayerKey(live.SteamID):   live,
@@ -134,7 +134,7 @@ func TestOverlayOnlinePlayersPreservesSaveCoordinatesWhenRESTHasNone(t *testing.
 		SteamID:   "steam-id",
 		Location:  saveLocation,
 	}}, map[string]onlinePlayer{
-		"player-uid": {PlayerUID: "player-uid", SteamID: "steam-id", Nickname: "在线玩家"},
+		"player-uid": knownOnlinePlayer(onlinePlayer{PlayerUID: "player-uid", SteamID: "steam-id", Nickname: "在线玩家"}),
 	})
 	if len(players) != 1 || !players[0].IsOnline || players[0].Location != saveLocation {
 		t.Fatalf("REST data without coordinates replaced the save position: %#v", players)
@@ -142,24 +142,30 @@ func TestOverlayOnlinePlayersPreservesSaveCoordinatesWhenRESTHasNone(t *testing.
 }
 
 func TestOnlinePlayersFromPalDefenderPrefersWorldLocation(t *testing.T) {
-	players := onlinePlayersFromPalDefender(paldefender.RESTPlayersResponse{Players: []paldefender.RESTPlayer{
-		{
-			Name:          "World",
-			PlayerUID:     "world-uid",
-			UserID:        "world-steam",
-			Status:        "Online",
-			WorldLocation: paldefender.RESTLocation{X: 10, Y: 20, Z: 30},
-			MapLocation:   paldefender.RESTLocation{X: 100, Y: 200, Z: 300},
+	players, reliable := onlinePlayersFromPalDefender(paldefender.RESTPlayersResponse{
+		Meta: paldefender.RESTPlayersMeta{PlayerCount: 3, OnlineCount: 2},
+		Players: []paldefender.RESTPlayer{
+			{
+				Name:          "World",
+				PlayerUID:     "world-uid",
+				UserID:        "world-steam",
+				Status:        "Online",
+				WorldLocation: paldefender.RESTLocation{X: 10, Y: 20, Z: 30},
+				MapLocation:   paldefender.RESTLocation{X: 100, Y: 200, Z: 300},
+			},
+			{
+				Name:        "Map fallback",
+				PlayerUID:   "map-uid",
+				UserID:      "map-steam",
+				Status:      "online",
+				MapLocation: paldefender.RESTLocation{X: 40, Y: 50, Z: 60},
+			},
+			{Name: "Offline", PlayerUID: "offline-uid", Status: "offline"},
 		},
-		{
-			Name:        "Map fallback",
-			PlayerUID:   "map-uid",
-			UserID:      "map-steam",
-			Status:      "online",
-			MapLocation: paldefender.RESTLocation{X: 40, Y: 50, Z: 60},
-		},
-		{Name: "Offline", PlayerUID: "offline-uid", Status: "offline"},
-	}})
+	})
+	if !reliable {
+		t.Fatal("consistent PalDefender metadata should be reliable")
+	}
 	if len(players) != 5 {
 		t.Fatalf("expected online identities plus the offline GM identity, got %#v", players)
 	}
@@ -171,6 +177,100 @@ func TestOnlinePlayersFromPalDefenderPrefersWorldLocation(t *testing.T) {
 	}
 	if offline, ok := players[identityKey("offline-uid")]; !ok || offline.online() {
 		t.Fatalf("offline PalDefender identity should be retained without a live signal: %#v", players)
+	}
+}
+
+func TestOnlinePlayersFromPalDefenderMarksInconsistentOnlineMetadataUntrusted(t *testing.T) {
+	players, reliable := onlinePlayersFromPalDefender(paldefender.RESTPlayersResponse{
+		Meta: paldefender.RESTPlayersMeta{PlayerCount: 3, OnlineCount: 1},
+		Players: []paldefender.RESTPlayer{
+			{Name: "Current", PlayerUID: "uid-current", UserID: "steam-current", Status: "Online", WorldLocation: paldefender.RESTLocation{X: 1}},
+			{Name: "Ghost", PlayerUID: "uid-ghost", UserID: "steam-ghost", Status: "Online", WorldLocation: paldefender.RESTLocation{X: 2}},
+			{Name: "Offline", PlayerUID: "uid-offline", UserID: "steam-offline", Status: "Offline"},
+		},
+	})
+	if reliable {
+		t.Fatal("inconsistent PalDefender metadata must not be reliable")
+	}
+
+	for _, id := range []string{"uid-current", "uid-ghost"} {
+		player := players[identityKey(id)]
+		if player.online() || player.PalDefenderOnline || !player.PalDefenderLiveData || player.OnlineStateKnown {
+			t.Fatalf("inconsistent PalDefender online claim should be retained but not trusted for %q: %#v", id, player)
+		}
+		if !coordinatesAvailable(player.Location) {
+			t.Fatalf("untrusted claim should retain coordinates for REST-confirmed enrichment of %q: %#v", id, player)
+		}
+	}
+	fallback := palDefenderPlayersForFallback(players, reliable)
+	for _, id := range []string{"uid-current", "uid-ghost", "uid-offline"} {
+		player := fallback[identityKey(id)]
+		if player.online() || player.PalDefenderOnline || coordinatesAvailable(player.Location) {
+			t.Fatalf("untrusted PalDefender fallback must be offline for %q: %#v", id, player)
+		}
+	}
+	if fallback[identityKey("uid-current")].GMUserID != "steam-current" {
+		t.Fatalf("untrusted fallback should still retain GM identity: %#v", fallback)
+	}
+}
+
+func TestOnlinePlayersFromPalDefenderTreatsMissingMetaAsUntrusted(t *testing.T) {
+	players, reliable := onlinePlayersFromPalDefender(paldefender.RESTPlayersResponse{Players: []paldefender.RESTPlayer{
+		{Name: "Ghost", PlayerUID: "uid-ghost", UserID: "steam-ghost", Status: "Online", WorldLocation: paldefender.RESTLocation{X: 2}},
+	}})
+	if reliable {
+		t.Fatal("missing PalDefender metadata must not be reliable")
+	}
+	player := players[identityKey("uid-ghost")]
+	if player.online() || player.PalDefenderOnline || !player.PalDefenderLiveData || player.OnlineStateKnown {
+		t.Fatalf("missing PalDefender metadata must not produce a trusted online player: %#v", player)
+	}
+	fallback := palDefenderPlayersForFallback(players, reliable)[identityKey("uid-ghost")]
+	if fallback.online() || fallback.PalDefenderLiveData || coordinatesAvailable(fallback.Location) {
+		t.Fatalf("missing metadata must disable PalDefender fallback: %#v", fallback)
+	}
+}
+
+func TestOnlinePlayersFromPalDefenderRejectsMetaOnlineCountWithoutOnlineRows(t *testing.T) {
+	players, reliable := onlinePlayersFromPalDefender(paldefender.RESTPlayersResponse{
+		Meta: paldefender.RESTPlayersMeta{PlayerCount: 2, OnlineCount: 1},
+		Players: []paldefender.RESTPlayer{
+			{Name: "One", PlayerUID: "uid-one", Status: "Offline"},
+			{Name: "Two", PlayerUID: "uid-two", Status: "Offline"},
+		},
+	})
+	if reliable {
+		t.Fatal("PalDefender Meta online count without matching online rows must be unreliable")
+	}
+	for _, player := range palDefenderPlayersForFallback(players, reliable) {
+		if player.online() || player.PalDefenderOnline || player.PalDefenderLiveData {
+			t.Fatalf("unreliable fallback retained a live signal: %#v", player)
+		}
+	}
+}
+
+func TestMergeMapOnlinePlayersRejectsUntrustedPalDefenderFallback(t *testing.T) {
+	online := onlinePlayersResult{
+		Players:   map[string]onlinePlayer{},
+		Available: false,
+		Source:    "palworld_rest+paldefender",
+		Stale:     true,
+	}
+	defender := map[string]onlinePlayer{
+		identityKey("uid-ghost"): {
+			PlayerUID:           "uid-ghost",
+			OnlineStateKnown:    false,
+			PalDefenderLiveData: true,
+			Location:            saveindex.Coordinates{X: 2},
+		},
+	}
+
+	merged, source, available := mergeMapOnlinePlayers(online, defender, true, false)
+	if available || source != online.Source {
+		t.Fatalf("untrusted PalDefender fallback must not be advertised as live: source=%q available=%v", source, available)
+	}
+	if player := merged.Players[identityKey("uid-ghost")]; player.online() || coordinatesAvailable(player.Location) {
+		t.Fatalf("untrusted map fallback must remain offline: %#v", player)
 	}
 }
 
@@ -256,7 +356,7 @@ func TestSaveIndexQueryHelpersAndFilters(t *testing.T) {
 
 	steamOnly := mergeSaveAndOnline(
 		[]saveindex.Player{{PlayerUID: "member-uid", SteamID: "steam_member"}},
-		map[string]onlinePlayer{"member": {SteamID: "member"}},
+		map[string]onlinePlayer{"member": knownOnlinePlayer(onlinePlayer{SteamID: "member"})},
 	)
 	steamGuild := []saveindex.Guild{{ID: "guild-steam", Members: []saveindex.GuildMember{{PlayerUID: "member-uid"}}}}
 	applyGuildOnlineCounts(steamGuild, steamOnly)
@@ -342,15 +442,15 @@ func TestPalDefenderMapPlayersCachesFailureCooldown(t *testing.T) {
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = httptest.NewRequest("GET", "/api/players", nil)
 
-	if players, available := server.palDefenderMapPlayers(context); available || len(players) != 0 {
-		t.Fatalf("unavailable PalDefender should degrade to an empty source: %#v available=%v", players, available)
+	if players, available, reliable := server.palDefenderMapPlayers(context); available || reliable || len(players) != 0 {
+		t.Fatalf("unavailable PalDefender should degrade to an empty source: %#v available=%v reliable=%v", players, available, reliable)
 	}
 	key := cacheKey(cacheKeySavePrefix, "paldefender-map-players")
 	_, status, ok := server.cache.Get(key)
 	if !ok || status != cacheStatusHit {
 		t.Fatalf("PalDefender failure was not cached for cooldown: status=%s ok=%v", status, ok)
 	}
-	if players, available := server.palDefenderMapPlayers(context); available || len(players) != 0 {
-		t.Fatalf("cached PalDefender failure should remain unavailable: %#v available=%v", players, available)
+	if players, available, reliable := server.palDefenderMapPlayers(context); available || reliable || len(players) != 0 {
+		t.Fatalf("cached PalDefender failure should remain unavailable: %#v available=%v reliable=%v", players, available, reliable)
 	}
 }
