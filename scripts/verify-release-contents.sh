@@ -69,8 +69,14 @@ fi
 if [[ -n "$project_source_archive" ]]; then
   [[ -f "$project_source_archive" ]] || { printf 'project source archive not found: %s\n' "$project_source_archive" >&2; exit 1; }
   project_listing="$(tar -tzf "$project_source_archive")"
-  if grep -E '/(data|logs|run|dist|node_modules)/|/\.env$|/\.env\..*\.local$|\.(db|sqlite|log|sav|zip|exe|o|a)$' <<<"$project_listing"; then
+  first_party_listing="$(grep -Ev '/third_party/' <<<"$project_listing" || true)"
+  if grep -E '/(data|logs|run|dist|node_modules)/|/\.env$|/\.env\..*\.local$|\.(db|sqlite|log|sav|zip|exe|o|a)$' <<<"$first_party_listing"; then
     printf 'project source archive contains runtime data, secrets, dependencies, or build artifacts\n' >&2
+    exit 1
+  fi
+  third_party_forbidden="$(grep -E '/third_party/.*/(bin|obj|logs|run|dist|node_modules)/|/third_party/.*/\.env($|\.)|\.(db|sqlite|log|zip|exe|o|a)$' <<<"$project_listing" || true)"
+  if [[ -n "$third_party_forbidden" ]]; then
+    printf '%s\nproject source archive contains forbidden third-party build or runtime artifacts\n' "$third_party_forbidden" >&2
     exit 1
   fi
   unexpected_dlls="$(grep -Ei '\.dll$' <<<"$project_listing" || true)"
