@@ -215,6 +215,19 @@ func playerGVASFixture(t *testing.T, containers map[string]string) []byte {
 	writeFString(t, &body, "/Script/Pal.PalWorldPlayerSaveGame")
 
 	writeStructProperty(t, &body, "SaveData", "PalPlayerSaveData", func() {
+		writeStructProperty(t, &body, "LastTransform", "Transform", func() {
+			writeStructProperty(t, &body, "Rotation", "Quat", func() {
+				for _, value := range []float64{0, 0, 0, 1} {
+					writeFloat64(t, &body, value)
+				}
+			})
+			writeStructProperty(t, &body, "Translation", "Vector", func() {
+				for _, value := range []float64{123, 456, 789} {
+					writeFloat64(t, &body, value)
+				}
+			})
+			writeFString(t, &body, "None")
+		})
 		writeStructMapProperty(t, &body, "Local_MaxFriendshipPalIds", func() {
 			writeGUIDProperty(t, &body, "PlayerUId", fixturePlayerID)
 			writeFString(t, &body, "None")
@@ -328,6 +341,13 @@ func writeU32(t *testing.T, body *bytes.Buffer, value uint32) {
 }
 
 func writeU64(t *testing.T, body *bytes.Buffer, value uint64) {
+	t.Helper()
+	if err := binary.Write(body, binary.LittleEndian, value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFloat64(t *testing.T, body *bytes.Buffer, value float64) {
 	t.Helper()
 	if err := binary.Write(body, binary.LittleEndian, value); err != nil {
 		t.Fatal(err)

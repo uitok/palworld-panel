@@ -317,8 +317,6 @@ func (r *Reader) StructValue(structType string, path string) (any, error) {
 		return r.Vector()
 	case "Quat":
 		return r.Quat()
-	case "Transform":
-		return r.Transform()
 	case "Rotator":
 		return r.Vector()
 	case "DateTime":
