@@ -667,6 +667,87 @@ export interface components {
       "Technology": unknown;
     };
     "PalDefenderTeleportRequest": unknown;
+    "PalworldConfig": {
+      "draft"?: components["schemas"]["PalworldConfigDraft"];
+      "format_issues": Array<components["schemas"]["PalworldFormatIssue"]>;
+      "issues": Array<components["schemas"]["PalworldValidationIssue"]>;
+      "path": string;
+      "pending_restart": boolean;
+      "revision_sha256": string;
+      "secret_state": components["schemas"]["PalworldSecretState"];
+      "settings": Record<string, string>;
+    };
+    "PalworldConfigApplyRequest": {
+      "draft_id": string;
+    };
+    "PalworldConfigDraft": {
+      "applied_job_id"?: string;
+      "created_at": string;
+      "id": string;
+      "revision_sha256": string;
+      "status": "draft" | "applying" | "completed" | "failed" | "stale" | "expired" | "superseded";
+      "updated_at": string;
+    };
+    "PalworldConfigEnvelope": {
+      "data": components["schemas"]["PalworldConfig"];
+      "ok": true;
+    };
+    "PalworldConfigFieldSchema": {
+      "default"?: string | null;
+      "description": string;
+      "enum"?: Array<string>;
+      "enum_labels"?: Record<string, string>;
+      "group": string;
+      "key": string;
+      "label": string;
+      "max"?: number;
+      "min"?: number;
+      "requires_restart": boolean;
+      "risk"?: string;
+      "type": "string" | "bool" | "int" | "float" | "enum" | "list";
+    };
+    "PalworldConfigSchema": {
+      "fields": Array<components["schemas"]["PalworldConfigFieldSchema"]>;
+      "version": string;
+    };
+    "PalworldConfigSchemaEnvelope": {
+      "data": components["schemas"]["PalworldConfigSchema"];
+      "ok": true;
+    };
+    "PalworldConfigUpdateRequest": {
+      "clear_secrets"?: Array<"AdminPassword" | "ServerPassword">;
+      "settings": Record<string, unknown>;
+    };
+    "PalworldConfigValidateRequest": {
+      "clear_secrets"?: Array<"AdminPassword" | "ServerPassword">;
+      "settings": Record<string, unknown>;
+    };
+    "PalworldConfigValidation": {
+      "issues": Array<components["schemas"]["PalworldValidationIssue"]>;
+      "valid": boolean;
+    };
+    "PalworldConfigValidationEnvelope": {
+      "data": components["schemas"]["PalworldConfigValidation"];
+      "ok": true;
+    };
+    "PalworldFormatIssue": {
+      "code": string;
+      "field": string;
+      "message": string;
+      "severity": "warning" | "error";
+    };
+    "PalworldSecretConfigured": {
+      "configured": boolean;
+    };
+    "PalworldSecretState": {
+      "admin_password": components["schemas"]["PalworldSecretConfigured"];
+      "server_password": components["schemas"]["PalworldSecretConfigured"];
+    };
+    "PalworldValidationIssue": {
+      "field"?: string;
+      "message": string;
+      "severity": "warning" | "error";
+    };
     "PasswordChangeRequest": {
       "current_password": string;
       "new_password": string;

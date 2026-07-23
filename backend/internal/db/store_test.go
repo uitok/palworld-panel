@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,6 +87,158 @@ func TestStoreJobsModsAndKV(t *testing.T) {
 	}
 }
 
+func TestConfigDraftClaimIsCompareAndSwap(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "draft.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	draft := ConfigDraft{ID: "cfg_1", BaseSHA256: "hash", DraftPath: "draft.ini", Status: "draft"}
+	if err := store.CreateConfigDraft(t.Context(), draft); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimConfigDraft(t.Context(), draft.ID, "job_1")
+	if err != nil || !claimed {
+		t.Fatalf("first claim = %v, %v", claimed, err)
+	}
+	claimed, err = store.ClaimConfigDraft(t.Context(), draft.ID, "job_2")
+	if err != nil || claimed {
+		t.Fatalf("second claim = %v, %v", claimed, err)
+	}
+}
+
+func TestCreateConfigDraftReplacingSupersedesReusableDrafts(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "draft-replace.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, draft := range []ConfigDraft{
+		{ID: "old_draft", BaseSHA256: "a", DraftPath: "old-draft.ini", Status: "draft"},
+		{ID: "old_failed", BaseSHA256: "b", DraftPath: "old-failed.ini", Status: "failed"},
+		{ID: "applying", BaseSHA256: "c", DraftPath: "applying.ini", Status: "applying"},
+	} {
+		if err := store.CreateConfigDraft(t.Context(), draft); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replaced, err := store.CreateConfigDraftReplacing(t.Context(), ConfigDraft{ID: "new", BaseSHA256: "d", DraftPath: "new.ini", Status: "draft"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replaced) != 2 {
+		t.Fatalf("replaced = %#v", replaced)
+	}
+	for _, id := range []string{"old_draft", "old_failed"} {
+		draft, err := store.GetConfigDraft(t.Context(), id)
+		if err != nil || draft.Status != "superseded" {
+			t.Fatalf("%s = %#v, %v", id, draft, err)
+		}
+	}
+	active, err := store.GetConfigDraft(t.Context(), "applying")
+	if err != nil || active.Status != "applying" {
+		t.Fatalf("applying = %#v, %v", active, err)
+	}
+}
+
+func TestExpireConfigDraftsReturnsPrivateFilesForCleanup(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "draft-expire.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.CreateConfigDraft(t.Context(), ConfigDraft{ID: "old", BaseSHA256: "a", DraftPath: "old.ini", Status: "draft"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `UPDATE config_drafts SET created_at='2026-07-20T00:00:00Z' WHERE id='old'`); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := store.ExpireConfigDrafts(t.Context(), "2026-07-21T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 1 || expired[0].ID != "old" || expired[0].DraftPath != "old.ini" {
+		t.Fatalf("expired = %#v", expired)
+	}
+	draft, err := store.GetConfigDraft(t.Context(), "old")
+	if err != nil || draft.Status != "expired" {
+		t.Fatalf("old = %#v, %v", draft, err)
+	}
+}
+
+func TestConfigDraftPersistsModifiedFieldsAndQueuesTerminalCleanup(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "draft-fields.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	draft := ConfigDraft{
+		ID: "cfg_fields", BaseSHA256: "hash", DraftPath: "private.ini", Status: "draft",
+		ModifiedFields: []string{"ServerName", "RESTAPIPort", "ServerName"},
+	}
+	if err := store.CreateConfigDraft(t.Context(), draft); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetConfigDraft(t.Context(), draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.ModifiedFields, ",") != "RESTAPIPort,ServerName" {
+		t.Fatalf("modified fields = %#v", got.ModifiedFields)
+	}
+	if err := store.UpdateConfigDraftStatusAndQueueCleanup(t.Context(), draft.ID, "stale", "", "config_draft"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListConfigPrivateCleanup(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Path != "private.ini" || pending[0].Attempts != 0 {
+		t.Fatalf("pending cleanup = %#v", pending)
+	}
+	if err := store.RecordConfigPrivateCleanupFailure(t.Context(), "private.ini", "access denied"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.ListConfigPrivateCleanup(t.Context(), 10)
+	if err != nil || len(pending) != 1 || pending[0].Attempts != 1 || pending[0].LastError != "access denied" {
+		t.Fatalf("failed cleanup = %#v, %v", pending, err)
+	}
+	if err := store.CompleteConfigPrivateCleanup(t.Context(), "private.ini"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.ListConfigPrivateCleanup(t.Context(), 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("completed cleanup = %#v, %v", pending, err)
+	}
+}
+
+func TestSupersedeAndExpireQueuePrivateCleanupInSameTransaction(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "draft-cleanup-queue.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.CreateConfigDraft(t.Context(), ConfigDraft{ID: "old", BaseSHA256: "a", DraftPath: "old.ini", Status: "draft"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateConfigDraftReplacing(t.Context(), ConfigDraft{ID: "new", BaseSHA256: "b", DraftPath: "new.ini", Status: "draft"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `UPDATE config_drafts SET created_at='2026-07-20T00:00:00Z' WHERE id='new'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExpireConfigDrafts(t.Context(), "2026-07-21T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListConfigPrivateCleanup(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 || pending[0].Path != "new.ini" && pending[1].Path != "new.ini" {
+		t.Fatalf("pending cleanup = %#v", pending)
+	}
+}
+
 func TestStoreMigratesLegacyModsTable(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	d, err := sql.Open("sqlite", dbPath)
@@ -132,7 +285,7 @@ func TestStoreMigratesLegacyModsTable(t *testing.T) {
 		t.Fatalf("legacy mod defaults not applied: %#v", mods[0])
 	}
 	version, err := store.SchemaVersion(context.Background())
-	if err != nil || version != 6 {
+	if err != nil || version != 10 {
 		t.Fatalf("schema version = %d, %v", version, err)
 	}
 }

@@ -7,7 +7,7 @@ import { serverApi } from '../api/server';
 import { settingsApi } from '../api/settings';
 import { networkProxyApi } from '../api/networkProxy';
 import { useServerStore } from '../store/useServerStore';
-import type { AITranslationConfig, AITranslationConfigUpdate, DevelopmentKey, FieldSchema, NetworkProxyConfig, NetworkProxyConfigUpdate, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
+import type { AITranslationConfig, AITranslationConfigUpdate, DevelopmentKey, FieldSchema, NetworkProxyConfig, NetworkProxyConfigUpdate, PalworldConfigDraft, PalworldFormatIssue, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
 import { useI18n } from '../i18n';
 import { LanguageSwitcher } from '../components/ui/LanguageSwitcher';
 
@@ -45,6 +45,9 @@ export const Settings: React.FC = () => {
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [pendingRestart, setPendingRestart] = useState(false);
+  const [configDraft, setConfigDraft] = useState<PalworldConfigDraft | null>(null);
+  const [formatIssues, setFormatIssues] = useState<PalworldFormatIssue[]>([]);
+  const [clearSecrets, setClearSecrets] = useState<Set<string>>(new Set());
   const [activeGroup, setActiveGroup] = useState('server_management');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
@@ -102,11 +105,17 @@ export const Settings: React.FC = () => {
       setVersion(schema.version);
       setVersionInfo(serverVersion);
       setDraft(nextDraft);
-      setOriginalKeys(new Set(Object.keys(config.settings)));
+      const configuredKeys = new Set(Object.keys(config.settings));
+      if (config.secret_state?.admin_password.configured) configuredKeys.add('AdminPassword');
+      if (config.secret_state?.server_password.configured) configuredKeys.add('ServerPassword');
+      setOriginalKeys(configuredKeys);
+	  setClearSecrets(new Set());
       setDirtyKeys(new Set());
       setPath(config.path);
       setIssues(config.issues || []);
       setPendingRestart(config.pending_restart);
+      setConfigDraft(config.draft || null);
+      setFormatIssues(config.format_issues || []);
       setActiveGroup(schema.fields[0]?.group || 'server_management');
     } catch (error) {
       setFields([]);
@@ -220,12 +229,18 @@ export const Settings: React.FC = () => {
     const valid = await validate();
     if (!valid) return;
     try {
-      const saved = await settingsApi.updateSettings(submission());
+      const updates = submission();
+      const saved = clearSecrets.size > 0
+        ? await settingsApi.updateSettings(updates, Array.from(clearSecrets))
+        : await settingsApi.updateSettings(updates);
       setPendingRestart(saved.pending_restart);
+      setConfigDraft(saved.draft || null);
+      setFormatIssues(saved.format_issues || []);
       setIssues(saved.issues || []);
       setOriginalKeys(new Set(Object.keys(saved.settings)));
       setDirtyKeys(new Set());
-      setMessage('配置已保存，重启服务器后生效');
+      setClearSecrets(new Set());
+      setMessage('配置草稿已保存，请确认后应用');
       triggerRefresh();
     } catch (error) {
       setMessage(getErrorMessage(error));
@@ -347,6 +362,18 @@ export const Settings: React.FC = () => {
       setMessage(getErrorMessage(error));
     } finally {
       setPasswordBusy(false);
+    }
+  };
+
+  const applyConfigDraft = async () => {
+    if (!configDraft) return;
+    try {
+      const job = await settingsApi.applySettings(configDraft.id);
+      setConfigDraft({ ...configDraft, status: 'applying', applied_job_id: job.id });
+      setMessage('配置应用任务已提交');
+      triggerRefresh();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
     }
   };
 
@@ -526,6 +553,13 @@ export const Settings: React.FC = () => {
         </div>
       )}
 
+      {formatIssues.some((issue) => issue.code === 'string_not_quoted') && (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800">
+          <AlertTriangle size={15} />
+          密码字符串格式不正确，将在应用草稿时自动修复。
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)]">
           <div className="mb-4 rounded-2xl bg-slate-50 p-4">
@@ -600,6 +634,16 @@ export const Settings: React.FC = () => {
                 <Save size={14} />
                 保存
               </button>
+              {configDraft && (configDraft.status === 'draft' || configDraft.status === 'failed') && (
+                <button
+                  type="button"
+                  onClick={() => void applyConfigDraft()}
+                  className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                >
+                  <CheckCircle2 size={14} />
+                  应用草稿
+                </button>
+              )}
             </div>
           </div>
 
@@ -638,6 +682,15 @@ export const Settings: React.FC = () => {
                   value={draft[field.key]}
                   isSet={originalKeys.has(field.key) || dirtyKeys.has(field.key)}
                   onChange={(value) => updateField(field.key, value)}
+                  secretConfigured={field.key === 'AdminPassword'
+                    ? originalKeys.has(field.key)
+                    : field.key === 'ServerPassword' ? originalKeys.has(field.key) : false}
+                  clearSecret={clearSecrets.has(field.key)}
+                  onClearSecret={(clear) => setClearSecrets((current) => {
+                    const next = new Set(current);
+                    if (clear) next.add(field.key); else next.delete(field.key);
+                    return next;
+                  })}
                 />
               ))}
             </div>
@@ -821,7 +874,10 @@ const FieldControl: React.FC<{
   value: string | number | boolean | undefined;
   isSet: boolean;
   onChange: (value: string | number | boolean) => void;
-}> = ({ field, value, isSet, onChange }) => {
+  secretConfigured?: boolean;
+  clearSecret?: boolean;
+  onClearSecret?: (clear: boolean) => void;
+}> = ({ field, value, isSet, onChange, secretConfigured, clearSecret, onClearSecret }) => {
   const commonLabel = (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -897,7 +953,8 @@ const FieldControl: React.FC<{
     );
   }
 
-  const inputType = field.type === 'int' || field.type === 'float' ? 'number' : 'text';
+  const isSecret = field.key === 'AdminPassword' || field.key === 'ServerPassword';
+  const inputType = isSecret ? 'password' : field.type === 'int' || field.type === 'float' ? 'number' : 'text';
   const step = field.type === 'float' ? '0.1' : '1';
   const isLongText = field.key.includes('Description') || field.type === 'list';
 
@@ -906,6 +963,7 @@ const FieldControl: React.FC<{
       {commonLabel}
       {isLongText ? (
         <textarea
+          aria-label={field.label || field.key}
           value={String(value ?? '')}
           onChange={(event) => onChange(event.target.value)}
           rows={3}
@@ -913,11 +971,14 @@ const FieldControl: React.FC<{
         />
       ) : (
         <input
+          aria-label={field.label || field.key}
           type={inputType}
           step={step}
           min={field.min}
           max={field.max}
           value={String(value ?? '')}
+		  disabled={Boolean(clearSecret)}
+		  placeholder={isSecret && secretConfigured ? '留空以保留现有密码' : undefined}
           onChange={(event) => {
             if (field.type === 'int' || field.type === 'float') {
               onChange(Number(event.target.value));
@@ -928,6 +989,18 @@ const FieldControl: React.FC<{
           className="rounded-xl border border-slate-200 bg-white p-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
         />
       )}
+	  {isSecret && secretConfigured && (
+		<span className="inline-flex items-center gap-2 text-[11px] font-semibold text-rose-600">
+		  <input
+			type="checkbox"
+			aria-label={`清除${field.label || field.key}`}
+			checked={Boolean(clearSecret)}
+			onChange={(event) => onClearSecret?.(event.target.checked)}
+			className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500"
+		  />
+		  清除已保存的密码
+		</span>
+	  )}
     </label>
   );
 };

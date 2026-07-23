@@ -1,6 +1,9 @@
 package palconfig
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseSettingsWithQuotedComma(t *testing.T) {
 	content := `[/Script/Pal.PalGameWorldSettings]
@@ -30,6 +33,91 @@ func TestSerializeSettingsQuotesStrings(t *testing.T) {
 	}
 	if want := `PublicPort=8211`; !contains(got, want) {
 		t.Fatalf("serialized settings missing %s in %s", want, got)
+	}
+}
+
+func TestSerializeUsesSchemaForPasswordStrings(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "numeric", value: "123456", want: `ServerPassword="123456"`},
+		{name: "boolean-looking", value: "True", want: `ServerPassword="True"`},
+		{name: "none-looking", value: "None", want: `ServerPassword="None"`},
+		{name: "empty", value: "", want: `ServerPassword=""`},
+		{name: "escaped", value: `say "hi" \\ path,rest`, want: `ServerPassword="say \"hi\" \\\\ path,rest"`},
+		{name: "unicode", value: "密碼パス", want: `ServerPassword="密碼パス"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := Serialize(Settings{"ServerPassword": test.value})
+			if !strings.Contains(got, test.want) {
+				t.Fatalf("Serialize(ServerPassword=%q) = %s, want %s", test.value, got, test.want)
+			}
+		})
+	}
+
+	got := Serialize(Settings{"AdminPassword": "1e6", "RESTAPIEnabled": "true", "PublicPort": "08211"})
+	for _, want := range []string{`AdminPassword="1e6"`, `RESTAPIEnabled=True`, `PublicPort=8211`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("schema serialization missing %s in %s", want, got)
+		}
+	}
+}
+
+func TestSerializeIntPreservesMaxInt64AndExactScientificIntegers(t *testing.T) {
+	got := Serialize(Settings{
+		"ServerPlayerMaxNum":              "9223372036854775807",
+		"ServerReplicatePawnCullDistance": "1.5e4",
+	})
+	for _, want := range []string{
+		"ServerPlayerMaxNum=9223372036854775807",
+		"ServerReplicatePawnCullDistance=15000",
+	} {
+		if !contains(got, want) {
+			t.Fatalf("Serialize() = %s, missing %s", got, want)
+		}
+	}
+}
+
+func TestParseAndSerializePreservesUnknownRawValue(t *testing.T) {
+	input := SectionHeader + "\n" + `OptionSettings=(FutureOfficialKey="123456",ServerName="Before")` + "\n"
+	document, err := ParseDocument(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Settings["ServerName"] = "After"
+	got := SerializeDocument(document, map[string]bool{"ServerName": true})
+	if !strings.Contains(got, `FutureOfficialKey="123456"`) {
+		t.Fatalf("unknown raw value changed: %s", got)
+	}
+}
+
+func TestSerializeDocumentPreservesUnknownEmptyRawValue(t *testing.T) {
+	document, err := ParseDocument(SectionHeader + "\nOptionSettings=(FutureOfficialKey=,ServerName=\"Before\")\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Settings["ServerName"] = "After"
+	got := SerializeDocument(document, map[string]bool{"ServerName": true})
+	if !strings.Contains(got, "FutureOfficialKey=,") {
+		t.Fatalf("unknown empty raw value changed: %s", got)
+	}
+}
+
+func TestSerializeNormalizesStructuredLists(t *testing.T) {
+	got := Serialize(Settings{
+		"CrossplayPlatforms": "( Steam , Xbox,PS5 )",
+		"DenyTechnologyList": `( "GrapplingGun" , "Laser,Turret" )`,
+	})
+	for _, want := range []string{
+		"CrossplayPlatforms=(Steam,Xbox,PS5)",
+		`DenyTechnologyList=("GrapplingGun","Laser,Turret")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("structured list missing %s in %s", want, got)
+		}
 	}
 }
 

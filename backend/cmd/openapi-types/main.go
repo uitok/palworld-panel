@@ -26,6 +26,7 @@ type schema struct {
 	Required             []string          `yaml:"required"`
 	Properties           map[string]schema `yaml:"properties"`
 	AllOf                []schema          `yaml:"allOf"`
+	AnyOf                []schema          `yaml:"anyOf"`
 	Items                *schema           `yaml:"items"`
 	AdditionalProperties any               `yaml:"additionalProperties"`
 }
@@ -85,6 +86,13 @@ func typeFor(value schema, indent int) string {
 		}
 		return strings.Join(parts, " & ")
 	}
+	if len(value.AnyOf) > 0 {
+		parts := make([]string, 0, len(value.AnyOf))
+		for _, item := range value.AnyOf {
+			parts = append(parts, typeFor(item, indent))
+		}
+		return strings.Join(parts, " | ")
+	}
 	if value.Const != nil {
 		return literal(value.Const)
 	}
@@ -102,6 +110,8 @@ func typeFor(value schema, indent int) string {
 		return "number"
 	case "boolean":
 		return "boolean"
+	case "null":
+		return "null"
 	case "array":
 		if value.Items == nil {
 			return "unknown[]"
@@ -153,7 +163,7 @@ func additionalPropertiesSchema(value any) (schema, bool) {
 	if err := yaml.Unmarshal(body, &result); err != nil {
 		return schema{}, false
 	}
-	if result.Ref == "" && result.Type == "" && len(result.AllOf) == 0 {
+	if result.Ref == "" && result.Type == "" && len(result.AllOf) == 0 && len(result.AnyOf) == 0 {
 		return schema{}, false
 	}
 	return result, true

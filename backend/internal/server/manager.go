@@ -50,23 +50,31 @@ type windowsProcessInfo struct {
 }
 
 type Manager struct {
-	cfg                  appconfig.Config
-	store                *db.Store
-	runner               docker.Runner
-	remoteBuildIDFunc    func(context.Context) (string, string, error)
-	installOrUpdateFunc  func(context.Context, string) error
-	jobs                 *jobs.Executor
-	operationMu          *sync.Mutex
-	inspectProcess       func(int) (windowsProcessInfo, error)
-	terminateProcess     func(context.Context, int) error
-	downloadClient       *http.Client
-	worldResetTimeout    time.Duration
-	worldResetPoll       time.Duration
-	gracefulStopTimeout  time.Duration
-	gracefulStopPoll     time.Duration
-	lifecycleWait        func(context.Context, time.Duration) error
-	jobHeartbeatInterval time.Duration
-	goos                 string
+	cfg                       appconfig.Config
+	store                     *db.Store
+	runner                    docker.Runner
+	remoteBuildIDFunc         func(context.Context) (string, string, error)
+	installOrUpdateFunc       func(context.Context, string) error
+	jobs                      *jobs.Executor
+	operationMu               *sync.Mutex
+	inspectProcess            func(int) (windowsProcessInfo, error)
+	terminateProcess          func(context.Context, int) error
+	downloadClient            *http.Client
+	worldResetTimeout         time.Duration
+	worldResetPoll            time.Duration
+	gracefulStopTimeout       time.Duration
+	gracefulStopPoll          time.Duration
+	lifecycleWait             func(context.Context, time.Duration) error
+	jobHeartbeatInterval      time.Duration
+	goos                      string
+	configApplyAfterStop      func()
+	configApplyHealth         func(context.Context) error
+	configApplyStatus         func(context.Context) (Status, error)
+	configApplyStop           func(context.Context) error
+	configApplyStart          func(context.Context) error
+	configApplyJournalPersist func(context.Context, configApplyJournal) error
+	configPrivateRemove       func(string) error
+	configDraftTTL            time.Duration
 }
 
 type Status struct {
@@ -158,6 +166,7 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, exe
 		lifecycleWait:        waitForLifecycleDuration,
 		jobHeartbeatInterval: 15 * time.Second,
 		goos:                 runtime.GOOS,
+		configDraftTTL:       24 * time.Hour,
 	}
 }
 

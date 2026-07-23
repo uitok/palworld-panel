@@ -333,8 +333,10 @@ func migrations() []schemaMigration {
 		{version: 4, apply: migrateAccountAuthentication},
 		{version: 5, apply: migrateBreedingAndSaveSources},
 		{version: 6, apply: migrateSaveSourceIndexMetadata},
-		{version: 7, apply: migrateMonitorDiagnostics},
-		{version: 8, apply: migrateMonitorLifecycleAvailability},
+		{version: 7, apply: migrateConfigDrafts},
+		{version: 8, apply: migrateConfigDraftSafety},
+		{version: 9, apply: migrateMonitorDiagnostics},
+		{version: 10, apply: migrateMonitorLifecycleAvailability},
 	}
 }
 

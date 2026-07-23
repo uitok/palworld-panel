@@ -84,7 +84,6 @@ func TestNewContractRoutes(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		"/api/config/palworld/schema",
 		"/api/server/startup",
 		"/api/server/runtime",
 		"/api/security/paldefender/status",
@@ -425,6 +424,40 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	}
 	if got := spec.Paths["/ai/translation/config"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/AITranslationConfigUpdate" {
 		t.Errorf("PUT /ai/translation/config request schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigUpdateRequest" {
+		t.Errorf("PUT /config/palworld request schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/apply"].Post.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigApplyRequest" {
+		t.Errorf("POST /config/palworld/apply request schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/validate"].Post.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigValidateRequest" {
+		t.Errorf("POST /config/palworld/validate request schema = %q", got)
+	}
+	for _, operation := range []struct {
+		name string
+		ref  string
+	}{
+		{name: "GET /config/palworld", ref: spec.Paths["/config/palworld"].Get.Responses["200"].Content["application/json"].Schema.Ref},
+		{name: "PUT /config/palworld", ref: spec.Paths["/config/palworld"].Put.Responses["200"].Content["application/json"].Schema.Ref},
+	} {
+		if operation.ref != "#/components/schemas/PalworldConfigEnvelope" {
+			t.Errorf("%s response schema = %q", operation.name, operation.ref)
+		}
+	}
+	if got := spec.Paths["/config/palworld/apply"].Post.Responses["202"].Content["application/json"].Schema.Ref; got != "#/components/schemas/JobEnvelope" {
+		t.Errorf("POST /config/palworld/apply response schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/schema"].Get.Responses["200"].Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigSchemaEnvelope" {
+		t.Errorf("GET /config/palworld/schema response schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/validate"].Post.Responses["200"].Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigValidationEnvelope" {
+		t.Errorf("POST /config/palworld/validate response schema = %q", got)
+	}
+	for _, property := range []string{"revision_sha256", "secret_state", "format_issues", "draft"} {
+		if _, ok := spec.Components.Schemas["PalworldConfig"].Properties[property]; !ok {
+			t.Errorf("PalworldConfig is missing %s", property)
+		}
 	}
 	if got := spec.Paths["/settings/network-proxy"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/NetworkProxyConfigUpdate" {
 		t.Errorf("PUT /settings/network-proxy request schema = %q", got)

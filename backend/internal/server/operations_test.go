@@ -291,5 +291,10 @@ esac`
 		t.Fatal(err)
 	}
 	manager := NewManager(cfg, store, docker.NewRunner(cfg))
-	return manager, func() { _ = store.Close() }
+	return manager, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = manager.jobs.Shutdown(shutdownCtx)
+		_ = store.Close()
+	}
 }

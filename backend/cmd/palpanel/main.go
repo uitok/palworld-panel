@@ -173,6 +173,12 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 
 	runner := docker.NewRunner(cfg)
 	serverManager := server.NewManager(cfg, store, runner, jobExecutor)
+	if err := serverManager.RecoverPalworldConfigApply(context.Background()); err != nil {
+		return fmt.Errorf("recover interrupted Palworld config apply: %w", err)
+	}
+	if err := serverManager.MaintainConfigDrafts(context.Background()); err != nil {
+		return fmt.Errorf("clean up expired Palworld config drafts: %w", err)
+	}
 	modsManager := mods.NewManager(cfg, store, runner, jobExecutor)
 	palDefenderManager := paldefender.NewManager(cfg, store, jobExecutor).WithServerState(serverManager)
 	restClient := palrest.New(cfg.PalworldRESTBaseURL, cfg.PalworldRESTUser, cfg.PalworldRESTPass)
@@ -180,13 +186,14 @@ func runWithIO(args []string, input io.Reader, output, errorOutput io.Writer) er
 	schedulerManager := scheduler.New(store, serverManager, restClient, jobExecutor)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	configCleanupDone := serverManager.StartConfigDraftCleanup(ctx, 15*time.Minute)
 	monitorDone := monitorManager.Start(ctx)
 	schedulerDone := schedulerManager.Start(ctx)
 	defer func() {
 		stop()
 		workerCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = waitForBackground(workerCtx, monitorDone, schedulerDone)
+		_ = waitForBackground(workerCtx, monitorDone, schedulerDone, configCleanupDone)
 		_ = jobExecutor.Shutdown(workerCtx)
 	}()
 

@@ -699,42 +699,49 @@ func (s Server) verifyBackup(c *gin.Context) {
 }
 
 func (s Server) getPalworldConfig(c *gin.Context) {
-	settings, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
+	if err := s.cleanupExpiredConfigDrafts(c.Request.Context()); err != nil {
+		fail(c, http.StatusInternalServerError, "config_draft_cleanup_failed", err.Error())
+		return
+	}
+	snapshot, err := server.ReadPalworldConfigSnapshot(s.cfg.PalWorldSettingsPath())
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "config_read_failed", err.Error())
 		return
 	}
-	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath(), "settings": settings, "issues": palconfig.Validate(settings)})
+	ok(c, s.palworldConfigResponse(c.Request.Context(), snapshot.Document, snapshot.Revision, nil))
 }
 
 func (s Server) updatePalworldConfig(c *gin.Context) {
-	var raw map[string]any
-	if err := c.ShouldBindJSON(&raw); err != nil {
+	if err := s.cleanupExpiredConfigDrafts(c.Request.Context()); err != nil {
+		fail(c, http.StatusInternalServerError, "config_draft_cleanup_failed", err.Error())
+		return
+	}
+	request, err := decodePalworldConfigUpdate(c)
+	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	updates := raw
-	if nested, found := raw["settings"].(map[string]any); found {
-		updates = nested
-	}
-	current, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
+	snapshot, err := server.ReadPalworldConfigSnapshot(s.cfg.PalWorldSettingsPath())
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "config_read_failed", err.Error())
 		return
 	}
-	next := palconfig.Merge(current, updates)
+	next, modified, err := mergePalworldConfigUpdate(snapshot.Document, request)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "config_invalid", err.Error())
+		return
+	}
 	issues := palconfig.Validate(next)
 	if hasPalconfigErrors(issues) {
 		fail(c, http.StatusBadRequest, "config_invalid", "palworld config has validation errors")
 		return
 	}
-	if err := palconfig.Write(s.cfg.PalWorldSettingsPath(), next); err != nil {
-		fail(c, http.StatusInternalServerError, "config_write_failed", err.Error())
+	draft, err := s.createPalworldConfigDraft(c.Request.Context(), palconfig.Document{Settings: next, RawValues: snapshot.Document.RawValues}, modified, snapshot.Revision)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "config_draft_create_failed", err.Error())
 		return
 	}
-	_ = s.server.MarkPendingRestart(c.Request.Context())
-	s.invalidateServerCaches()
-	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath(), "settings": next, "pending_restart": true, "issues": issues})
+	ok(c, s.palworldConfigResponse(c.Request.Context(), palconfig.Document{Settings: next}, snapshot.Revision, &draft))
 }
 
 func (s Server) getPalworldConfigSchema(c *gin.Context) {
@@ -742,21 +749,21 @@ func (s Server) getPalworldConfigSchema(c *gin.Context) {
 }
 
 func (s Server) validatePalworldConfig(c *gin.Context) {
-	var raw map[string]any
-	if err := c.ShouldBindJSON(&raw); err != nil {
+	request, err := decodePalworldConfigUpdate(c)
+	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	updates := raw
-	if nested, found := raw["settings"].(map[string]any); found {
-		updates = nested
-	}
-	current, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
+	current, err := palconfig.ReadDocument(s.cfg.PalWorldSettingsPath())
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "config_read_failed", err.Error())
 		return
 	}
-	next := palconfig.Merge(current, updates)
+	next, _, err := mergePalworldConfigUpdate(current, request)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "config_invalid", err.Error())
+		return
+	}
 	issues := palconfig.Validate(next)
 	ok(c, gin.H{"issues": issues, "valid": !hasPalconfigErrors(issues)})
 }
@@ -1261,15 +1268,20 @@ func (s Server) palPost(path string) gin.HandlerFunc {
 }
 
 func (s Server) palworldREST() palrest.Client {
-	client := s.palrest
 	settings, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
-	if err == nil {
-		if port := strings.TrimSpace(settings["RESTAPIPort"]); port != "" {
-			client.BaseURL = restBaseURLWithPort(client.BaseURL, port)
-		}
-		if password := strings.TrimSpace(settings["AdminPassword"]); password != "" {
-			client.Password = password
-		}
+	if err != nil {
+		settings = nil
+	}
+	return s.palworldRESTForSettings(settings)
+}
+
+func (s Server) palworldRESTForSettings(settings palconfig.Settings) palrest.Client {
+	client := s.palrest
+	if port := strings.TrimSpace(settings["RESTAPIPort"]); port != "" {
+		client.BaseURL = restBaseURLWithPort(client.BaseURL, port)
+	}
+	if settings != nil {
+		client.Password = settings["AdminPassword"]
 	}
 	if strings.TrimSpace(client.BaseURL) == "" {
 		client.BaseURL = fmt.Sprintf("http://127.0.0.1:%d/v1/api", s.cfg.RESTPort)

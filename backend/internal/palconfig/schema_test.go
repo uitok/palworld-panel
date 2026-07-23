@@ -72,6 +72,24 @@ func TestValidateRejectsFractionalFloatForIntFields(t *testing.T) {
 	t.Fatalf("expected fractional float to be rejected for int field: %#v", issues)
 }
 
+func TestValidateRejectsNonFiniteNumbersAndIntOverflow(t *testing.T) {
+	for _, test := range []struct {
+		field string
+		value string
+	}{
+		{field: "DayTimeSpeedRate", value: "NaN"},
+		{field: "DayTimeSpeedRate", value: "+Inf"},
+		{field: "ServerPlayerMaxNum", value: "NaN"},
+		{field: "ServerPlayerMaxNum", value: "9223372036854775808"},
+		{field: "ServerPlayerMaxNum", value: "1e100"},
+	} {
+		issues := Validate(Settings{test.field: test.value})
+		if !hasIssue(issues, test.field, "error") {
+			t.Errorf("%s=%q was accepted: %#v", test.field, test.value, issues)
+		}
+	}
+}
+
 func TestValidateReturnsLocalizedMessages(t *testing.T) {
 	issues := Validate(Settings{
 		"RCONEnabled":        "yes",
@@ -82,6 +100,43 @@ func TestValidateReturnsLocalizedMessages(t *testing.T) {
 	assertIssueMessage(t, issues, "RCONEnabled", "必须是 True 或 False")
 	assertIssueMessage(t, issues, "ServerPlayerMaxNum", "必须是整数")
 	assertIssueMessage(t, issues, "DeathPenalty", "必须是以下值之一：None, Item, ItemAndEquipment, All")
+}
+
+func TestCrossplayPlatformsUsesStructuredListSchema(t *testing.T) {
+	for _, field := range Schema() {
+		if field.Key == "CrossplayPlatforms" {
+			if field.Type != TypeList {
+				t.Fatalf("CrossplayPlatforms type = %q, want list", field.Type)
+			}
+			return
+		}
+	}
+	t.Fatal("CrossplayPlatforms schema missing")
+}
+
+func TestValidateRejectsMalformedStructuredLists(t *testing.T) {
+	for _, value := range []string{
+		"(Steam,)",
+		"(Steam",
+		"Steam,Xbox",
+		"(Steam),ServerPassword=bad",
+		`("unterminated)`,
+		"((Steam))",
+	} {
+		issues := Validate(Settings{"CrossplayPlatforms": value})
+		if !hasIssue(issues, "CrossplayPlatforms", "error") {
+			t.Errorf("CrossplayPlatforms=%q was accepted: %#v", value, issues)
+		}
+	}
+}
+
+func hasIssue(issues []ValidationIssue, field, severity string) bool {
+	for _, issue := range issues {
+		if issue.Field == field && issue.Severity == severity {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSchemaCoversOfficialOneDotZeroFields(t *testing.T) {

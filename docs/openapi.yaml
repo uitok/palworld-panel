@@ -465,12 +465,37 @@ paths:
   /server/shutdown:
     post: {operationId: shutdownServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
   /config/palworld:
-    get: {operationId: getPalworldConfig, tags: [content], x-palpanel-permission: read, responses: *readResponses}
-    put: {operationId: updatePalworldConfig, tags: [content], x-palpanel-permission: 'config:write', requestBody: *jsonRequest, responses: *writeResponses}
+    get:
+      operationId: getPalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      responses: {'200': {description: Palworld config, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigEnvelope'}}}}, '401': *error, '403': *error, '500': *error}
+    put:
+      operationId: updatePalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigUpdateRequest'}}}}
+      responses: {'200': {description: Draft created, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigEnvelope'}}}}, '400': *error, '401': *error, '403': *error, '500': *error}
+  /config/palworld/apply:
+    post:
+      operationId: applyPalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write + server:control'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigApplyRequest'}}}}
+      responses: {'202': *accepted, '400': *error, '401': *error, '403': *error, '409': *error, '410': *error, '500': *error}
   /config/palworld/schema:
-    get: {operationId: getPalworldConfigSchema, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+    get:
+      operationId: getPalworldConfigSchema
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      responses: {'200': {description: Palworld config schema, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigSchemaEnvelope'}}}}, '401': *error, '403': *error, '500': *error}
   /config/palworld/validate:
-    post: {operationId: validatePalworldConfig, tags: [content], x-palpanel-permission: read, requestBody: *jsonRequest, responses: *writeResponses}
+    post:
+      operationId: validatePalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigValidateRequest'}}}}
+      responses: {'200': {description: Validation result, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigValidationEnvelope'}}}}, '400': *error, '401': *error, '403': *error, '500': *error}
   /mods:
     get: {operationId: listMods, tags: [content], x-palpanel-permission: read, responses: *readResponses}
   /mods/local/scan:
@@ -1115,6 +1140,126 @@ components:
       bearerFormat: ppk_...
       description: 'Revocable development key supplied as Authorization: Bearer ppk_...'
   schemas:
+    PalworldConfigUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings: {type: object, additionalProperties: true}
+        clear_secrets:
+          type: array
+          uniqueItems: true
+          items: {type: string, enum: [AdminPassword, ServerPassword]}
+    PalworldConfigApplyRequest:
+      type: object
+      additionalProperties: false
+      required: [draft_id]
+      properties:
+        draft_id: {type: string, minLength: 1}
+    PalworldConfigValidateRequest:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings: {type: object, additionalProperties: true}
+        clear_secrets:
+          type: array
+          uniqueItems: true
+          items: {type: string, enum: [AdminPassword, ServerPassword]}
+    PalworldConfigDraft:
+      type: object
+      required: [id, revision_sha256, status, created_at, updated_at]
+      properties:
+        id: {type: string}
+        revision_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        status: {type: string, enum: [draft, applying, completed, failed, stale, expired, superseded]}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        applied_job_id: {type: string}
+    PalworldSecretConfigured:
+      type: object
+      required: [configured]
+      properties:
+        configured: {type: boolean}
+    PalworldSecretState:
+      type: object
+      required: [admin_password, server_password]
+      properties:
+        admin_password: {$ref: '#/components/schemas/PalworldSecretConfigured'}
+        server_password: {$ref: '#/components/schemas/PalworldSecretConfigured'}
+    PalworldFormatIssue:
+      type: object
+      required: [field, code, severity, message]
+      properties:
+        field: {type: string}
+        code: {type: string}
+        severity: {type: string, enum: [warning, error]}
+        message: {type: string}
+    PalworldValidationIssue:
+      type: object
+      required: [severity, message]
+      properties:
+        field: {type: string}
+        severity: {type: string, enum: [warning, error]}
+        message: {type: string}
+    PalworldConfigFieldSchema:
+      type: object
+      required: [key, label, group, type, requires_restart, description]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        group: {type: string}
+        type: {type: string, enum: [string, bool, int, float, enum, list]}
+        default: {anyOf: [{type: string}, {type: 'null'}]}
+        enum: {type: array, items: {type: string}}
+        enum_labels: {type: object, additionalProperties: {type: string}}
+        min: {type: number}
+        max: {type: number}
+        requires_restart: {type: boolean}
+        risk: {type: string}
+        description: {type: string}
+    PalworldConfigSchema:
+      type: object
+      required: [version, fields]
+      properties:
+        version: {type: string}
+        fields: {type: array, items: {$ref: '#/components/schemas/PalworldConfigFieldSchema'}}
+    PalworldConfigValidation:
+      type: object
+      required: [valid, issues]
+      properties:
+        valid: {type: boolean}
+        issues: {type: array, items: {$ref: '#/components/schemas/PalworldValidationIssue'}}
+    PalworldConfig:
+      type: object
+      required: [path, settings, revision_sha256, secret_state, format_issues, issues, pending_restart]
+      properties:
+        path: {type: string}
+        settings: {type: object, additionalProperties: {type: string}}
+        revision_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        secret_state: {$ref: '#/components/schemas/PalworldSecretState'}
+        format_issues: {type: array, items: {$ref: '#/components/schemas/PalworldFormatIssue'}}
+        issues: {type: array, items: {$ref: '#/components/schemas/PalworldValidationIssue'}}
+        pending_restart: {type: boolean}
+        draft: {$ref: '#/components/schemas/PalworldConfigDraft'}
+    PalworldConfigEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalworldConfig'}
+    PalworldConfigSchemaEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalworldConfigSchema'}
+    PalworldConfigValidationEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalworldConfigValidation'}
     AuthCredentials:
       type: object
       required: [username, password]

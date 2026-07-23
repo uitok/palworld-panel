@@ -134,10 +134,11 @@ func (s Server) registerServerRoutes(api *gin.RouterGroup) {
 }
 
 func (s Server) registerContentRoutes(api *gin.RouterGroup) {
-	api.GET("/config/palworld", s.getPalworldConfig)
+	api.GET("/config/palworld", Require(PermConfigWrite), s.getPalworldConfig)
 	api.PUT("/config/palworld", Require(PermConfigWrite), s.updatePalworldConfig)
-	api.GET("/config/palworld/schema", s.getPalworldConfigSchema)
-	api.POST("/config/palworld/validate", s.validatePalworldConfig)
+	api.POST("/config/palworld/apply", Require(PermConfigWrite), Require(PermServerControl), s.applyPalworldConfig)
+	api.GET("/config/palworld/schema", Require(PermConfigWrite), s.getPalworldConfigSchema)
+	api.POST("/config/palworld/validate", Require(PermConfigWrite), s.validatePalworldConfig)
 	api.GET("/mods", s.listMods)
 	api.POST("/mods/local/scan", Require(PermRead), s.scanLocalMods)
 	api.POST("/mods/local/findings/:id/actions", Require(PermModsWrite), s.actOnLocalModFinding)

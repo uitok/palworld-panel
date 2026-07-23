@@ -59,7 +59,7 @@ func Schema() []FieldSchema {
 		boolField("bAllowClientMod", "server_management", "True", "是否允许启用客户端 Mod 的玩家加入服务器。"),
 		boolField("bEnableBuildingPlayerUIdDisplay", "server_management", "False", "是否在建筑上显示创建者的玩家 ID。"),
 		intField("ChatPostLimitPerMinute", "server_management", "30", 1, 120, "每名玩家每分钟最多可发送的聊天消息数。"),
-		strField("CrossplayPlatforms", "server_management", "(Steam,Xbox,PS5,Mac)", "允许连接服务器的平台。默认值为 (Steam,Xbox,PS5,Mac)。"),
+		listField("CrossplayPlatforms", "server_management", "(Steam,Xbox,PS5,Mac)", "允许连接服务器的平台。默认值为 (Steam,Xbox,PS5,Mac)。"),
 
 		intField("BaseCampMaxNum", "performance", "128", 0, 0, "服务器中可存在的据点总数。"),
 		intField("BaseCampMaxNumInGuild", "performance", "4", 0, 10, "每个公会可拥有的最大据点数。官方上限为 10；提高该值会增加服务器负载。"),
@@ -199,10 +199,10 @@ func validateField(schema FieldSchema, value string) *ValidationIssue {
 			return &ValidationIssue{Field: schema.Key, Severity: "error", Message: "必须是 True 或 False"}
 		}
 	case TypeInt:
-		i, err := strconv.Atoi(value)
+		i, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			f, floatErr := strconv.ParseFloat(value, 64)
-			if floatErr != nil || math.Trunc(f) != f {
+			if floatErr != nil || math.IsNaN(f) || math.IsInf(f, 0) || math.Trunc(f) != f || f >= math.Exp2(63) || f < -math.Exp2(63) {
 				return &ValidationIssue{Field: schema.Key, Severity: "error", Message: "必须是整数"}
 			}
 			return validateNumber(schema, f)
@@ -210,7 +210,7 @@ func validateField(schema FieldSchema, value string) *ValidationIssue {
 		return validateNumber(schema, float64(i))
 	case TypeFloat:
 		f, err := strconv.ParseFloat(value, 64)
-		if err != nil {
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 			return &ValidationIssue{Field: schema.Key, Severity: "error", Message: "必须是数字"}
 		}
 		return validateNumber(schema, f)
@@ -221,6 +221,10 @@ func validateField(schema FieldSchema, value string) *ValidationIssue {
 			}
 		}
 		return &ValidationIssue{Field: schema.Key, Severity: "error", Message: fmt.Sprintf("必须是以下值之一：%s", strings.Join(schema.Enum, ", "))}
+	case TypeList:
+		if _, err := normalizeStructuredList(value); err != nil {
+			return &ValidationIssue{Field: schema.Key, Severity: "error", Message: "必须是括号包围、逗号分隔的安全列表"}
+		}
 	}
 	return nil
 }

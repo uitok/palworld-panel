@@ -325,15 +325,38 @@ export interface FieldSchema {
 
 export type PalworldSettings = Record<string, string | number | boolean | undefined>;
 
+export interface PalworldConfigDraft {
+  id: string;
+  revision_sha256: string;
+  status: 'draft' | 'applying' | 'completed' | 'failed' | string;
+  created_at: string;
+  updated_at: string;
+  applied_job_id?: string;
+}
+
 export interface MonitorRiskReason {
   code: string;
   message: string;
   severity: 'warning' | 'critical';
 }
+
+export interface PalworldSecretState {
+  admin_password: { configured: boolean };
+  server_password: { configured: boolean };
+}
+
+export interface PalworldFormatIssue extends ValidationIssue {
+  code: string;
+}
+
 export interface PalworldConfigResponse {
   settings: PalworldSettings;
   path: string;
   pending_restart: boolean;
+  revision_sha256?: string;
+  secret_state?: PalworldSecretState;
+  format_issues?: PalworldFormatIssue[];
+  draft?: PalworldConfigDraft;
   issues?: ValidationIssue[];
 }
 
