@@ -6,10 +6,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WINEPREFIX=/data/wineprefix \
     HOME=/root
 
-ADD https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz /tmp/steamcmd_linux.tar.gz
-RUN mkdir -p /opt/steamcmd \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --fail --location --show-error --retry 3 \
+      --output /tmp/steamcmd_linux.tar.gz \
+      https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+    && mkdir -p /opt/steamcmd \
     && tar -xzf /tmp/steamcmd_linux.tar.gz -C /opt/steamcmd \
-    && rm -f /tmp/steamcmd_linux.tar.gz
+    && rm -f /tmp/steamcmd_linux.tar.gz \
+    && /opt/steamcmd/steamcmd.sh +quit
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh \

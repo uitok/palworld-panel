@@ -8,12 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
-	"palpanel/internal/docker"
 	"palpanel/internal/jobs"
 	"palpanel/internal/steamcmd"
 )
@@ -23,7 +23,7 @@ var workshopIDPattern = regexp.MustCompile(`^\d{5,20}$`)
 type Manager struct {
 	cfg       appconfig.Config
 	store     *db.Store
-	runner    docker.Runner
+	runner    workshopDockerRunner
 	native    nativeWorkshopDownloader
 	steamAuth workshopAuthenticator
 	workshop  *WorkshopService
@@ -32,12 +32,22 @@ type Manager struct {
 	local     *localActionState
 }
 
-func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, executors ...*jobs.Executor) Manager {
+type workshopDockerRunner interface {
+	BuildImage(context.Context) error
+	DownloadWorkshopTo(context.Context, string, string, ...string) error
+	ImageExists(context.Context) (bool, error)
+	AuthenticateWorkshop(context.Context, steamcmd.LoginRequest) ([]byte, error)
+}
+
+func NewManager(cfg appconfig.Config, store *db.Store, runner workshopDockerRunner, executors ...*jobs.Executor) Manager {
 	executor := jobs.New(store, 4)
 	if len(executors) > 0 && executors[0] != nil {
 		executor = executors[0]
 	}
 	nativeClient := steamcmd.New(cfg)
+	if runtime.GOOS != "windows" {
+		nativeClient.SetCredentialLoginRunner(runner.AuthenticateWorkshop)
+	}
 	return Manager{
 		cfg: cfg, store: store, runner: runner, native: nativeClient, steamAuth: nativeClient,
 		workshop: NewWorkshopService(cfg), jobs: executor, imports: newImportRegistry(cfg), local: &localActionState{},
@@ -252,6 +262,12 @@ func (m Manager) rewriteActiveMods(ctx context.Context) error {
 
 func (m Manager) update(jobID, status string, progress int, message, errText string) {
 	if err := m.jobs.Update(jobID, status, progress, message, errText); err != nil {
+		log.Printf("job %s update failed: %v", jobID, err)
+	}
+}
+
+func (m Manager) updateWithCode(jobID, status string, progress int, message, errText, errorCode string) {
+	if err := m.jobs.UpdateWithCode(jobID, status, progress, message, errText, errorCode); err != nil {
 		log.Printf("job %s update failed: %v", jobID, err)
 	}
 }

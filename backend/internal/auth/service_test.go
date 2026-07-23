@@ -115,6 +115,45 @@ func TestCredentialsExpireRevokeAndResetTogether(t *testing.T) {
 	}
 }
 
+func TestChangePasswordVerifiesCurrentPasswordAndRevokesCredentials(t *testing.T) {
+	store := openAuthTestStore(t)
+	service := New(store)
+	user, session, err := service.Register(context.Background(), "admin", "strong-password-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := service.CreateAPIKey(context.Background(), user.ID, "before-password-change")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.ChangePassword(context.Background(), "admin", "wrong-password", "replacement-password-123"); !errors.Is(err, ErrInvalidCurrentPassword) {
+		t.Fatalf("wrong current password error = %v", err)
+	}
+	if _, err := service.AuthenticateSession(context.Background(), session); err != nil {
+		t.Fatalf("wrong current password revoked session: %v", err)
+	}
+	if _, err := service.AuthenticateAPIKey(context.Background(), key.Token); err != nil {
+		t.Fatalf("wrong current password revoked development key: %v", err)
+	}
+
+	if err := service.ChangePassword(context.Background(), "admin", "strong-password-123", "replacement-password-123"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AuthenticateSession(context.Background(), session); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("changed-password session authentication error = %v", err)
+	}
+	if _, err := service.AuthenticateAPIKey(context.Background(), key.Token); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("changed-password key authentication error = %v", err)
+	}
+	if _, _, err := service.Login(context.Background(), "admin", "strong-password-123"); !errors.Is(err, ErrInvalidLogin) {
+		t.Fatalf("old password login error = %v", err)
+	}
+	if _, _, err := service.Login(context.Background(), "admin", "replacement-password-123"); err != nil {
+		t.Fatalf("new password login failed: %v", err)
+	}
+}
+
 func TestCredentialValidation(t *testing.T) {
 	if ValidateUsername("ab") == nil || ValidateUsername("contains space") == nil || ValidateUsername("valid_admin") != nil {
 		t.Fatal("unexpected username validation")

@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Copy, Info, KeyRound, Languages, Plus, RefreshCw, Save, Shield, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Info, KeyRound, Languages, Network, Plus, RefreshCw, Save, Shield, Trash2 } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
 import { authApi } from '../api/auth';
 import { aiTranslationApi } from '../api/aiTranslation';
 import { serverApi } from '../api/server';
 import { settingsApi } from '../api/settings';
+import { networkProxyApi } from '../api/networkProxy';
 import { useServerStore } from '../store/useServerStore';
-import type { AITranslationConfig, AITranslationConfigUpdate, DevelopmentKey, FieldSchema, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
+import type { AITranslationConfig, AITranslationConfigUpdate, DevelopmentKey, FieldSchema, NetworkProxyConfig, NetworkProxyConfigUpdate, PalworldConfigDraft, PalworldFormatIssue, PalworldSettings, ServerVersionInfo, ValidationIssue } from '../types';
+import { useI18n } from '../i18n';
+import { LanguageSwitcher } from '../components/ui/LanguageSwitcher';
 
 const groupLabels: Record<string, string> = {
   server_management: '服务器管理',
@@ -31,7 +34,8 @@ const coerceInitialValue = (field: FieldSchema, value: unknown) => {
 };
 
 export const Settings: React.FC = () => {
-  const { triggerRefresh, session } = useServerStore();
+  const { t } = useI18n();
+  const { triggerRefresh, refreshAuthentication, session } = useServerStore();
   const [fields, setFields] = useState<FieldSchema[]>([]);
   const [draft, setDraft] = useState<PalworldSettings>({});
   const [path, setPath] = useState('');
@@ -41,6 +45,9 @@ export const Settings: React.FC = () => {
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [pendingRestart, setPendingRestart] = useState(false);
+  const [configDraft, setConfigDraft] = useState<PalworldConfigDraft | null>(null);
+  const [formatIssues, setFormatIssues] = useState<PalworldFormatIssue[]>([]);
+  const [clearSecrets, setClearSecrets] = useState<Set<string>>(new Set());
   const [activeGroup, setActiveGroup] = useState('server_management');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
@@ -56,11 +63,25 @@ export const Settings: React.FC = () => {
   const [aiCustomHeaders, setAICustomHeaders] = useState('');
   const [clearAICustomHeaders, setClearAICustomHeaders] = useState(false);
   const [aiBusy, setAIBusy] = useState(false);
+  const [networkConfig, setNetworkConfig] = useState<NetworkProxyConfig | null>(null);
+  const [networkConfigLoading, setNetworkConfigLoading] = useState(true);
+  const [installProxyEnabled, setInstallProxyEnabled] = useState(false);
+  const [installProxyURL, setInstallProxyURL] = useState('');
+  const [clearInstallProxy, setClearInstallProxy] = useState(false);
+  const [communityProxyEnabled, setCommunityProxyEnabled] = useState(false);
+  const [communityProxyURL, setCommunityProxyURL] = useState('');
+  const [clearCommunityProxy, setClearCommunityProxy] = useState(false);
+  const [networkBusy, setNetworkBusy] = useState(false);
   const [developmentKeys, setDevelopmentKeys] = useState<DevelopmentKey[]>([]);
   const [developmentKeyName, setDevelopmentKeyName] = useState('本机自动化');
   const [revealedDevelopmentKey, setRevealedDevelopmentKey] = useState('');
   const [developmentKeysBusy, setDevelopmentKeysBusy] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const canConfigureAI = Boolean(session?.permissions.includes('ai:config'));
+  const canConfigureNetwork = Boolean(session?.permissions.includes('config:write'));
 
   const load = async () => {
     setLoading(true);
@@ -84,11 +105,17 @@ export const Settings: React.FC = () => {
       setVersion(schema.version);
       setVersionInfo(serverVersion);
       setDraft(nextDraft);
-      setOriginalKeys(new Set(Object.keys(config.settings)));
+      const configuredKeys = new Set(Object.keys(config.settings));
+      if (config.secret_state?.admin_password.configured) configuredKeys.add('AdminPassword');
+      if (config.secret_state?.server_password.configured) configuredKeys.add('ServerPassword');
+      setOriginalKeys(configuredKeys);
+	  setClearSecrets(new Set());
       setDirtyKeys(new Set());
       setPath(config.path);
       setIssues(config.issues || []);
       setPendingRestart(config.pending_restart);
+      setConfigDraft(config.draft || null);
+      setFormatIssues(config.format_issues || []);
       setActiveGroup(schema.fields[0]?.group || 'server_management');
     } catch (error) {
       setFields([]);
@@ -102,6 +129,31 @@ export const Settings: React.FC = () => {
 
   useEffect(() => {
     load();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setNetworkConfigLoading(true);
+    void networkProxyApi.getConfig()
+      .then((config) => {
+        if (!active) return;
+        setNetworkConfig(config);
+        setInstallProxyEnabled(config.install.enabled);
+        setInstallProxyURL('');
+        setClearInstallProxy(false);
+        setCommunityProxyEnabled(config.community.enabled);
+        setCommunityProxyURL('');
+        setClearCommunityProxy(false);
+      })
+      .catch((error) => {
+        if (active) setMessage(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (active) setNetworkConfigLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -177,12 +229,18 @@ export const Settings: React.FC = () => {
     const valid = await validate();
     if (!valid) return;
     try {
-      const saved = await settingsApi.updateSettings(submission());
+      const updates = submission();
+      const saved = clearSecrets.size > 0
+        ? await settingsApi.updateSettings(updates, Array.from(clearSecrets))
+        : await settingsApi.updateSettings(updates);
       setPendingRestart(saved.pending_restart);
+      setConfigDraft(saved.draft || null);
+      setFormatIssues(saved.format_issues || []);
       setIssues(saved.issues || []);
       setOriginalKeys(new Set(Object.keys(saved.settings)));
       setDirtyKeys(new Set());
-      setMessage('配置已保存，重启服务器后生效');
+      setClearSecrets(new Set());
+      setMessage('配置草稿已保存，请确认后应用');
       triggerRefresh();
     } catch (error) {
       setMessage(getErrorMessage(error));
@@ -279,6 +337,87 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const changePassword = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!currentPassword) {
+      setMessage('请输入当前管理员密码');
+      return;
+    }
+    if (newPassword.length < 12 || newPassword.length > 128) {
+      setMessage('新密码长度必须为 12–128 个字符');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setMessage('两次输入的新密码不一致');
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      await authApi.changePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      await refreshAuthentication();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setPasswordBusy(false);
+    }
+  };
+
+  const applyConfigDraft = async () => {
+    if (!configDraft) return;
+    try {
+      const job = await settingsApi.applySettings(configDraft.id);
+      setConfigDraft({ ...configDraft, status: 'applying', applied_job_id: job.id });
+      setMessage('配置应用任务已提交');
+      triggerRefresh();
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    }
+  };
+
+  const saveNetworkConfig = async () => {
+    setNetworkBusy(true);
+    try {
+      const update: NetworkProxyConfigUpdate = {
+        install_enabled: clearInstallProxy ? false : installProxyEnabled,
+        community_enabled: clearCommunityProxy ? false : communityProxyEnabled,
+        ...(installProxyURL.trim() ? { install_proxy_url: installProxyURL.trim() } : {}),
+        ...(clearInstallProxy ? { clear_install_proxy: true } : {}),
+        ...(communityProxyURL.trim() ? { community_proxy_url: communityProxyURL.trim() } : {}),
+        ...(clearCommunityProxy ? { clear_community_proxy: true } : {}),
+      };
+      const saved = await networkProxyApi.updateConfig(update);
+      setNetworkConfig(saved);
+      setInstallProxyEnabled(saved.install.enabled);
+      setInstallProxyURL('');
+      setClearInstallProxy(false);
+      setCommunityProxyEnabled(saved.community.enabled);
+      setCommunityProxyURL('');
+      setClearCommunityProxy(false);
+      setMessage(t('settings.proxySaved'));
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setNetworkBusy(false);
+    }
+  };
+
+  const testNetworkProxy = async (scope: 'install' | 'community') => {
+    setNetworkBusy(true);
+    try {
+      const result = await networkProxyApi.test(scope);
+      setMessage(result.ok
+        ? t('settings.proxyTestPassed', { latency: result.latency_ms, status: result.http_status })
+        : `${result.message || '代理测试失败'}${result.failure_stage ? ` (${result.failure_stage})` : ''}`);
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setNetworkBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center p-12 text-xs font-semibold text-slate-400">
@@ -290,6 +429,111 @@ export const Settings: React.FC = () => {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <section className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-sm font-bold text-slate-800">{t('settings.languageTitle')}</h2>
+          <p className="mt-1 text-xs font-medium text-slate-400">{t('settings.languageDescription')}</p>
+        </div>
+        <LanguageSwitcher buttons />
+      </section>
+
+      <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-sky-50 p-2.5 text-sky-600"><Network size={19} /></div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-800">{t('settings.proxyTitle')}</h2>
+              <p className="mt-1 max-w-3xl text-xs font-medium leading-relaxed text-slate-400">{t('settings.proxyDescription')}</p>
+            </div>
+          </div>
+          {canConfigureNetwork && (
+            <button type="button" onClick={() => void saveNetworkConfig()} disabled={networkBusy || networkConfigLoading} className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-40">
+              <Save size={14} />{t('settings.proxySave')}
+            </button>
+          )}
+        </div>
+
+        {networkConfigLoading ? (
+          <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-slate-400"><RefreshCw className="animate-spin" size={14} />{t('settings.proxyLoading')}</div>
+        ) : (
+          <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {([
+              {
+                scope: 'install' as const,
+                title: t('settings.proxyInstallTitle'),
+                description: t('settings.proxyInstallDescription'),
+                endpoint: networkConfig?.install,
+                enabled: installProxyEnabled,
+                setEnabled: setInstallProxyEnabled,
+                value: installProxyURL,
+                setValue: setInstallProxyURL,
+                clear: clearInstallProxy,
+                setClear: setClearInstallProxy,
+              },
+              {
+                scope: 'community' as const,
+                title: t('settings.proxyCommunityTitle'),
+                description: t('settings.proxyCommunityDescription'),
+                endpoint: networkConfig?.community,
+                enabled: communityProxyEnabled,
+                setEnabled: setCommunityProxyEnabled,
+                value: communityProxyURL,
+                setValue: setCommunityProxyURL,
+                clear: clearCommunityProxy,
+                setClear: setClearCommunityProxy,
+              },
+            ]).map((item) => (
+              <div key={item.scope} className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-700">{item.title}</h3>
+                    <p className="mt-1 text-[11px] font-medium leading-relaxed text-slate-400">{item.description}</p>
+                  </div>
+                  <label className="inline-flex shrink-0 items-center gap-2 text-[11px] font-bold text-slate-600">
+                    <input type="checkbox" checked={item.enabled} disabled={!canConfigureNetwork || item.clear} onChange={(event) => item.setEnabled(event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                    {t('settings.proxyEnabled')}
+                  </label>
+                </div>
+                <div className="mt-4 rounded-xl border border-slate-100 bg-white px-3 py-2.5 text-[10px] font-semibold text-slate-500">
+                  {item.endpoint?.configured
+                    ? t('settings.proxyConfiguredAs', { url: item.endpoint.url || item.endpoint.scheme || '' })
+                    : t('settings.proxyNotConfigured')}
+                  {item.endpoint?.authentication_configured ? ` · ${t('settings.proxyAuthStored')}` : ''}
+                  {item.endpoint?.source === 'environment' ? ` · ${t('settings.proxyEnvironmentSource')}` : ''}
+                </div>
+                <label className="mt-4 flex flex-col gap-2 text-[11px] font-bold text-slate-600">
+                  {t('settings.proxyURL')}
+                  <input
+                    type="password"
+                    value={item.value}
+                    disabled={!canConfigureNetwork || item.clear}
+                    onChange={(event) => { item.setValue(event.target.value); if (event.target.value) item.setClear(false); }}
+                    placeholder={item.endpoint?.configured ? t('settings.proxyKeepExisting') : 'socks5://127.0.0.1:10808'}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 font-mono text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-100"
+                  />
+                </label>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <label className="inline-flex items-center gap-2 text-[11px] font-semibold text-rose-600">
+                    <input type="checkbox" checked={item.clear} disabled={!canConfigureNetwork || !item.endpoint?.configured} onChange={(event) => { item.setClear(event.target.checked); if (event.target.checked) item.setValue(''); }} className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500" />
+                    {t('settings.proxyClear')}
+                  </label>
+                  {canConfigureNetwork && item.endpoint?.enabled && (
+                    <button type="button" onClick={() => void testNetworkProxy(item.scope)} disabled={networkBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-40">
+                      <RefreshCw className={networkBusy ? 'animate-spin' : ''} size={12} />{t('settings.proxyTest')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-medium leading-relaxed text-amber-700">
+          <AlertTriangle className="mt-0.5 shrink-0" size={14} />
+          <span>{t('settings.proxySecurityNote')}</span>
+        </div>
+      </section>
+
       {message && (
         <div className="flex items-center gap-2.5 rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3.5 text-xs font-semibold text-sky-700">
           <Info size={16} />
@@ -306,6 +550,13 @@ export const Settings: React.FC = () => {
           <p className="mt-1 text-[11px] font-medium leading-relaxed text-amber-700">
             PalWorldSettings.ini 修改后需要重启 Palworld 服务端。启动后的状态接口会清除待重启标记。
           </p>
+        </div>
+      )}
+
+      {formatIssues.some((issue) => issue.code === 'string_not_quoted') && (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800">
+          <AlertTriangle size={15} />
+          密码字符串格式不正确，将在应用草稿时自动修复。
         </div>
       )}
 
@@ -383,6 +634,16 @@ export const Settings: React.FC = () => {
                 <Save size={14} />
                 保存
               </button>
+              {configDraft && (configDraft.status === 'draft' || configDraft.status === 'failed') && (
+                <button
+                  type="button"
+                  onClick={() => void applyConfigDraft()}
+                  className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                >
+                  <CheckCircle2 size={14} />
+                  应用草稿
+                </button>
+              )}
             </div>
           </div>
 
@@ -421,6 +682,15 @@ export const Settings: React.FC = () => {
                   value={draft[field.key]}
                   isSet={originalKeys.has(field.key) || dirtyKeys.has(field.key)}
                   onChange={(value) => updateField(field.key, value)}
+                  secretConfigured={field.key === 'AdminPassword'
+                    ? originalKeys.has(field.key)
+                    : field.key === 'ServerPassword' ? originalKeys.has(field.key) : false}
+                  clearSecret={clearSecrets.has(field.key)}
+                  onClearSecret={(clear) => setClearSecrets((current) => {
+                    const next = new Set(current);
+                    if (clear) next.add(field.key); else next.delete(field.key);
+                    return next;
+                  })}
                 />
               ))}
             </div>
@@ -442,6 +712,38 @@ export const Settings: React.FC = () => {
           </div>
         </section>
       </div>
+
+      {session && session.name !== 'local' && (
+        <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-violet-50 p-2.5 text-violet-600"><KeyRound size={19} /></div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-800">修改管理员密码</h2>
+              <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">需要验证当前密码。修改成功后，全部登录会话和开发密钥都会立即失效，并返回登录页。</p>
+            </div>
+          </div>
+          <form onSubmit={(event) => void changePassword(event)} className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              当前密码
+              <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" aria-label="当前管理员密码" className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              新密码
+              <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={12} maxLength={128} autoComplete="new-password" aria-label="新管理员密码" className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-500 focus:outline-none" />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-slate-600">
+              确认新密码
+              <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={12} maxLength={128} autoComplete="new-password" aria-label="确认新管理员密码" className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-violet-500 focus:outline-none" />
+            </label>
+            <div className="flex flex-col gap-3 md:col-span-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2 text-[11px] font-semibold leading-relaxed text-amber-700"><AlertTriangle className="mt-0.5 shrink-0" size={14} />请提前保存仍需使用的开发密钥配置；修改密码后旧密钥无法恢复。</div>
+              <button type="submit" disabled={passwordBusy || !currentPassword || !newPassword || !confirmPassword} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-violet-700 disabled:opacity-40">
+                <KeyRound size={14} />{passwordBusy ? '正在修改...' : '修改密码并重新登录'}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
       {session?.permissions.includes('security:write') && (
         <section className="border-y border-slate-100 bg-white py-5 sm:py-6">
@@ -572,7 +874,10 @@ const FieldControl: React.FC<{
   value: string | number | boolean | undefined;
   isSet: boolean;
   onChange: (value: string | number | boolean) => void;
-}> = ({ field, value, isSet, onChange }) => {
+  secretConfigured?: boolean;
+  clearSecret?: boolean;
+  onClearSecret?: (clear: boolean) => void;
+}> = ({ field, value, isSet, onChange, secretConfigured, clearSecret, onClearSecret }) => {
   const commonLabel = (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -648,7 +953,8 @@ const FieldControl: React.FC<{
     );
   }
 
-  const inputType = field.type === 'int' || field.type === 'float' ? 'number' : 'text';
+  const isSecret = field.key === 'AdminPassword' || field.key === 'ServerPassword';
+  const inputType = isSecret ? 'password' : field.type === 'int' || field.type === 'float' ? 'number' : 'text';
   const step = field.type === 'float' ? '0.1' : '1';
   const isLongText = field.key.includes('Description') || field.type === 'list';
 
@@ -657,6 +963,7 @@ const FieldControl: React.FC<{
       {commonLabel}
       {isLongText ? (
         <textarea
+          aria-label={field.label || field.key}
           value={String(value ?? '')}
           onChange={(event) => onChange(event.target.value)}
           rows={3}
@@ -664,11 +971,14 @@ const FieldControl: React.FC<{
         />
       ) : (
         <input
+          aria-label={field.label || field.key}
           type={inputType}
           step={step}
           min={field.min}
           max={field.max}
           value={String(value ?? '')}
+		  disabled={Boolean(clearSecret)}
+		  placeholder={isSecret && secretConfigured ? '留空以保留现有密码' : undefined}
           onChange={(event) => {
             if (field.type === 'int' || field.type === 'float') {
               onChange(Number(event.target.value));
@@ -679,6 +989,18 @@ const FieldControl: React.FC<{
           className="rounded-xl border border-slate-200 bg-white p-3 text-xs font-semibold text-slate-700 focus:border-sky-500 focus:outline-none"
         />
       )}
+	  {isSecret && secretConfigured && (
+		<span className="inline-flex items-center gap-2 text-[11px] font-semibold text-rose-600">
+		  <input
+			type="checkbox"
+			aria-label={`清除${field.label || field.key}`}
+			checked={Boolean(clearSecret)}
+			onChange={(event) => onClearSecret?.(event.target.checked)}
+			className="h-4 w-4 rounded border-slate-300 text-rose-500 focus:ring-rose-500"
+		  />
+		  清除已保存的密码
+		</span>
+	  )}
     </label>
   );
 };

@@ -2,71 +2,78 @@
 @import "./styles/redesign/index.css";
 
 @theme {
-  --font-sans: Inter, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  /* Single font source: reference the redesign tokens so Tailwind's `font-sans`
+     utilities and the `.pp-*` design system resolve to the same stack. */
+  --font-sans: var(--pp-font-sans);
+  --font-mono: var(--pp-font-mono);
 
-  --text-xs: 0.8125rem;
+  --spacing: var(--pp-gap-1);
+
+  --text-xs: var(--pp-text-sm);
   --text-xs--line-height: 1.15rem;
 
-  --color-slate-50: #f7f4ee;
-  --color-slate-100: #f0ece5;
-  --color-slate-200: #e2ddd4;
-  --color-slate-300: #c9c1b5;
-  --color-slate-400: #86898d;
-  --color-slate-500: #66717e;
-  --color-slate-600: #56616d;
-  --color-slate-700: #46515e;
-  --color-slate-800: #384452;
-  --color-slate-900: #303844;
-  --color-slate-950: #29323e;
+  --color-slate-50: var(--pp-color-slate-50);
+  --color-slate-100: var(--pp-color-slate-100);
+  --color-slate-200: var(--pp-color-slate-200);
+  --color-slate-300: var(--pp-color-slate-300);
+  --color-slate-400: var(--pp-color-slate-400);
+  --color-slate-500: var(--pp-color-slate-500);
+  --color-slate-600: var(--pp-color-slate-600);
+  --color-slate-700: var(--pp-color-slate-700);
+  --color-slate-800: var(--pp-color-slate-800);
+  --color-slate-900: var(--pp-color-slate-900);
+  --color-slate-950: var(--pp-color-slate-950);
 
-  --color-sky-50: #edf4fa;
-  --color-sky-100: #dceaf5;
-  --color-sky-200: #bdd7ea;
-  --color-sky-300: #91bbd8;
-  --color-sky-400: #6499bd;
-  --color-sky-500: #356a9a;
-  --color-sky-600: #2b5a86;
-  --color-sky-700: #274d70;
-  --color-sky-800: #26415d;
-  --color-sky-900: #25384e;
-  --color-sky-950: #172331;
+  --color-sky-50: var(--pp-color-sky-50);
+  --color-sky-100: var(--pp-color-sky-100);
+  --color-sky-200: var(--pp-color-sky-200);
+  --color-sky-300: var(--pp-color-sky-300);
+  --color-sky-400: var(--pp-color-sky-400);
+  --color-sky-500: var(--pp-color-sky-500);
+  --color-sky-600: var(--pp-color-sky-600);
+  --color-sky-700: var(--pp-color-sky-700);
+  --color-sky-800: var(--pp-color-sky-800);
+  --color-sky-900: var(--pp-color-sky-900);
+  --color-sky-950: var(--pp-color-sky-950);
 
-  --color-emerald-50: #e9f1f8;
-  --color-emerald-100: #d9e7f3;
-  --color-emerald-200: #bad3e8;
-  --color-emerald-300: #8eb7d8;
-  --color-emerald-400: #6198c4;
-  --color-emerald-500: #3f7fb5;
-  --color-emerald-600: #2f73b7;
-  --color-emerald-700: #285d91;
-  --color-emerald-800: #294e72;
-  --color-emerald-900: #29425e;
-  --color-emerald-950: #1b2b3d;
+  /* Success/positive family. Kept green (not remapped to blue) so that pages
+     using `emerald` utilities render as success states, tuned to the warm-sand
+     theme rather than the stock vivid emerald. */
+  --color-emerald-50: var(--pp-color-emerald-50);
+  --color-emerald-100: var(--pp-color-emerald-100);
+  --color-emerald-200: var(--pp-color-emerald-200);
+  --color-emerald-300: var(--pp-color-emerald-300);
+  --color-emerald-400: var(--pp-color-emerald-400);
+  --color-emerald-500: var(--pp-color-emerald-500);
+  --color-emerald-600: var(--pp-color-emerald-600);
+  --color-emerald-700: var(--pp-color-emerald-700);
+  --color-emerald-800: var(--pp-color-emerald-800);
+  --color-emerald-900: var(--pp-color-emerald-900);
+  --color-emerald-950: var(--pp-color-emerald-950);
 
-  --color-blue-50: #f0f5ff;
-  --color-blue-100: #dfe9ff;
-  --color-blue-200: #c7d8ff;
-  --color-blue-300: #9fbcff;
-  --color-blue-400: #7198ff;
-  --color-blue-500: #4f7cff;
-  --color-blue-600: #3f61f1;
-  --color-blue-700: #344ed6;
-  --color-blue-800: #2d42ad;
-  --color-blue-900: #293d88;
-  --color-blue-950: #192452;
+  --color-blue-50: var(--pp-color-blue-50);
+  --color-blue-100: var(--pp-color-blue-100);
+  --color-blue-200: var(--pp-color-blue-200);
+  --color-blue-300: var(--pp-color-blue-300);
+  --color-blue-400: var(--pp-color-blue-400);
+  --color-blue-500: var(--pp-color-blue-500);
+  --color-blue-600: var(--pp-color-blue-600);
+  --color-blue-700: var(--pp-color-blue-700);
+  --color-blue-800: var(--pp-color-blue-800);
+  --color-blue-900: var(--pp-color-blue-900);
+  --color-blue-950: var(--pp-color-blue-950);
 
-  --radius-sm: 0.5rem;
-  --radius-md: 0.65rem;
-  --radius-lg: 0.8rem;
-  --radius-xl: 1rem;
-  --radius-2xl: 1.25rem;
-  --radius-3xl: 1.5rem;
-  --radius-4xl: 1.9rem;
+  --radius-sm: var(--pp-radius-tailwind-sm);
+  --radius-md: var(--pp-radius-tailwind-md);
+  --radius-lg: var(--pp-radius-tailwind-lg);
+  --radius-xl: var(--pp-radius-tailwind-xl);
+  --radius-2xl: var(--pp-radius-tailwind-2xl);
+  --radius-3xl: var(--pp-radius-tailwind-3xl);
+  --radius-4xl: var(--pp-radius-tailwind-4xl);
 
-  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.05);
-  --shadow-md: 0 8px 24px -14px rgb(16 24 40 / 0.22);
-  --shadow-lg: 0 18px 46px -24px rgb(16 24 40 / 0.28);
+  --shadow-sm: var(--pp-shadow-sm);
+  --shadow-md: var(--pp-shadow-md);
+  --shadow-lg: var(--pp-shadow-lg);
 }
 
 .breed-portal-shell { min-height: 100dvh; background: var(--pp-bg, #f2f3ee); color: #20251f; }
@@ -76,7 +83,7 @@
 .breed-portal-identity { font-size: 13px; color: #d9ded5; }
 .breed-portal-identity b { padding: 5px 9px; border-radius: 999px; background: rgba(154, 181, 143, .15); color: #bcd3b2; }
 .breed-portal-identity a { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; color: #d9ded5; background: rgba(255, 255, 255, .07); }
-.breed-portal-content { width: min(1600px, 100%); margin: 0 auto; padding: clamp(16px, 3vw, 32px); }
+.breed-portal-content { width: min(calc(var(--pp-content-max) + 56px), 100%); margin: 0 auto; padding: clamp(16px, 3vw, 32px); }
 .breed-portal-loading { min-height: 50vh; display: flex; align-items: center; justify-content: center; gap: 10px; color: #697066; font-size: 13px; font-weight: 700; }
 .breed-portal-gate { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: #171b17; }
 .breed-portal-gate .pp-card { width: min(430px, 100%); display: grid; justify-items: center; gap: 15px; padding: 36px; text-align: center; }
@@ -177,7 +184,7 @@ a[href] {
 
 #app-main > div {
   width: 100%;
-  max-width: 1600px;
+  max-width: calc(var(--pp-content-max) + 56px);
   margin-inline: auto;
   animation: page-enter 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -403,6 +410,8 @@ body,
 
 .source-row.active { border-left-color: var(--pp-brand); background: var(--pp-brand-soft); }
 .source-icon { border-color: var(--pp-line); color: var(--pp-brand); }
+.candidate-warning { color: var(--pp-warn); font-weight: 700; }
+.candidate-error { color: var(--pp-danger); font-weight: 700; }
 .file-drop { border-color: #b9cddd; background: #eef4f8; color: var(--pp-brand-strong); }
 .field-label input:focus,
 .field-label select:focus,

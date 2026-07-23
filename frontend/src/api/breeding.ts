@@ -54,6 +54,16 @@ export interface BreedingResultResponse {
   result?: { save_fingerprint: string; results: BreedingSolveResult[] };
 }
 
+export interface BreedingServiceStatus {
+  configured: boolean;
+  available: boolean;
+  upstream_version?: string;
+  database_version?: string;
+  latency_ms: number;
+  last_error?: string;
+  checked_at?: string;
+}
+
 export interface BreedSessionSubmitResponse {
   job: Job;
   balance: number;
@@ -77,20 +87,39 @@ const mapCatalog = (raw: unknown): BreedingCatalog => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const items = (value: unknown) => (Array.isArray(value) ? value : []).map((entry) => {
     const item = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
-    return { id: String(item.id || ''), name: String(item.name || item.id || '') };
+    return { id: String(item.id || ''), name: String(item.name || item.id || ''), raw_name: item.raw_name ? String(item.raw_name) : undefined };
   });
   return {
     version: String(data.version || ''),
     pals: items(data.pals),
     passives: (Array.isArray(data.passives) ? data.passives : []).map((entry) => {
       const item = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
-      return { id: String(item.id || ''), name: String(item.name || item.id || ''), supports_surgery: Boolean(item.supports_surgery), surgery_cost: Number(item.surgery_cost || 0) };
+      return { id: String(item.id || ''), name: String(item.name || item.id || ''), raw_name: item.raw_name ? String(item.raw_name) : undefined, supports_surgery: Boolean(item.supports_surgery), surgery_cost: Number(item.surgery_cost || 0) };
     }),
     active_skills: items(data.active_skills),
   };
 };
 
 export const breedingApi = {
+  status: () => handleRequest<unknown, BreedingServiceStatus>(
+    () => apiClient.get('/breeding/status'),
+    { configured: false, available: false, latency_ms: 0 },
+    {
+      fallbackOnError: false,
+      map: (raw) => {
+        const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+        return {
+          configured: Boolean(data.configured),
+          available: Boolean(data.available),
+          upstream_version: data.upstream_version ? String(data.upstream_version) : undefined,
+          database_version: data.database_version ? String(data.database_version) : undefined,
+          latency_ms: Number(data.latency_ms || 0),
+          last_error: data.last_error ? String(data.last_error) : undefined,
+          checked_at: data.checked_at ? String(data.checked_at) : undefined,
+        };
+      },
+    },
+  ),
   catalog: (access: BreedingAccess = 'admin') => handleRequest<unknown, BreedingCatalog>(() => apiClient.get(access === 'session' ? '/breed/catalog' : '/breeding/catalog'), { version: '', pals: [], passives: [], active_skills: [] }, { map: mapCatalog, fallbackOnError: false }),
   customContainers: (access: BreedingAccess = 'admin') => handleRequest<unknown, CustomPalContainerSummary[]>(
     () => apiClient.get(access === 'session' ? '/breed/custom-containers' : '/breeding/custom-containers'),

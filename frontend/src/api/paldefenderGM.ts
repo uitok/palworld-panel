@@ -5,6 +5,8 @@ import type {
   PalDefenderCatalogReferences,
   PalDefenderCommandCatalogEntry,
   PalDefenderExportedPalTemplateInfo,
+  PalDefenderExportPalsResult,
+  PalDefenderGiveCustomPalsRequest,
   PalDefenderGivePalsRequest,
   PalDefenderGivePalsResult,
   PalDefenderGivePalTemplatesRequest,
@@ -19,6 +21,8 @@ import type {
   PalDefenderInventorySlot,
   PalDefenderItemCatalog,
   PalDefenderItemGrant,
+  PalDefenderPalCatalog,
+  PalDefenderPalCatalogEntry,
   PalDefenderMessageRequest,
   PalDefenderPunishmentRequest,
   PalDefenderPalTemplate,
@@ -26,9 +30,14 @@ import type {
   PalDefenderProgression,
   PalDefenderProgressionGrantRequest,
   PalDefenderProgressionGrantResult,
+  PalDefenderReleasePalRequest,
+  PalDefenderRemoveItemsRequest,
   PalDefenderRCONResult,
   PalDefenderTechnologyRequest,
   PalDefenderTechnologyResult,
+  PalDefenderTechnologyCatalog,
+  PalDefenderTechnologyCatalogEntry,
+  PalDefenderTeleportRequest,
   PalDefenderTechs,
 } from '../types';
 
@@ -176,6 +185,33 @@ const mapItemCatalog = (raw: unknown): PalDefenderItemCatalog => {
   return { items, returned: Number(data.returned ?? items.length) };
 };
 
+const mapPalCatalog = (raw: unknown): PalDefenderPalCatalog => {
+  const data = asRecord(raw);
+  const items: PalDefenderPalCatalogEntry[] = Array.isArray(data.items)
+    ? data.items.flatMap((rawItem) => {
+        const item = asRecord(rawItem);
+        const id = String(item.id || '').trim();
+        const name = String(item.name || '').trim();
+        return id && name ? [{ id, name }] : [];
+      })
+    : [];
+  return { items, returned: Number(data.returned ?? items.length) };
+};
+
+const mapTechnologyCatalog = (raw: unknown): PalDefenderTechnologyCatalog => {
+  const data = asRecord(raw);
+  const items: PalDefenderTechnologyCatalogEntry[] = Array.isArray(data.items)
+    ? data.items.flatMap((rawItem) => {
+        const item = asRecord(rawItem);
+        const id = String(item.id || '').trim();
+        const name = String(item.name || '').trim();
+        if (!id || !name) return [];
+        return [{ id, name, level: Number(item.level || 0), category: String(item.category || ''), boss: Boolean(item.boss), ...(item.icon_url ? { icon_url: String(item.icon_url) } : {}) }];
+      })
+    : [];
+  return { items, returned: Number(data.returned ?? items.length) };
+};
+
 const mapProgression = (raw: unknown): PalDefenderProgression => {
   const data = asRecord(raw);
   const meta = asRecord(data.Meta);
@@ -252,6 +288,19 @@ const mapExportedTemplateInfo = (raw: unknown): PalDefenderExportedPalTemplateIn
   };
 };
 
+const mapExportPalsResult = (raw: unknown): PalDefenderExportPalsResult => {
+  const data = asRecord(raw);
+  const template = asRecord(data.template);
+  return {
+    player_id: String(data.player_id || ''),
+    command: String(data.command || ''),
+    output: String(data.output || ''),
+    templates: Array.isArray(data.templates) ? data.templates.map(mapExportedTemplateInfo) : [],
+    template_info: mapExportedTemplateInfo(data.template_info),
+    template: { ...template, PalID: String(template.PalID || '') } as PalDefenderPalTemplate,
+  };
+};
+
 const mapAccessSettings = (raw: unknown): PalDefenderAccessSettings => {
   const data = asRecord(raw);
   return {
@@ -308,6 +357,20 @@ export const palDefenderGMApi = {
       { map: mapInventory, quiet: true, fallbackOnError: false },
     ),
 
+  removeItems: (identifier: string, request: PalDefenderRemoveItemsRequest, idempotencyKey?: string) =>
+    handleRequest<unknown, PalDefenderRCONResult>(
+      () => apiClient.post(`${playerPath(identifier)}/items/remove`, request, idempotencyConfig(idempotencyKey)),
+      { command: '', output: '', entries: [] },
+      { map: mapRCONResult, quiet: true, fallbackOnError: false },
+    ),
+
+  teleport: (identifier: string, request: PalDefenderTeleportRequest, idempotencyKey?: string) =>
+    handleRequest<unknown, PalDefenderRCONResult>(
+      () => apiClient.post(`${playerPath(identifier)}/teleport`, request, idempotencyConfig(idempotencyKey)),
+      { command: '', output: '', entries: [] },
+      { map: mapRCONResult, quiet: true, fallbackOnError: false },
+    ),
+
   progression: (identifier: string) =>
     handleRequest<unknown, PalDefenderProgression>(
       () => apiClient.get(`${playerPath(identifier)}/progression`),
@@ -357,6 +420,27 @@ export const palDefenderGMApi = {
       { quiet: true, fallbackOnError: false },
     ),
 
+  giveCustomPal: (identifier: string, request: PalDefenderPalTemplate, idempotencyKey?: string) =>
+    handleRequest<unknown, PalDefenderGivePalTemplatesResult>(
+      () => apiClient.post(`${playerPath(identifier)}/custom-pal`, request, idempotencyConfig(idempotencyKey)),
+      { Granted: { PalTemplates: 0 } },
+      { quiet: true, fallbackOnError: false },
+    ),
+
+  giveCustomPals: (identifier: string, request: PalDefenderGiveCustomPalsRequest, idempotencyKey?: string) =>
+    handleRequest<unknown, PalDefenderGivePalTemplatesResult>(
+      () => apiClient.post(`${playerPath(identifier)}/custom-pals`, request, idempotencyConfig(idempotencyKey)),
+      { Granted: { PalTemplates: 0 } },
+      { quiet: true, fallbackOnError: false },
+    ),
+
+  releasePal: (identifier: string, request: PalDefenderReleasePalRequest, idempotencyKey?: string) =>
+    handleRequest<unknown, PalDefenderRCONResult>(
+      () => apiClient.post(`${playerPath(identifier)}/pals/release`, request, idempotencyConfig(idempotencyKey)),
+      { command: '', output: '', entries: [] },
+      { map: mapRCONResult, quiet: true, fallbackOnError: false },
+    ),
+
   givePalTemplates: (identifier: string, request: PalDefenderGivePalTemplatesRequest, idempotencyKey?: string) =>
     handleRequest<unknown, PalDefenderGivePalTemplatesResult>(
       () => apiClient.post(`${playerPath(identifier)}/pal-templates`, request, idempotencyConfig(idempotencyKey)),
@@ -365,10 +449,10 @@ export const palDefenderGMApi = {
     ),
 
   exportPals: (identifier: string, idempotencyKey?: string) =>
-    handleRequest<unknown, PalDefenderRCONResult>(
+    handleRequest<unknown, PalDefenderExportPalsResult>(
       () => apiClient.post(`${playerPath(identifier)}/export-pals`, {}, idempotencyConfig(idempotencyKey)),
-      { command: '', output: '', entries: [] },
-      { map: mapRCONResult, quiet: true, fallbackOnError: false },
+      { player_id: identifier, command: '', output: '', templates: [], template_info: { player_id: identifier, name: '', path: '', size: 0, modified_at: '' }, template: { PalID: '' } },
+      { map: mapExportPalsResult, quiet: true, fallbackOnError: false },
     ),
 
   exportedPalTemplates: (identifier: string) =>
@@ -458,6 +542,39 @@ export const palDefenderGMApi = {
       { catalog: { command: '', output: '', entries: [] }, reference_url: '' },
       { map: (raw) => { const data = asRecord(raw); return { catalog: mapRCONResult(data.catalog), reference_url: String(data.reference_url || '') }; }, quiet: true, fallbackOnError: false },
     ),
+
+  localTechnologyCatalog: (query = '', limit = 5000) => {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    params.set('limit', String(limit));
+    return handleRequest<unknown, PalDefenderTechnologyCatalog>(
+      () => apiClient.get(`/security/paldefender/gm/catalog/technologies?${params.toString()}`),
+      { items: [], returned: 0 },
+      { map: mapTechnologyCatalog, quiet: true, fallbackOnError: false },
+    );
+  },
+
+  palCatalog: (query = '', limit = 5000) => {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    params.set('limit', String(limit));
+    return handleRequest<unknown, PalDefenderPalCatalog>(
+      () => apiClient.get(`/security/paldefender/gm/catalog/pals?${params.toString()}`),
+      { items: [], returned: 0 },
+      { map: mapPalCatalog, quiet: true, fallbackOnError: false },
+    );
+  },
+
+  passiveCatalog: (query = '', limit = 5000) => {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    params.set('limit', String(limit));
+    return handleRequest<unknown, PalDefenderPalCatalog>(
+      () => apiClient.get(`/security/paldefender/gm/catalog/passives?${params.toString()}`),
+      { items: [], returned: 0 },
+      { map: mapPalCatalog, quiet: true, fallbackOnError: false },
+    );
+  },
 
   skinCatalog: () =>
     handleRequest<unknown, { catalog: PalDefenderRCONResult; reference_url: string }>(

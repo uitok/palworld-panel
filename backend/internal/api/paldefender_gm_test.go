@@ -64,7 +64,11 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 		case "/v1/pdapi/give/pals/steam_1":
 			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"Pals": 1}})
 		case "/v1/pdapi/give/paltemplate/steam_1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"PalTemplates": 1}})
+			var request paldefender.GivePalTemplatesRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Granted": map[string]any{"PalTemplates": len(request.PalTemplates)}})
 		case "/v1/pdapi/SendPlayerMessage", "/v1/pdapi/Broadcast", "/v1/pdapi/Alert", "/v1/pdapi/kick/steam_1", "/v1/pdapi/ban/steam_1", "/v1/pdapi/unban/steam_1":
 			_ = json.NewEncoder(w).Encode(map[string]any{"Success": true})
 		default:
@@ -91,6 +95,9 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 		{http.MethodGet, "/api/security/paldefender/gm/players", "", `"UserId":"steam_1"`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1", "", `"UserId":"steam_1"`},
 		{http.MethodGet, "/api/security/paldefender/gm/items?q=Money", "", `"id":"Money"`},
+		{http.MethodGet, "/api/security/paldefender/gm/catalog/pals?q=Anubis", "", `"name":"阿努比斯"`},
+		{http.MethodGet, "/api/security/paldefender/gm/catalog/passives?q=CraftSpeed_up3", "", `"name":"卓绝技艺"`},
+		{http.MethodGet, "/api/security/paldefender/gm/catalog/technologies?q=Workbench", "", `"name":"原始的作业台"`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/inventory", "", `"ItemID":"Money"`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":10}]}`, `"Items":10`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/progression", "", `"technologyPoints":5`},
@@ -100,6 +107,8 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/techs/forget", `{"Technology":"Technology_ElecBaton"}`, `"ForgottenCount":1`},
 		{http.MethodGet, "/api/security/paldefender/gm/players/steam_1/pals", "", `"PalID":"Anubis"`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/pals", `{"Pals":[{"PalID":"Anubis","Level":50}]}`, `"Pals":1`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/custom-pal", `{"PalID":"Anubis","Level":50,"Passives":["Legend","CraftSpeed_up3"],"IsAwakening":true}`, `"PalTemplates":1`},
+		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/custom-pals", `{"Template":{"PalID":"Anubis","Level":50,"Passives":["Legend"]},"Count":20}`, `"PalTemplates":20`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/pal-templates", `{"PalTemplates":["reward_anubis"]}`, `"PalTemplates":1`},
 		{http.MethodPost, "/api/security/paldefender/gm/players/steam_1/message", `{"SendType":"PlayerChat","Message":"hello"}`, `"Success":true`},
 		{http.MethodPost, "/api/security/paldefender/gm/broadcast", `{"message":"maintenance","alert":false}`, `"Success":true`},
@@ -134,7 +143,7 @@ func TestPalDefenderGMRoutesProxyOfficialContract(t *testing.T) {
 			gmWrites++
 		}
 	}
-	if gmWrites != 11 {
+	if gmWrites != 13 {
 		t.Fatalf("successful GM write audits = %d: %#v", gmWrites, audits)
 	}
 }
@@ -209,6 +218,10 @@ func TestPalDefenderGMAllWritesRequireBackendPermissionAndAuthentication(t *test
 		body string
 	}{
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":1}]}`},
+		{"/api/security/paldefender/gm/players/steam_1/items/remove", `{"Items":[{"ItemID":"Money","Count":1}]}`},
+		{"/api/security/paldefender/gm/players/steam_1/teleport", `{"Mode":"coordinates","X":1,"Y":2}`},
+		{"/api/security/paldefender/gm/players/steam_1/pals/release", `{"PalID":"Anubis","Level":50}`},
+		{"/api/security/paldefender/gm/players/steam_1/custom-pals", `{"Template":{"PalID":"Anubis","Level":50},"Count":2}`},
 		{"/api/security/paldefender/gm/players/steam_1/message", `{"SendType":"PlayerChat","Message":"hello"}`},
 		{"/api/security/paldefender/gm/broadcast", `{"message":"hello","alert":false}`},
 		{"/api/security/paldefender/gm/players/steam_1/kick", `{"Reason":"AFK"}`},
@@ -439,6 +452,9 @@ func TestPalDefenderGMPrerequisitesAndStrictInput(t *testing.T) {
 		body string
 	}{
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":1}],"Command":"quit"}`},
+		{"/api/security/paldefender/gm/players/steam_1/items/remove", `{"Items":[{"ItemID":"Money;quit","Count":1}]}`},
+		{"/api/security/paldefender/gm/players/steam_1/teleport", `{"Mode":"player","TargetPlayer":"steam_2","Command":"quit"}`},
+		{"/api/security/paldefender/gm/players/steam_1/pals/release", `{"PalID":"Anubis Limit 99"}`},
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money;quit","Count":1}]}`},
 		{"/api/security/paldefender/gm/players/steam_1/items", `{"Items":[{"ItemID":"Money","Count":1}]} {}`},
 		{"/api/security/paldefender/gm/players/bad.id/items", `{"Items":[{"ItemID":"Money","Count":1}]}`},

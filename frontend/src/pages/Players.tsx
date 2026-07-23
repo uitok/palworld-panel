@@ -59,6 +59,9 @@ export const Players: React.FC = () => {
 
   const players = playersQuery.data?.items ?? [];
   const indexStatus = playersQuery.data?.status ?? null;
+  const historicalView = playersQuery.data?.view?.online_overlay === false;
+  const onlineStatusStale = !historicalView && (players.some((player) => player.online_stale)
+    || Boolean(indexStatus?.warnings.some((warning) => warning.includes('online player REST data is stale or unavailable'))));
   const summary = playersQuery.data?.summary;
   const loading = playersQuery.isLoading;
   const error = actionError || (playersQuery.error ? getErrorMessage(playersQuery.error) : null);
@@ -124,6 +127,16 @@ export const Players: React.FC = () => {
       {notice && (
         <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-3 text-xs font-semibold text-sky-700">
           {notice}
+        </div>
+      )}
+      {historicalView && (
+        <div role="status" className="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-3 text-xs font-semibold leading-5 text-sky-800">
+          历史存档视图，不叠加实时在线状态
+        </div>
+      )}
+      {onlineStatusStale && (
+        <div role="status" className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-xs font-semibold leading-5 text-amber-800">
+          官方 REST 在线状态暂不可用；玩家身份与昵称已保留，未由 PalDefender 确认在线的玩家按离线显示。
         </div>
       )}
 

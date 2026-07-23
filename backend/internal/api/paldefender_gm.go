@@ -69,6 +69,28 @@ func (s Server) palDefenderGMGiveItems(c *gin.Context) {
 	})
 }
 
+func (s Server) palDefenderGMRemoveItems(c *gin.Context) {
+	var request paldefender.RemoveItemsRequest
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RCONRemoveItems(ctx, c.Param("id"), request)
+	})
+}
+
+func (s Server) palDefenderGMTeleport(c *gin.Context) {
+	var request paldefender.TeleportRequest
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RCONTeleport(ctx, c.Param("id"), request)
+	})
+}
+
 func (s Server) palDefenderGMSendMessage(c *gin.Context) {
 	var input struct {
 		SendType string `json:"SendType"`
@@ -157,6 +179,18 @@ func failPalDefenderGM(c *gin.Context, err error) {
 		return
 	case errors.Is(err, paldefender.ErrRCONAuthentication), errors.Is(err, paldefender.ErrRCONInvalidResponse):
 		fail(c, http.StatusBadGateway, "paldefender_rcon_failed", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrExportPlayerUnavailable):
+		fail(c, http.StatusConflict, "paldefender_export_player_unavailable", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrExportNoPals):
+		fail(c, http.StatusConflict, "paldefender_export_no_pals", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrExportCommandRejected):
+		fail(c, http.StatusBadGateway, "paldefender_export_rejected", err.Error())
+		return
+	case errors.Is(err, paldefender.ErrExportPalsTimeout):
+		fail(c, http.StatusGatewayTimeout, "paldefender_export_timeout", err.Error())
 		return
 	}
 	var restErr *paldefender.RESTError

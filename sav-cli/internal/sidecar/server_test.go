@@ -19,6 +19,13 @@ func TestHealthContractAndMethod(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil || !payload.OK || payload.Data == nil {
 		t.Fatalf("unexpected health payload: %#v, %v", payload, err)
 	}
+	data, ok := payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("health data is not an object: %#v", payload.Data)
+	}
+	if _, present := data["oodle"]; !present {
+		t.Fatalf("health payload missing oodle capability field: %#v", data)
+	}
 
 	recorder = httptest.NewRecorder()
 	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/health", nil))

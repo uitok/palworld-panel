@@ -5,6 +5,12 @@ This package contains PalPanel with its web UI embedded in the backend, the nati
 the Wine runner resources, systemd units, and
 `palpanelctl`.
 
+The Linux archive is self-contained: neither a system .NET runtime nor ICU is
+required. PalCalc uses invariant globalization while preserving UTF-8 Chinese
+save data and the JSON API. If it does not start, inspect
+`logs/palcalc-bridge.log` in portable mode or run
+`journalctl -u palpanel-palcalc --no-pager` after a systemd installation.
+
 ## Portable mode
 
 ```bash
@@ -40,7 +46,24 @@ preserving the rest of the index.
 Programs are installed under `/opt/palpanel/<version>`, with
 `/opt/palpanel/current` selecting the active version. Configuration is stored
 in `/etc/palpanel`, and state is stored in `/var/lib/palpanel`. Reinstalling a
-new version preserves both locations.
+new version preserves both locations, including game saves, logs, and the Wine
+prefix.
+
+To upgrade an existing Linux installation, download and verify the archive,
+extract it, then run the installer from the package directory:
+
+```bash
+sha256sum -c checksums.txt
+sudo ./palpanelctl install --docker --listen 0.0.0.0:63101
+sudo /opt/palpanel/current/palpanelctl status
+curl --fail http://127.0.0.1:63101/api/health
+```
+
+In Docker/Wine mode the installer does not recursively change ownership of the
+game mounts. Existing `server`, `logs`, and `wineprefix` contents are kept;
+when the managed container exists, those directories are made writable for its
+configured numeric UID/GID. Panel-owned state such as `docker-client` remains
+private to the `palpanel` service user.
 
 The GitHub bootstrap installer also supports migration from an older
 containerized PalPanel when its data directory is mounted on the host:
@@ -72,6 +95,17 @@ sudo ./palpanelctl install --docker
 Membership in the Docker group is effectively root-equivalent. Do not enable
 it when using the Windows SteamCMD runtime without Docker.
 
+If a Docker/Wine upgrade reports permission errors, inspect the container user
+and the three host mounts:
+
+```bash
+docker inspect -f '{{.Config.User}}' palworld-wine-server
+stat -c '%U:%G %a %n' /var/lib/palpanel/server /var/lib/palpanel/logs /var/lib/palpanel/wineprefix
+sudo /opt/palpanel/current/palpanelctl status
+sudo journalctl -u palpanel.service -u palpanel-sav-cli.service --no-pager -n 100
+docker logs --tail 100 palworld-wine-server
+```
+
 ## Docker/Wine server and Workshop configuration
 
 Linux keeps the Palworld Windows server in the host data directory and runs it
@@ -86,17 +120,40 @@ Runtime Debug logging can be toggled from the Monitor page. It writes bounded,
 rotated diagnostics to `/var/lib/palpanel/logs/palpanel-debug.log` without
 recording credentials, authorization headers, or request bodies.
 
-Private Workshop downloads require both values below in the active mode-0600
-`palpanel.env`, followed by a PalPanel restart:
+Windows and Linux/Docker use the same Workshop login form in Mod Management.
+Build the Linux runner once by installing or updating the server, then enter the
+Steam account, password, and optional Steam Guard code in the panel. PalPanel
+stores the password in the private `data/secrets/steam-workshop-credentials.json`
+file (mode 0600 on Linux) and keeps Guard codes transient. Linux passes a private
+temporary runscript into the Docker/Wine runner read-only, so credentials never
+enter Docker process arguments or support logs. Downloads reuse the approved
+SteamCMD cache from `data/steamcmd-workshop-config`, mounted as the Linux
+SteamCMD home at `/root/Steam`, without embedding the saved password. Persisting
+the complete Steam home is required because Steam stores machine authorization
+outside `/opt/steamcmd`. Reauthorization is requested when the machine grant
+expires. `palpanelctl steam-login` remains a recovery fallback for administrators
+who need to repair the cache manually.
 
-```text
-STEAM_USERNAME=your_account_name
-STEAM_PASSWORD=your_password
-```
+Server installation/update and community-server discovery proxies can be managed
+independently from System Settings > Network & proxy. The managed configuration is
+stored with the rest of PalPanel state under `data/secrets/network-proxy.json` in
+portable mode or `/var/lib/palpanel/secrets/network-proxy.json` under systemd.
+For Docker/Wine downloads, PalPanel starts a short-lived HTTP bridge bound only
+to host `127.0.0.1`. The bridge forwards to configured HTTP, HTTPS, SOCKS5, or
+SOCKS5H upstream proxies, including authenticated proxies. Transient SteamCMD
+containers use host networking and receive only the credential-free bridge URL,
+so a proxy that itself listens only on host loopback works without exposing its
+real URL or password in Docker arguments, container environment, or job logs.
+The bridge is closed when the task succeeds, fails, or is canceled.
 
-The API never returns these values. The Docker CLI receives only the variable
-names, so the password is not embedded in command arguments or job errors.
-Native Windows uses the separate local interactive SteamCMD login instead.
+The proxy test reports host reachability and Docker-container reachability as
+separate stages. Pulling the Docker base image happens in the Docker daemon and
+does not use the PalPanel bridge; configure a Docker daemon proxy or registry
+mirror when that stage fails. SteamCMD, AppInfo, Workshop, and Steam login
+failures use the panel-managed download proxy after the runner image exists.
+
+Backup downloads are normal same-origin HTTP attachments streamed by the
+browser. The web page does not buffer the complete ZIP in JavaScript memory.
 
 ## Security defaults
 

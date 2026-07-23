@@ -50,19 +50,31 @@ type windowsProcessInfo struct {
 }
 
 type Manager struct {
-	cfg                 appconfig.Config
-	store               *db.Store
-	runner              docker.Runner
-	remoteBuildIDFunc   func(context.Context) (string, string, error)
-	installOrUpdateFunc func(context.Context, string) error
-	jobs                *jobs.Executor
-	operationMu         *sync.Mutex
-	inspectProcess      func(int) (windowsProcessInfo, error)
-	terminateProcess    func(context.Context, int) error
-	downloadClient      *http.Client
-	worldResetTimeout   time.Duration
-	worldResetPoll      time.Duration
-	goos                string
+	cfg                       appconfig.Config
+	store                     *db.Store
+	runner                    docker.Runner
+	remoteBuildIDFunc         func(context.Context) (string, string, error)
+	installOrUpdateFunc       func(context.Context, string) error
+	jobs                      *jobs.Executor
+	operationMu               *sync.Mutex
+	inspectProcess            func(int) (windowsProcessInfo, error)
+	terminateProcess          func(context.Context, int) error
+	downloadClient            *http.Client
+	worldResetTimeout         time.Duration
+	worldResetPoll            time.Duration
+	gracefulStopTimeout       time.Duration
+	gracefulStopPoll          time.Duration
+	lifecycleWait             func(context.Context, time.Duration) error
+	jobHeartbeatInterval      time.Duration
+	goos                      string
+	configApplyAfterStop      func()
+	configApplyHealth         func(context.Context) error
+	configApplyStatus         func(context.Context) (Status, error)
+	configApplyStop           func(context.Context) error
+	configApplyStart          func(context.Context) error
+	configApplyJournalPersist func(context.Context, configApplyJournal) error
+	configPrivateRemove       func(string) error
+	configDraftTTL            time.Duration
 }
 
 type Status struct {
@@ -118,10 +130,11 @@ type BackupVerifyResult struct {
 }
 
 type LogQuery struct {
-	Tail   int
-	Search string
-	Level  string
-	Since  string
+	Channel string
+	Tail    int
+	Search  string
+	Level   string
+	Since   string
 }
 
 type LogResult struct {
@@ -142,14 +155,19 @@ func NewManager(cfg appconfig.Config, store *db.Store, runner docker.Runner, exe
 	}
 	return Manager{
 		cfg: cfg, store: store, runner: runner,
-		jobs:              executor,
-		operationMu:       &sync.Mutex{},
-		inspectProcess:    inspectWindowsProcess,
-		terminateProcess:  terminateWindowsProcessTree,
-		downloadClient:    &http.Client{Timeout: 5 * time.Minute},
-		worldResetTimeout: 180 * time.Second,
-		worldResetPoll:    time.Second,
-		goos:              runtime.GOOS,
+		jobs:                 executor,
+		operationMu:          &sync.Mutex{},
+		inspectProcess:       inspectWindowsProcess,
+		terminateProcess:     terminateWindowsProcessTree,
+		downloadClient:       &http.Client{Timeout: 5 * time.Minute},
+		worldResetTimeout:    180 * time.Second,
+		worldResetPoll:       time.Second,
+		gracefulStopTimeout:  15 * time.Second,
+		gracefulStopPoll:     time.Second,
+		lifecycleWait:        waitForLifecycleDuration,
+		jobHeartbeatInterval: 15 * time.Second,
+		goos:                 runtime.GOOS,
+		configDraftTTL:       24 * time.Hour,
 	}
 }
 
@@ -338,11 +356,6 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 				return false
 			}
 		}
-		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.installOrUpdateRuntime(ctx, mode); err != nil {
-			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
-			return false
-		}
 	} else {
 		m.update(jobID, "running", 20, "building wine runner image", "")
 		if m.installOrUpdateFunc == nil {
@@ -351,11 +364,14 @@ func (m Manager) runInstallOrUpdateJob(ctx context.Context, jobID string, backup
 				return false
 			}
 		}
-		m.update(jobID, "running", 60, action+"ing Palworld Windows dedicated server", "")
-		if err := m.installOrUpdateRuntime(ctx, mode); err != nil {
-			m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
-			return false
-		}
+	}
+	stageMessage := action + "ing Palworld Windows dedicated server"
+	m.update(jobID, "running", 60, stageMessage, "")
+	if err := m.runJobStageWithHeartbeat(ctx, jobID, 60, stageMessage, func() error {
+		return m.installOrUpdateRuntime(ctx, mode)
+	}); err != nil {
+		m.update(jobID, "failed", 60, action+" failed", err.Error()+retainedBackupMessage(backup))
+		return false
 	}
 	if mode == RuntimeWindowsSteamCMD {
 		if err := m.validateWindowsServerInstall(); err != nil {
@@ -585,7 +601,105 @@ func (m Manager) SafeRestart(ctx context.Context, waitSeconds int, message strin
 	})
 }
 
+// SafeStop asks Palworld to save and shut down gracefully, then verifies that
+// the managed process exited. If the official REST shutdown path is
+// unavailable or the process remains alive after the grace period, PalPanel
+// falls back to its normal managed stop operation.
+func (m Manager) SafeStop(ctx context.Context, waitSeconds int, message string, notify RestartNotifier) (db.Job, error) {
+	if waitSeconds < 5 || waitSeconds > 300 {
+		return db.Job{}, fmt.Errorf("waittime must be between 5 and 300 seconds")
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "Server is shutting down"
+	}
+	return m.startLifecycleJob(ctx, "safe_stop", "queued safe stop", func(jobCtx context.Context, jobID string) {
+		if status, err := m.Status(jobCtx); err == nil && !serverStatusRunning(status) {
+			m.update(jobID, "completed", 100, "server is already stopped", "")
+			return
+		}
+
+		m.update(jobID, "running", 10, "saving world and notifying players", "")
+		if notify != nil {
+			if err := notify(jobCtx, waitSeconds, message); err != nil {
+				m.update(jobID, "running", 20, "graceful shutdown request failed; managed stop fallback remains armed", err.Error())
+			}
+		}
+
+		m.update(jobID, "running", 35, "waiting for player countdown", "")
+		wait := m.lifecycleWait
+		if wait == nil {
+			wait = waitForLifecycleDuration
+		}
+		if err := wait(jobCtx, time.Duration(waitSeconds)*time.Second); err != nil {
+			m.update(jobID, "failed", 35, "safe stop interrupted", err.Error())
+			return
+		}
+
+		m.update(jobID, "running", 60, "waiting for graceful server exit", "")
+		deadline := time.Now().Add(m.gracefulStopTimeout)
+		for {
+			status, err := m.Status(jobCtx)
+			if err == nil && !serverStatusRunning(status) {
+				m.update(jobID, "completed", 100, "safe stop completed", "")
+				return
+			}
+			if !time.Now().Before(deadline) {
+				break
+			}
+			if err := wait(jobCtx, m.gracefulStopPoll); err != nil {
+				m.update(jobID, "failed", 60, "safe stop interrupted", err.Error())
+				return
+			}
+		}
+
+		m.update(jobID, "running", 85, "graceful shutdown timed out; applying managed stop", "")
+		if err := m.stopUnlocked(jobCtx); err != nil {
+			m.update(jobID, "failed", 85, "managed stop fallback failed", err.Error())
+			return
+		}
+		m.update(jobID, "completed", 100, "safe stop completed with managed stop fallback", "")
+	})
+}
+
+func waitForLifecycleDuration(ctx context.Context, duration time.Duration) error {
+	if duration <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func serverStatusRunning(status Status) bool {
+	state := strings.ToLower(strings.TrimSpace(status.Container.Status))
+	if !status.Container.Exists {
+		return false
+	}
+	switch state {
+	case "exited", "dead", "missing", "stopped":
+		return false
+	default:
+		return true
+	}
+}
+
 func (m Manager) Logs(ctx context.Context, query LogQuery) (LogResult, error) {
+	channel := strings.ToLower(strings.TrimSpace(query.Channel))
+	switch channel {
+	case "game":
+		return m.fileChannelLogs(ctx, query, "paldefender-game", m.latestGameLogPath)
+	case "paldefender-rest":
+		return m.fileChannelLogs(ctx, query, "paldefender-rest", m.latestPalDefenderRESTLogPath)
+	case "", "launcher":
+	default:
+		return LogResult{}, fmt.Errorf("unsupported log channel %q", query.Channel)
+	}
+
 	mode, err := m.RuntimeMode(ctx)
 	if err != nil {
 		return LogResult{}, err
@@ -620,6 +734,72 @@ func (m Manager) Logs(ctx context.Context, query LogQuery) (LogResult, error) {
 		reason = "not_started"
 	}
 	return LogResult{Source: "none", Available: false, Reason: reason}, nil
+}
+
+func (m Manager) fileChannelLogs(ctx context.Context, query LogQuery, source string, path func() (string, error)) (LogResult, error) {
+	logPath, err := path()
+	if err != nil {
+		return LogResult{}, err
+	}
+	if logPath == "" {
+		return LogResult{Source: "none", Available: false, Reason: "no_collection_source"}, nil
+	}
+	logs, info, err := tailFileInfo(logPath, query.Tail)
+	if err != nil {
+		return LogResult{}, err
+	}
+	result := LogResult{
+		Logs:      filterLogs(logs, query),
+		Source:    source,
+		Available: true,
+		UpdatedAt: info.ModTime().UTC().Format(time.RFC3339Nano),
+	}
+	if strings.TrimSpace(logs) == "" {
+		result.Reason = m.emptyLogReason(ctx)
+	}
+	return result, nil
+}
+
+func (m Manager) latestGameLogPath() (string, error) {
+	path, err := m.latestLogFile(m.cfg.PalDefenderDir(), filepath.Join("Logs"))
+	if err != nil || path != "" {
+		return path, err
+	}
+	return m.latestLogFile(m.cfg.ServerDirectory(), filepath.Join("Pal", "Saved", "Logs"))
+}
+
+func (m Manager) latestPalDefenderRESTLogPath() (string, error) {
+	return m.latestLogFile(m.cfg.PalDefenderDir(), filepath.Join("Logs", "RESTAPI"))
+}
+
+func (m Manager) latestLogFile(base, relative string) (string, error) {
+	root := filepath.Join(base, relative)
+	if err := m.cfg.ValidateManagedPath(root, false); err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var selected string
+	var selectedTime time.Time
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".log") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if selected == "" || info.ModTime().After(selectedTime) {
+			selected = filepath.Join(root, entry.Name())
+			selectedTime = info.ModTime()
+		}
+	}
+	return selected, nil
 }
 
 func (m Manager) emptyLogReason(ctx context.Context) string {
@@ -848,6 +1028,35 @@ func (m Manager) startLifecycleJob(ctx context.Context, typ, message string, fn 
 		defer m.operationMu.Unlock()
 		fn(jobCtx, jobID)
 	})
+}
+
+func (m Manager) runJobStageWithHeartbeat(ctx context.Context, jobID string, progress int, message string, run func() error) error {
+	interval := m.jobHeartbeatInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	done := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	started := time.Now()
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.update(jobID, "running", progress, fmt.Sprintf("%s (still running; elapsed %s)", message, time.Since(started).Round(time.Second)), "")
+			}
+		}
+	}()
+	err := run()
+	close(done)
+	<-heartbeatDone
+	return err
 }
 
 func (m Manager) update(jobID, status string, progress int, message, errText string) {
@@ -1445,9 +1654,27 @@ func tailFileInfo(path string, tail int) (string, os.FileInfo, error) {
 	if info.IsDir() {
 		return "", nil, fmt.Errorf("log path is a directory")
 	}
-	b, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return "", nil, err
+	}
+	defer file.Close()
+	const maximumLogTailBytes int64 = 2 * 1024 * 1024
+	start := info.Size() - maximumLogTailBytes
+	if start < 0 {
+		start = 0
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return "", nil, err
+	}
+	b, err := io.ReadAll(io.LimitReader(file, maximumLogTailBytes))
+	if err != nil {
+		return "", nil, err
+	}
+	if start > 0 {
+		if newline := strings.IndexByte(string(b), '\n'); newline >= 0 {
+			b = b[newline+1:]
+		}
 	}
 	lines := strings.Split(string(b), "\n")
 	if len(lines) > tail {

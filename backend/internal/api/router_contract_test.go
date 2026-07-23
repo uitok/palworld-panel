@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -83,7 +84,6 @@ func TestNewContractRoutes(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		"/api/config/palworld/schema",
 		"/api/server/startup",
 		"/api/server/runtime",
 		"/api/security/paldefender/status",
@@ -251,14 +251,13 @@ func assertOpenAPIContract(t *testing.T, router *gin.Engine) {
 		}
 	}
 	actual := map[string]bool{}
+	ginParameter := regexp.MustCompile(`:([A-Za-z_][A-Za-z0-9_]*)`)
 	for _, route := range router.Routes() {
 		if !strings.HasPrefix(route.Path, "/api/") {
 			continue
 		}
 		path := route.Path
-		for _, parameter := range []string{"id", "name", "steam_id"} {
-			path = strings.ReplaceAll(path, ":"+parameter, "{"+parameter+"}")
-		}
+		path = ginParameter.ReplaceAllString(path, `{$1}`)
 		actual[route.Method+" "+path] = true
 	}
 	for key := range actual {
@@ -277,6 +276,11 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	type schemaReference struct {
 		Ref string `yaml:"$ref"`
 	}
+	type response struct {
+		Content map[string]struct {
+			Schema schemaReference `yaml:"schema"`
+		} `yaml:"content"`
+	}
 	type operation struct {
 		Permission string `yaml:"x-palpanel-permission"`
 		Parameters []struct {
@@ -289,10 +293,11 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 				Schema schemaReference `yaml:"schema"`
 			} `yaml:"content"`
 		} `yaml:"requestBody"`
-		Responses map[string]any `yaml:"responses"`
+		Responses map[string]response `yaml:"responses"`
 	}
 	var spec struct {
 		Paths map[string]struct {
+			Get  operation `yaml:"get"`
 			Post operation `yaml:"post"`
 			Put  operation `yaml:"put"`
 		} `yaml:"paths"`
@@ -318,6 +323,48 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	community := spec.Paths["/community-servers"].Get
+	communityParameters := map[string]bool{}
+	for _, parameter := range community.Parameters {
+		communityParameters[parameter.Name] = true
+	}
+	for _, name := range []string{"region", "search", "min_players", "max_players", "password", "version", "status", "page", "page_size"} {
+		if !communityParameters[name] {
+			t.Errorf("GET /community-servers is missing query parameter %s", name)
+		}
+	}
+	for _, response := range []string{"200", "400", "401", "429", "502", "503"} {
+		if _, ok := community.Responses[response]; !ok {
+			t.Errorf("GET /community-servers is missing response %s", response)
+		}
+	}
+	for _, schema := range []string{"CommunityServer", "CommunityServerResult", "CommunityServerSourceStatus", "CommunityServerResultEnvelope", "CommunityServerSourceStatusEnvelope"} {
+		if _, ok := spec.Components.Schemas[schema]; !ok {
+			t.Errorf("OpenAPI is missing schema %s", schema)
+		}
+	}
+	for _, schema := range []string{"SafeLifecycleRequest", "BreedingStatus", "AstrBotControlRequest", "AstrBotCommunityServerRequest", "AstrBotServerStatus", "ModConfigFile", "ModConfigDocument", "ModConfigWriteRequest", "ModConfigRestoreRequest", "ModConfigBackup", "ModConfigurationAdapter"} {
+		if _, ok := spec.Components.Schemas[schema]; !ok {
+			t.Errorf("OpenAPI is missing schema %s", schema)
+		}
+	}
+	for _, operation := range []operation{
+		spec.Paths["/mods/configurations/{adapter}"].Get,
+		spec.Paths["/mods/configurations/{adapter}"].Put,
+		spec.Paths["/mods/configurations/{adapter}/backups"].Get,
+		spec.Paths["/mods/configurations/{adapter}/backups/{backup}/restore"].Post,
+	} {
+		var hasFile bool
+		for _, parameter := range operation.Parameters {
+			if parameter.Name == "file" && parameter.In == "query" {
+				hasFile = true
+			}
+		}
+		if !hasFile {
+			t.Error("Mod adapter operation is missing the opaque file query parameter")
+		}
+	}
+
 	assertRequestSchema := func(path, mediaType, want string) {
 		t.Helper()
 		got := spec.Paths[path].Post.RequestBody.Content[mediaType].Schema.Ref
@@ -332,12 +379,20 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 	assertRequestSchema("/mods/import/inspect", "multipart/form-data", "ModImportUploadRequest")
 	assertRequestSchema("/mods/import/inspect/{id}/select", "application/json", "ModImportSelectRequest")
 	assertRequestSchema("/mods/import", "application/json", "ModImportRequest")
+	assertRequestSchema("/save-sources/import/inspect", "multipart/form-data", "SaveImportInspectRequest")
+	assertRequestSchema("/save-sources/import/inspect/{id}/select", "application/json", "SaveImportSelectRequest")
 	assertRequestSchema("/save-sources/import", "multipart/form-data", "SaveSourceImportRequest")
+	assertRequestSchema("/save-sources/import", "application/json", "SaveImportCommitRequest")
+	if got := spec.Paths["/save-sources/import"].Post.Responses["409"].Content["application/json"].Schema.Ref; got != "#/components/schemas/SaveImportConflictEnvelope" {
+		t.Errorf("save import 409 response schema = %q", got)
+	}
 	assertRequestSchema("/security/paldefender/gm/players/{id}/items", "application/json", "PalDefenderGiveItemsRequest")
+	assertRequestSchema("/security/paldefender/gm/players/{id}/custom-pals", "application/json", "PalDefenderGiveCustomPalsRequest")
 	assertRequestSchema("/security/paldefender/gm/players/{id}/message", "application/json", "PalDefenderMessageRequest")
 	assertRequestSchema("/security/paldefender/gm/broadcast", "application/json", "PalDefenderBroadcastRequest")
 	for _, path := range []string{
 		"/security/paldefender/gm/players/{id}/items",
+		"/security/paldefender/gm/players/{id}/custom-pals",
 		"/security/paldefender/gm/players/{id}/message",
 		"/security/paldefender/gm/players/{id}/kick",
 		"/security/paldefender/gm/players/{id}/ban",
@@ -356,8 +411,63 @@ func TestOpenAPIAuthenticationAndModImportSchemas(t *testing.T) {
 		}
 	}
 	assertRequestSchema("/ai/translation/test", "application/json", "AITranslationConfigUpdate")
+	assertRequestSchema("/settings/network-proxy/test", "application/json", "NetworkProxyTestRequest")
+	assertRequestSchema("/server/safe-stop", "application/json", "SafeLifecycleRequest")
+	assertRequestSchema("/server/safe-restart", "application/json", "SafeLifecycleRequest")
+	assertRequestSchema("/integrations/astrbot/server-control", "application/json", "AstrBotControlRequest")
+	assertRequestSchema("/integrations/astrbot/community-servers", "application/json", "AstrBotCommunityServerRequest")
+	assertRequestSchema("/mods/configurations/{adapter}/backups/{backup}/restore", "application/json", "ModConfigRestoreRequest")
+	assertRequestSchema("/mods/{id}/files/{file}/backups/{backup}/restore", "application/json", "ModConfigRestoreRequest")
+	if got := spec.Paths["/mods/configurations/{adapter}"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/ModConfigWriteRequest" {
+		t.Errorf("PUT /mods/configurations/{adapter} request schema = %q", got)
+	}
+	if got := spec.Paths["/mods/{id}/files/{file}"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/ModConfigWriteRequest" {
+		t.Errorf("PUT /mods/{id}/files/{file} request schema = %q", got)
+	}
 	if got := spec.Paths["/ai/translation/config"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/AITranslationConfigUpdate" {
 		t.Errorf("PUT /ai/translation/config request schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigUpdateRequest" {
+		t.Errorf("PUT /config/palworld request schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/apply"].Post.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigApplyRequest" {
+		t.Errorf("POST /config/palworld/apply request schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/validate"].Post.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigValidateRequest" {
+		t.Errorf("POST /config/palworld/validate request schema = %q", got)
+	}
+	for _, operation := range []struct {
+		name string
+		ref  string
+	}{
+		{name: "GET /config/palworld", ref: spec.Paths["/config/palworld"].Get.Responses["200"].Content["application/json"].Schema.Ref},
+		{name: "PUT /config/palworld", ref: spec.Paths["/config/palworld"].Put.Responses["200"].Content["application/json"].Schema.Ref},
+	} {
+		if operation.ref != "#/components/schemas/PalworldConfigEnvelope" {
+			t.Errorf("%s response schema = %q", operation.name, operation.ref)
+		}
+	}
+	if got := spec.Paths["/config/palworld/apply"].Post.Responses["202"].Content["application/json"].Schema.Ref; got != "#/components/schemas/JobEnvelope" {
+		t.Errorf("POST /config/palworld/apply response schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/schema"].Get.Responses["200"].Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigSchemaEnvelope" {
+		t.Errorf("GET /config/palworld/schema response schema = %q", got)
+	}
+	if got := spec.Paths["/config/palworld/validate"].Post.Responses["200"].Content["application/json"].Schema.Ref; got != "#/components/schemas/PalworldConfigValidationEnvelope" {
+		t.Errorf("POST /config/palworld/validate response schema = %q", got)
+	}
+	for _, property := range []string{"revision_sha256", "secret_state", "format_issues", "draft"} {
+		if _, ok := spec.Components.Schemas["PalworldConfig"].Properties[property]; !ok {
+			t.Errorf("PalworldConfig is missing %s", property)
+		}
+	}
+	if got := spec.Paths["/settings/network-proxy"].Put.RequestBody.Content["application/json"].Schema.Ref; got != "#/components/schemas/NetworkProxyConfigUpdate" {
+		t.Errorf("PUT /settings/network-proxy request schema = %q", got)
+	}
+	for _, property := range []string{"install_proxy_url", "community_proxy_url"} {
+		if !spec.Components.Schemas["NetworkProxyConfigUpdate"].Properties[property].WriteOnly {
+			t.Errorf("NetworkProxyConfigUpdate.%s must be writeOnly", property)
+		}
 	}
 	for _, property := range []string{"api_key", "proxy_url", "custom_headers"} {
 		if !spec.Components.Schemas["AITranslationConfigUpdate"].Properties[property].WriteOnly {

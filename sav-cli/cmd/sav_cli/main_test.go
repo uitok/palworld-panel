@@ -39,3 +39,21 @@ func TestInspectWritesStructuredJSONInsteadOfRawSaveBytes(t *testing.T) {
 		t.Fatalf("unexpected inspect metadata: %#v", payload)
 	}
 }
+
+func TestVerifyBuildRejectsMissingRequiredOodleSupport(t *testing.T) {
+	if err := verifyBuild([]string{"--require-oodle"}, false); err == nil || !strings.Contains(err.Error(), "Oodle support is required") {
+		t.Fatalf("verifyBuild without Oodle support = %v", err)
+	}
+	if err := verifyBuild([]string{"--require-oodle"}, true); err != nil {
+		t.Fatalf("verifyBuild with Oodle support returned error: %v", err)
+	}
+}
+
+func TestBuildVerificationMessageReportsActualOodleState(t *testing.T) {
+	if got := buildVerificationMessage(false); got != "sav-cli build verification passed: oodle=false" {
+		t.Fatalf("buildVerificationMessage(false) = %q", got)
+	}
+	if got := buildVerificationMessage(true); got != "sav-cli build verification passed: oodle=true" {
+		t.Fatalf("buildVerificationMessage(true) = %q", got)
+	}
+}

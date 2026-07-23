@@ -1,15 +1,20 @@
 package docker
 
 import (
+	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"palpanel/internal/appconfig"
+	"palpanel/internal/networkproxy"
+	"palpanel/internal/steamcmd"
 )
 
 func TestPalServerPortUsesStartupArg(t *testing.T) {
@@ -241,23 +246,23 @@ func TestStartPublishesManagementPortsOnLoopback(t *testing.T) {
 	}
 }
 
-func TestWorkshopCredentialsAreNotPlacedInDockerArguments(t *testing.T) {
+func TestWorkshopUsesPersistedSteamCMDCacheWithoutPasswordArguments(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
 	}
 	root := t.TempDir()
 	commandLog := filepath.Join(root, "commands.log")
+	environmentLog := filepath.Join(root, "environment.log")
 	fakeDocker := filepath.Join(root, "docker")
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
+		"env > " + shellQuote(environmentLog) + "\n" +
 		"exit 0\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("STEAM_USERNAME", "fixture_user")
-	t.Setenv("STEAM_PASSWORD", "never-log-this-password")
-	runner := NewRunner(appconfig.Config{DockerBinary: fakeDocker, DockerImage: "image", WorkshopAppID: "1623730"})
-	if err := runner.DownloadWorkshopTo(t.Context(), "3625364851", filepath.Join(root, "download")); err != nil {
+	runner := NewRunner(appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", WorkshopAppID: "1623730"})
+	if err := runner.DownloadWorkshopTo(t.Context(), "3625364851", filepath.Join(root, "download"), "fixture_user"); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(commandLog)
@@ -265,13 +270,291 @@ func TestWorkshopCredentialsAreNotPlacedInDockerArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := strings.Split(strings.TrimSpace(string(body)), "\n")
-	for _, name := range []string{"STEAM_USERNAME", "STEAM_PASSWORD"} {
-		if !containsAdjacent(args, "-e", name) {
-			t.Errorf("Docker arguments do not pass %s by environment name:\n%s", name, string(body))
+	if !containsExact(args, "fixture_user") || !containsExact(args, "steam-auth-verify") && !containsExact(args, "workshop") {
+		t.Errorf("Docker arguments do not use the account with the Workshop command:\n%s", string(body))
+	}
+	for _, forbidden := range []string{"STEAM_USERNAME", "STEAM_PASSWORD", "never-log-this-password"} {
+		if strings.Contains(strings.ToLower(string(body)), strings.ToLower(forbidden)) {
+			t.Fatalf("Docker arguments contain forbidden credential material %q:\n%s", forbidden, string(body))
 		}
 	}
-	if strings.Contains(string(body), "never-log-this-password") || strings.Contains(string(body), "STEAM_PASSWORD=") {
-		t.Fatalf("Docker arguments exposed the Workshop password:\n%s", string(body))
+	wantMount := volume(runner.cfg.WorkshopSteamCMDConfigDir(), workshopSteamHomePath)
+	if !containsExact(args, wantMount) {
+		t.Fatalf("Docker arguments do not mount the persistent SteamCMD cache %q:\n%s", wantMount, string(body))
+	}
+	if containsExact(args, volume(runner.cfg.WorkshopSteamCMDConfigDir(), "/opt/steamcmd/config")) {
+		t.Fatalf("Docker arguments still mount the cache beside the SteamCMD installation:\n%s", string(body))
+	}
+}
+
+func TestWorkshopAuthenticationUsesTemporaryRunscriptWithoutSecretArguments(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	scriptLog := filepath.Join(root, "script.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
+		"if [ \"${1:-}\" = image ]; then exit 0; fi\n" +
+		"for arg in \"$@\"; do case \"$arg\" in *:/run/palpanel/steam-login.txt:ro) host=${arg%:/run/palpanel/steam-login.txt:ro}; cp \"$host\" " + shellQuote(scriptLog) + ";; esac; done\n" +
+		"printf 'Logged in OK\\n'\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image"}
+	runner := NewRunner(cfg)
+	password := `space quote" slash\linux-secret`
+	guard := "654321"
+	out, err := runner.AuthenticateWorkshop(t.Context(), steamcmd.LoginRequest{AccountName: "fixture_user", Password: password, SteamGuardCode: guard})
+	if err != nil || !strings.Contains(string(out), "Logged in OK") {
+		t.Fatalf("AuthenticateWorkshop output = %q, error = %v", out, err)
+	}
+	arguments, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(arguments), password) || strings.Contains(string(arguments), guard) {
+		t.Fatalf("Docker arguments exposed Steam secrets: %s", arguments)
+	}
+	if !strings.Contains(string(arguments), volume(cfg.WorkshopSteamCMDConfigDir(), workshopSteamHomePath)) {
+		t.Fatalf("Docker login does not persist the Linux Steam home: %s", arguments)
+	}
+	runscript, err := os.ReadFile(scriptLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(runscript), steamScriptArgument(password)) || !strings.Contains(string(runscript), steamScriptArgument(guard)) {
+		t.Fatalf("temporary runscript did not safely quote credentials: %s", runscript)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(cfg.SteamWorkshopCredentialsPath()), "steamcmd-docker-login-*.txt"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary Docker login scripts remain: %#v, %v", leftovers, err)
+	}
+}
+
+func TestWorkshopAuthenticationCleansTemporaryRunscriptAfterDockerFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"if [ \"${1:-}\" = image ]; then exit 0; fi\n" +
+		"printf 'transport failed\\n'\n" +
+		"exit 7\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image"}
+	runner := NewRunner(cfg)
+	if _, err := runner.AuthenticateWorkshop(t.Context(), steamcmd.LoginRequest{AccountName: "fixture_user", Password: "failure secret"}); err == nil {
+		t.Fatal("AuthenticateWorkshop unexpectedly succeeded")
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(cfg.SteamWorkshopCredentialsPath()), "steamcmd-docker-login-*.txt"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary Docker login scripts remain after failure: %#v, %v", leftovers, err)
+	}
+}
+
+func TestWorkshopDownloadClassifiesExpiredDockerCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf 'FAILED (No cached credentials and @NoPromptForPassword is set)\\n'\n" +
+		"exit 3\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", WorkshopAppID: "1623730"})
+	err := runner.DownloadWorkshopTo(t.Context(), "3625364851", filepath.Join(root, "download"), "fixture_user")
+	if !errors.Is(err, steamcmd.ErrLoginRequired) {
+		t.Fatalf("expired Docker cache error = %v", err)
+	}
+}
+
+func TestManagedInstallProxyUsesLoopbackBridgeAndHostNetworkWithoutCredentialArguments(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	environmentLog := filepath.Join(root, "environment.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\n" +
+		"env > " + shellQuote(environmentLog) + "\n" +
+		"exit 0\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", ServerDir: filepath.Join(root, "server"), WinePrefixDir: filepath.Join(root, "wine")}
+	enabled := true
+	proxyURL := "http://proxy-user:never-log-proxy-password@127.0.0.1:7890"
+	if _, err := networkproxy.New(cfg).Update(networkproxy.ConfigUpdate{InstallEnabled: &enabled, InstallProxyURL: &proxyURL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRunner(cfg).InstallOrUpdate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if !containsAdjacent(args, "--network", "host") {
+		t.Fatalf("Docker arguments do not enable host networking:\n%s", body)
+	}
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		found := false
+		for _, arg := range args {
+			if strings.HasPrefix(arg, name+"=http://127.0.0.1:") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Docker arguments do not pass bridged %s explicitly:\n%s", name, body)
+		}
+	}
+	if strings.Contains(string(body), "never-log-proxy-password") || strings.Contains(string(body), "proxy-user") {
+		t.Fatalf("Docker arguments exposed proxy credentials:\n%s", body)
+	}
+	environment, err := os.ReadFile(environmentLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(environment), "never-log-proxy-password") || strings.Contains(string(environment), "proxy-user") {
+		t.Fatalf("Docker process environment exposed upstream proxy credentials:\n%s", environment)
+	}
+	bridgeAddress := ""
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "HTTP_PROXY=http://127.0.0.1:") {
+			bridgeAddress = strings.TrimPrefix(arg, "HTTP_PROXY=http://")
+			break
+		}
+	}
+	if bridgeAddress == "" {
+		t.Fatal("bridged proxy address was not captured")
+	}
+	if connection, err := net.DialTimeout("tcp", bridgeAddress, 200*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatalf("temporary proxy bridge %s remained open after Docker command", bridgeAddress)
+	}
+}
+
+func TestWineImageBuildUsesProxyAwareRunDownload(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	fakeDocker := filepath.Join(root, "docker")
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+shellQuote(commandLog)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runnerDir := filepath.Join(root, "runner")
+	if err := os.MkdirAll(runnerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runnerDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", RunnerDir: runnerDir}
+	enabled := true
+	proxyURL := "socks5://proxy-user:never-log-proxy-password@127.0.0.1:10808"
+	if _, err := networkproxy.New(cfg).Update(networkproxy.ConfigUpdate{InstallEnabled: &enabled, InstallProxyURL: &proxyURL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRunner(cfg).BuildImage(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if !containsAdjacent(args, "--network", "host") {
+		t.Fatalf("build did not enable host networking:\n%s", body)
+	}
+	if strings.Contains(string(body), "never-log-proxy-password") || strings.Contains(string(body), "proxy-user") {
+		t.Fatalf("build arguments exposed proxy credentials:\n%s", body)
+	}
+	foundHTTPProxy := false
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "HTTP_PROXY=http://127.0.0.1:") {
+			foundHTTPProxy = true
+		}
+	}
+	if !foundHTTPProxy {
+		t.Fatalf("build did not receive the local HTTP bridge:\n%s", body)
+	}
+
+	dockerfile, err := os.ReadFile(filepath.Join("..", "..", "deployments", "wine-runner", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(dockerfile), "ADD https://") || !strings.Contains(string(dockerfile), "curl --fail") {
+		t.Fatalf("Wine runner Dockerfile must use a proxy-aware RUN download:\n%s", dockerfile)
+	}
+}
+
+func TestCanceledDockerDownloadClosesProxyBridge(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture exercises the Linux Docker runner")
+	}
+	root := t.TempDir()
+	commandLog := filepath.Join(root, "commands.log")
+	fakeDocker := filepath.Join(root, "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellQuote(commandLog) + "\nwhile :; do sleep 1; done\n"
+	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appconfig.Config{RuntimeRoot: root, DataDir: filepath.Join(root, "data"), DockerBinary: fakeDocker, DockerImage: "image", ServerDir: filepath.Join(root, "server"), WinePrefixDir: filepath.Join(root, "wine")}
+	enabled := true
+	proxyURL := "socks5h://proxy-user:never-log-proxy-password@127.0.0.1:10808"
+	if _, err := networkproxy.New(cfg).Update(networkproxy.ConfigUpdate{InstallEnabled: &enabled, InstallProxyURL: &proxyURL}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- NewRunner(cfg).InstallOrUpdate(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(commandLog); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("fake Docker command did not start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("canceled Docker command unexpectedly succeeded")
+	}
+	body, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridgeAddress := ""
+	for _, arg := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		if strings.HasPrefix(arg, "HTTP_PROXY=http://127.0.0.1:") {
+			bridgeAddress = strings.TrimPrefix(arg, "HTTP_PROXY=http://")
+			break
+		}
+	}
+	if bridgeAddress == "" {
+		t.Fatalf("bridge address missing from canceled command:\n%s", body)
+	}
+	if connection, err := net.DialTimeout("tcp", bridgeAddress, 200*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatalf("temporary proxy bridge %s remained open after cancellation", bridgeAddress)
 	}
 }
 
@@ -320,6 +603,12 @@ func TestWineRunnerEntrypointUsesUnixLineEndings(t *testing.T) {
 	}
 	if strings.Contains(string(body), "\r\n") {
 		t.Fatal("Wine runner entrypoint contains CRLF line endings")
+	}
+	if strings.Contains(string(body), "/opt/steamcmd/config") {
+		t.Fatal("Wine runner persists login state beside the SteamCMD installation instead of under $HOME/Steam")
+	}
+	if !strings.Contains(string(body), `steam_home="${HOME:-/root}/Steam"`) {
+		t.Fatal("Wine runner does not define the persistent Linux Steam home")
 	}
 }
 

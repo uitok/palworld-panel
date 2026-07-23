@@ -1,0 +1,230 @@
+name: Build and Release
+
+# Builds the Rust/Tauri desktop bundles for Windows, macOS, and Linux and
+# creates a (draft) GitHub Release. Publishing the draft fires nexus-upload.yml
+# and discord.yml. Release assets are named canonically so nexus-upload.yml can
+# pattern-match them:
+#   PalworldSavePal-<tag>-windows.msi              (MSI installer)
+#   PalworldSavePal-<tag>-windows-standalone.zip   (portable: exe + ui + data)
+#   PalworldSavePal-<tag>-macos.dmg                (DMG)
+#   PalworldSavePal-<tag>-linux.AppImage           (cross-distro AppImage)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag for the release (e.g. v1.0.0)"
+        required: true
+      release_name:
+        description: "Name of the release"
+        required: true
+        default: "New Release"
+      draft:
+        description: "Create as draft release?"
+        required: false
+        default: true
+        type: boolean
+      prerelease:
+        description: "Is this a prerelease?"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout palworld-save-pal
+        uses: actions/checkout@v4
+        with:
+          path: palworld-save-pal
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install UI deps
+        working-directory: palworld-save-pal/ui
+        shell: bash
+        run: bun install
+        # The frontend itself is built by Tauri's beforeBuildCommand
+        # (bun run build:desktop) during "Build Tauri bundles".
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: palworld-save-pal
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build Tauri bundles
+        working-directory: palworld-save-pal/psp-desktop
+        run: cargo tauri build --bundles msi
+
+      - name: Collect MSI + portable standalone
+        shell: pwsh
+        working-directory: palworld-save-pal
+        run: |
+          $tag = "${{ github.event.inputs.version }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          # MSI installer (the only Windows installer we ship).
+          $msi = Get-ChildItem target/release/bundle/msi/*.msi | Select-Object -First 1
+          Copy-Item $msi.FullName "dist/PalworldSavePal-$tag-windows.msi"
+          # Portable standalone: exe + ui_build + data in one folder, zipped;
+          # extract-and-run (keeps its DB alongside the exe).
+          $staging = "dist/PalworldSavePal"
+          New-Item -ItemType Directory -Force $staging | Out-Null
+          Copy-Item target/release/psp.exe "$staging/psp.exe"
+          Copy-Item -Recurse ui_build "$staging/ui_build"
+          Copy-Item -Recurse data "$staging/data"
+          Compress-Archive -Path $staging -DestinationPath "dist/PalworldSavePal-$tag-windows-standalone.zip"
+          Remove-Item -Recurse -Force $staging
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: palworld-save-pal/dist/*
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout palworld-save-pal
+        uses: actions/checkout@v4
+        with:
+          path: palworld-save-pal
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install UI deps
+        working-directory: palworld-save-pal/ui
+        shell: bash
+        run: bun install
+        # The frontend itself is built by Tauri's beforeBuildCommand
+        # (bun run build:desktop) during "Build Tauri bundles".
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: palworld-save-pal
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build Tauri bundles
+        working-directory: palworld-save-pal/psp-desktop
+        run: cargo tauri build --bundles dmg
+
+      - name: Collect and rename installer
+        working-directory: palworld-save-pal
+        run: |
+          tag="${{ github.event.inputs.version }}"
+          mkdir -p dist
+          dmg=$(ls target/release/bundle/dmg/*.dmg | head -n 1)
+          cp "$dmg" "dist/PalworldSavePal-$tag-macos.dmg"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: palworld-save-pal/dist/*
+          if-no-files-found: error
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout palworld-save-pal
+        uses: actions/checkout@v4
+        with:
+          path: palworld-save-pal
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install UI deps
+        working-directory: palworld-save-pal/ui
+        shell: bash
+        run: bun install
+        # The frontend itself is built by Tauri's beforeBuildCommand
+        # (bun run build:desktop) during "Build Tauri bundles".
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: palworld-save-pal
+          prefix-key: "v0-rust-ubuntu-2204"
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked --force
+
+      - name: Build Tauri bundles
+        working-directory: palworld-save-pal/psp-desktop
+        run: cargo tauri build --bundles deb,appimage
+
+      - name: Strip host-graphics libs from AppImage
+        working-directory: palworld-save-pal
+        run: |
+          appimage=$(ls target/release/bundle/appimage/*.AppImage | head -n 1)
+          bash scripts/appimage-strip-graphics.sh "$appimage"
+
+      - name: Collect and rename installers
+        working-directory: palworld-save-pal
+        run: |
+          tag="${{ github.event.inputs.version }}"
+          mkdir -p dist
+          deb=$(ls target/release/bundle/deb/*.deb | head -n 1)
+          cp "$deb" "dist/PalworldSavePal-$tag-linux.deb"
+          appimage=$(ls target/release/bundle/appimage/*.AppImage | head -n 1)
+          cp "$appimage" "dist/PalworldSavePal-$tag-linux.AppImage"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: palworld-save-pal/dist/*
+          if-no-files-found: error
+
+  create-release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.release_name }}
+          draft: ${{ github.event.inputs.draft }}
+          prerelease: ${{ github.event.inputs.prerelease }}
+          files: |
+            artifacts/windows/*
+            artifacts/macos/*
+            artifacts/linux/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

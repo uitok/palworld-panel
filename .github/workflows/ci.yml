@@ -55,7 +55,7 @@ jobs:
           npm run test:e2e
       - name: Source and shell checks
         run: |
-          shellcheck install.sh scripts/package.sh scripts/palpanelctl scripts/start.sh scripts/scan-secrets.sh scripts/verify-release-contents.sh scripts/smoke-linux.sh scripts/test-install.sh scripts/test-bootstrap-install.sh scripts/test-upgrade.sh scripts/check-go-coverage.sh
+          shellcheck install.sh scripts/package.sh scripts/palpanelctl scripts/start.sh scripts/scan-secrets.sh scripts/verify-release-contents.sh scripts/smoke-linux.sh scripts/smoke-palcalc-no-icu.sh scripts/test-install.sh scripts/test-bootstrap-install.sh scripts/test-upgrade.sh scripts/check-go-coverage.sh
           scripts/scan-secrets.sh
           gitleaks dir . --config .gitleaks.toml --redact --no-banner
           git diff --check
@@ -67,6 +67,8 @@ jobs:
           sed 's|ExecStart=/opt/palpanel/current/bin/palcalc-bridge.*|ExecStart=/bin/true|' scripts/systemd/palpanel-palcalc.service > "$tmp/palpanel-palcalc.service"
           systemd-analyze verify "$tmp/palpanel.service" "$tmp/palpanel-sav-cli.service" "$tmp/palpanel-palcalc.service"
       - name: Build and smoke Linux package
+        env:
+          PALPANEL_NUGET_AUDIT: "true"
         run: |
           scripts/package.sh --version "$CI_PACKAGE_VERSION" --targets linux-amd64 --skip-tests --clean
           scripts/verify-release-contents.sh \
@@ -74,6 +76,7 @@ jobs:
             "dist/packages/palpanel-sav-cli_${CI_PACKAGE_VERSION}_source.tar.gz" \
             "dist/packages/palpanel_${CI_PACKAGE_VERSION}_source.tar.gz"
           scripts/smoke-linux.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
+          bash scripts/smoke-palcalc-no-icu.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
           sudo scripts/test-install.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
           sudo scripts/test-bootstrap-install.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz"
           sudo scripts/test-upgrade.sh "dist/packages/palpanel_${CI_PACKAGE_VERSION}_linux_amd64.tar.gz" v1.0.2

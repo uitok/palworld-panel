@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { mapMapEntitiesResponse } from './saveIndex';
+import { mapMapEntitiesResponse, mapSaveIndexStatus } from './saveIndex';
+
+describe('mapSaveIndexStatus', () => {
+  it('preserves safe indexer diagnostics returned by the backend', () => {
+    expect(mapSaveIndexStatus({
+      enabled: true,
+      state: 'error',
+      error: 'save indexer failed (parser_incompatible)',
+      error_code: 'parser_incompatible',
+      error_detail: 'unknown property type',
+      oodle_available: true,
+    })).toMatchObject({
+      error_code: 'parser_incompatible',
+      error_detail: 'unknown property type',
+      oodle_available: true,
+    });
+  });
+});
 
 describe('mapMapEntitiesResponse', () => {
   it('maps live coordinates and falls back to nested save coordinates', () => {

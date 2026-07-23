@@ -11,6 +11,12 @@ version=""
 targets="linux-amd64"
 skip_tests=0
 clean=0
+nuget_audit="${PALPANEL_NUGET_AUDIT:-false}"
+
+case "${nuget_audit,,}" in
+  true|false) nuget_audit="${nuget_audit,,}" ;;
+  *) printf 'PALPANEL_NUGET_AUDIT must be true or false\n' >&2; exit 64 ;;
+esac
 
 cleanup_webui_stage() {
   find "$webui_embed_dir" -mindepth 1 ! -name .keep -exec rm -rf -- {} + 2>/dev/null || true
@@ -119,7 +125,9 @@ build_linux() {
   printf '[palpanel] Building cgo sav-cli linux-%s\n' "$arch"
   (cd "$root_dir/sav-cli" && CGO_ENABLED=1 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$sav_ldflags" -o "$package_dir/bin/sav-cli" ./cmd/sav_cli)
   printf '[palpanel] Publishing self-contained PalCalc bridge linux-%s\n' "$arch"
-  dotnet publish "$root_dir/palcalc-bridge/PalCalc.Bridge.csproj" -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "$staging_dir/palcalc-linux"
+  # Local release packaging must remain deterministic when NuGet's advisory
+  # endpoint is unavailable. GitHub CI explicitly enables the online audit.
+  DOTNET_CLI_UI_LANGUAGE=en dotnet publish "$root_dir/palcalc-bridge/PalCalc.Bridge.csproj" -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:InvariantGlobalization=true "-p:NuGetAudit=$nuget_audit" -o "$staging_dir/palcalc-linux"
   cp "$staging_dir/palcalc-linux/palcalc-bridge" "$package_dir/bin/palcalc-bridge"
   chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli" "$package_dir/bin/palcalc-bridge"
 
@@ -196,3 +204,4 @@ cp "$root_dir/THIRD_PARTY_LICENSES.txt" "$packages_dir/THIRD_PARTY_LICENSES.txt"
   find . -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.spdx.json' -o -name 'THIRD_PARTY_LICENSES.txt' \) -printf '%f\0' |
     sort -z | xargs -0 sha256sum >SHA256SUMS
 )
+printf '[palpanel] Package build completed successfully for %s\n' "$version"

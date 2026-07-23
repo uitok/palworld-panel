@@ -39,7 +39,7 @@ func (s Server) serverWorldReset(c *gin.Context) {
 		Invalidate: func() {
 			s.invalidateServerCaches()
 			s.invalidateSaveCaches()
-			s.saveIndex.Invalidate()
+			s.invalidateSaveIndexes()
 		},
 	})
 	if err != nil {

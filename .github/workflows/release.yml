@@ -37,6 +37,8 @@ jobs:
           scripts/scan-secrets.sh
           git diff --check
       - name: Build release assets from tag
+        env:
+          PALPANEL_NUGET_AUDIT: "true"
         run: scripts/package.sh --version "$GITHUB_REF_NAME" --targets linux-amd64 --clean
       - name: Extract package for SBOM
         run: |
@@ -55,6 +57,7 @@ jobs:
             "dist/packages/palpanel-sav-cli_${GITHUB_REF_NAME}_source.tar.gz" \
             "dist/packages/palpanel_${GITHUB_REF_NAME}_source.tar.gz"
           scripts/smoke-linux.sh "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz"
+          bash scripts/smoke-palcalc-no-icu.sh "dist/packages/palpanel_${GITHUB_REF_NAME}_linux_amd64.tar.gz"
       - name: Upload Linux release assets
         uses: actions/upload-artifact@v4
         with:

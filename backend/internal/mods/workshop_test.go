@@ -59,6 +59,19 @@ func TestSteamClientQueryFilesParameters(t *testing.T) {
 	}
 }
 
+func TestSteamClientUsesManagedDownloadProxy(t *testing.T) {
+	client := NewSteamClient("key", "1623730")
+	client.proxyURL = func() (string, error) { return "socks5://127.0.0.1:10808", nil }
+	proxied, err := client.clientForRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := proxied.Transport.(*http.Transport)
+	if !ok || transport.DialContext == nil {
+		t.Fatal("Steam Workshop metadata client did not configure the managed proxy")
+	}
+}
+
 func TestSteamClientPublishedFileDetailsForm(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ISteamRemoteStorage/GetPublishedFileDetails/v1/" {

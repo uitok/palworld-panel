@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"palpanel/internal/networkproxy"
 )
 
 const maxRedirects = 5
@@ -24,10 +26,14 @@ type ipResolver interface {
 type safeDownloader struct {
 	resolver ipResolver
 	client   *http.Client
+	proxyURL func() (string, error)
 }
 
-func newSafeDownloader() *safeDownloader {
+func newSafeDownloader(proxyResolvers ...func() (string, error)) *safeDownloader {
 	downloader := &safeDownloader{resolver: net.DefaultResolver}
+	if len(proxyResolvers) > 0 {
+		downloader.proxyURL = proxyResolvers[0]
+	}
 	transport := &http.Transport{
 		Proxy:                 nil,
 		ForceAttemptHTTP2:     true,
@@ -50,6 +56,29 @@ func newSafeDownloader() *safeDownloader {
 	return downloader
 }
 
+func (d *safeDownloader) clientForDownload() (*http.Client, error) {
+	if d.proxyURL == nil {
+		return d.client, nil
+	}
+	rawProxy, err := d.proxyURL()
+	if err != nil {
+		return nil, fmt.Errorf("read managed download proxy: %w", err)
+	}
+	if strings.TrimSpace(rawProxy) == "" {
+		return d.client, nil
+	}
+	transport, err := networkproxy.Transport(rawProxy)
+	if err != nil {
+		return nil, err
+	}
+	transport.ForceAttemptHTTP2 = true
+	transport.MaxIdleConns = 10
+	transport.IdleConnTimeout = 30 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{Transport: transport, Timeout: d.client.Timeout, CheckRedirect: d.client.CheckRedirect}, nil
+}
+
 func (d *safeDownloader) Download(ctx context.Context, rawURL, destination string, limit int64) (int64, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -64,7 +93,11 @@ func (d *safeDownloader) Download(ctx context.Context, rawURL, destination strin
 	}
 	request.Header.Set("Accept", "application/zip, application/octet-stream, application/json;q=0.9")
 	request.Header.Set("User-Agent", "PalPanel-Mod-Importer/1")
-	response, err := d.client.Do(request)
+	client, err := d.clientForDownload()
+	if err != nil {
+		return 0, err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return 0, fmt.Errorf("download failed: %w", err)
 	}

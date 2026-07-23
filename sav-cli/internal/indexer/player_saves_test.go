@@ -45,6 +45,27 @@ func TestNormalizePlayerSavesAssociatesInventoryContainers(t *testing.T) {
 	}
 }
 
+func TestNormalizePlayerSavesSupportsCurrentFriendshipMap(t *testing.T) {
+	playersDir := t.TempDir()
+	writePlayerSaveFixture(t, playersDir, fixturePlayerID, map[string]string{
+		"CommonContainerId": fixtureContainerID,
+	})
+	index := Index{
+		Players:    []Player{{PlayerUID: fixturePlayerID}},
+		Containers: []Container{{ContainerID: fixtureContainerID}},
+		Warnings:   []string{},
+	}
+
+	normalizePlayerSaves(&index, playersDir)
+
+	if len(index.Warnings) != 0 {
+		t.Fatalf("current player friendship map produced warnings: %#v", index.Warnings)
+	}
+	if index.Containers[0].OwnerID != fixturePlayerID {
+		t.Fatalf("player inventory was not parsed after friendship map: %#v", index.Containers[0])
+	}
+}
+
 func TestNormalizePlayerSavesWarnsAndContinuesForMissingAndCorruptSaves(t *testing.T) {
 	playersDir := t.TempDir()
 	validPlayerID := fixturePlayerID
@@ -91,6 +112,24 @@ func TestNormalizePlayerSavesWarnsOnceForDuplicatePlayerRecords(t *testing.T) {
 
 	if len(index.Warnings) != 1 {
 		t.Fatalf("expected duplicate records to share one player-save warning, got %#v", index.Warnings)
+	}
+}
+
+func TestDeduplicatePlayersMergesUIDAndSteamAliases(t *testing.T) {
+	index := Index{Players: []Player{
+		{PlayerUID: "ABCDEF00-0000-0000-0000-000000000001", Nickname: "ABCDEF00-0000-0000-0000-000000000001", Level: 2},
+		{PlayerUID: "abcdef00000000000000000000000001", SteamID: "steam_76561198000000001", Nickname: "Builder", Level: 40},
+		{SteamID: "76561198000000001", Nickname: "Builder", Level: 39},
+	}}
+
+	deduplicatePlayers(&index)
+
+	if len(index.Players) != 1 {
+		t.Fatalf("duplicate players were not merged: %#v", index.Players)
+	}
+	player := index.Players[0]
+	if player.Nickname != "Builder" || player.Level != 40 || player.SteamID != "steam_76561198000000001" {
+		t.Fatalf("merged player = %#v", player)
 	}
 }
 
@@ -176,6 +215,26 @@ func playerGVASFixture(t *testing.T, containers map[string]string) []byte {
 	writeFString(t, &body, "/Script/Pal.PalWorldPlayerSaveGame")
 
 	writeStructProperty(t, &body, "SaveData", "PalPlayerSaveData", func() {
+		writeStructProperty(t, &body, "LastTransform", "Transform", func() {
+			writeStructProperty(t, &body, "Rotation", "Quat", func() {
+				for _, value := range []float64{0, 0, 0, 1} {
+					writeFloat64(t, &body, value)
+				}
+			})
+			writeStructProperty(t, &body, "Translation", "Vector", func() {
+				for _, value := range []float64{123, 456, 789} {
+					writeFloat64(t, &body, value)
+				}
+			})
+			writeFString(t, &body, "None")
+		})
+		writeStructMapProperty(t, &body, "Local_MaxFriendshipPalIds", func() {
+			writeGUIDProperty(t, &body, "PlayerUId", fixturePlayerID)
+			writeFString(t, &body, "None")
+		}, func() {
+			writeGUIDProperty(t, &body, "InstanceId", fixtureBaseID)
+			writeFString(t, &body, "None")
+		})
 		writeStructProperty(t, &body, "InventoryInfo", "PalPlayerInventoryInfo", func() {
 			for _, field := range playerInventoryContainerFields {
 				containerID, ok := containers[field]
@@ -193,6 +252,20 @@ func playerGVASFixture(t *testing.T, containers map[string]string) []byte {
 	})
 	writeFString(t, &body, "None")
 	return body.Bytes()
+}
+
+func writeStructMapProperty(t *testing.T, body *bytes.Buffer, name string, key, value func()) {
+	t.Helper()
+	writeFString(t, body, name)
+	writeFString(t, body, "MapProperty")
+	writeU64(t, body, 0)
+	writeFString(t, body, "StructProperty")
+	writeFString(t, body, "StructProperty")
+	body.WriteByte(0)
+	writeU32(t, body, 0)
+	writeU32(t, body, 1)
+	key()
+	value()
 }
 
 func writeStructProperty(t *testing.T, body *bytes.Buffer, name, structType string, value func()) {
@@ -268,6 +341,13 @@ func writeU32(t *testing.T, body *bytes.Buffer, value uint32) {
 }
 
 func writeU64(t *testing.T, body *bytes.Buffer, value uint64) {
+	t.Helper()
+	if err := binary.Write(body, binary.LittleEndian, value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFloat64(t *testing.T, body *bytes.Buffer, value float64) {
 	t.Helper()
 	if err := binary.Write(body, binary.LittleEndian, value); err != nil {
 		t.Fatal(err)

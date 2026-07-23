@@ -125,9 +125,11 @@ export const Setup: React.FC = () => {
   const [existingServerPath, setExistingServerPath] = useState('');
   const [importingServer, setImportingServer] = useState(false);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
+  const [jobRecoveryComplete, setJobRecoveryComplete] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const trackedJobIdRef = useRef<string | null>(null);
+  const automaticVersionCheckAttemptedRef = useRef(false);
 
   const refreshAdvanced = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -197,6 +199,12 @@ export const Setup: React.FC = () => {
   }, [refresh]);
 
   useEffect(() => {
+    if (loading || (host && status)) return;
+    const timer = window.setTimeout(() => void refresh(), 5000);
+    return () => window.clearTimeout(timer);
+  }, [host, loading, refresh, status]);
+
+  useEffect(() => {
     if (host?.os !== 'windows' || status?.installed) return;
     if (status?.server_imported) {
       setWindowsServerSource('existing');
@@ -244,6 +252,8 @@ export const Setup: React.FC = () => {
         await trackJob(job);
       } catch {
         // Job recovery is opportunistic; the regular status refresh still drives the setup page.
+      } finally {
+        if (!cancelled && mountedRef.current) setJobRecoveryComplete(true);
       }
     };
 
@@ -252,6 +262,28 @@ export const Setup: React.FC = () => {
       cancelled = true;
     };
   }, [trackJob]);
+
+  useEffect(() => {
+    if (
+      !jobRecoveryComplete
+      || loading
+      || !status?.installed
+      || !versionInfo?.current_build_id
+      || versionInfo.latest_build_id
+      || (activeJob && !isJobDone(activeJob))
+      || automaticVersionCheckAttemptedRef.current
+    ) return;
+
+    automaticVersionCheckAttemptedRef.current = true;
+    void (async () => {
+      try {
+        const job = await serverApi.checkVersion();
+        await trackJob(job);
+      } catch (error) {
+        if (mountedRef.current) setMessage(getErrorMessage(error));
+      }
+    })();
+  }, [activeJob, jobRecoveryComplete, loading, status?.installed, trackJob, versionInfo?.current_build_id, versionInfo?.latest_build_id]);
 
   const runJob = async (start: () => Promise<Job>) => {
     try {
@@ -491,7 +523,7 @@ export const Setup: React.FC = () => {
   const criticalStatusMissing = !loading && (!host || !status);
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+    <div className="mx-auto flex min-w-0 w-full max-w-7xl flex-col gap-6 overflow-x-clip p-4 sm:p-6 lg:p-8">
       {needsWindowsSource && (
         <WindowsServerSourcePanel
           source={windowsServerSource}
@@ -520,7 +552,7 @@ export const Setup: React.FC = () => {
           <StatusItem label="当前 Build" value={versionInfo.current_build_id || '未知'} ok={Boolean(versionInfo.current_build_id)} />
           <StatusItem label="最新 Build" value={versionInfo.latest_build_id || '未检查'} ok={Boolean(versionInfo.latest_build_id)} />
           <StatusItem
-            label={`兼容目标 ${versionInfo.compatibility_target || '1.0.0'}`}
+            label={`兼容目标 ${versionInfo.compatibility_target || '1.0.1'}`}
             value={versionInfo.compatible === true ? '兼容' : versionInfo.compatible === false ? '不匹配' : '待运行确认'}
             ok={versionInfo.compatible === true}
           />
@@ -682,8 +714,8 @@ const SetupHero: React.FC<{
   onPrimaryAction: () => void;
   onRefresh: () => void;
 }> = ({ action, platformText, message, activeJob, onPrimaryAction, onRefresh }) => (
-  <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+  <section className="min-w-0 overflow-hidden rounded-3xl border border-slate-100 bg-white p-5 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
+    <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
       <div className="min-w-0">
         <h3 className="flex items-center gap-2 text-[18px] font-bold text-slate-900">
           <Wand2 size={20} className="text-sky-500" />
@@ -694,7 +726,7 @@ const SetupHero: React.FC<{
         </p>
         {action.disabledReason && <p className="mt-2 text-xs font-semibold text-amber-700">{action.disabledReason}</p>}
       </div>
-      <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-72">
+      <div className="grid w-full min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:w-72 xl:grid-cols-1">
         <button
           type="button"
           onClick={onPrimaryAction}
@@ -864,7 +896,7 @@ const ConnectionIssuePanel: React.FC<{
           检测失败
         </h4>
         <p className="mt-2 text-xs font-semibold leading-5 opacity-85">
-          无法读取当前面板后端的关键状态。请确认 PalPanel 服务正在运行，再重新检测。
+          无法读取当前面板后端的关键状态，页面会自动重新检测。安装或更新任务不会因切换页面而取消，但重启 PalPanel 会中断正在运行的任务。
         </p>
         {message && <p className="mt-2 break-words text-[11px] font-semibold opacity-80">{message}</p>}
       </div>
@@ -1230,7 +1262,7 @@ const AdvancedSetupPanel: React.FC<{
               <StatusItem label="当前 Build" value={versionInfo?.current_build_id || '未知'} ok={Boolean(versionInfo?.current_build_id)} />
               <StatusItem label="最新 Build" value={versionInfo?.latest_build_id || '未检查'} ok={Boolean(versionInfo?.latest_build_id)} />
               <StatusItem
-                label={`兼容目标 ${versionInfo?.compatibility_target || '1.0.0'}`}
+                label={`兼容目标 ${versionInfo?.compatibility_target || '1.0.1'}`}
                 value={versionInfo?.compatible === true ? '兼容' : versionInfo?.compatible === false ? '不匹配' : '待运行确认'}
                 ok={versionInfo?.compatible === true}
               />

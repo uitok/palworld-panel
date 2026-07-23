@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,10 +26,12 @@ import (
 	panelauth "palpanel/internal/auth"
 	"palpanel/internal/breeding"
 	"palpanel/internal/buildinfo"
+	"palpanel/internal/communityservers"
 	"palpanel/internal/db"
 	"palpanel/internal/id"
 	"palpanel/internal/mods"
 	"palpanel/internal/monitor"
+	"palpanel/internal/networkproxy"
 	"palpanel/internal/palconfig"
 	"palpanel/internal/paldefender"
 	"palpanel/internal/palrest"
@@ -39,23 +42,28 @@ import (
 )
 
 type Server struct {
-	cfg           appconfig.Config
-	store         *db.Store
-	server        server.Manager
-	mods          mods.Manager
-	defender      paldefender.Manager
-	palrest       palrest.Client
-	monitor       monitor.Manager
-	scheduler     scheduler.Manager
-	saveIndex     *saveindex.Manager
-	breeding      *breeding.Service
-	astrbot       *astrbotclient.Client
-	ai            *aitranslation.Service
-	auth          *panelauth.Service
-	authLimiter   *authRateLimiter
-	cache         *ttlCache
-	gmIdempotency *gmIdempotencyStore
-	webUI         fs.FS
+	cfg             appconfig.Config
+	store           *db.Store
+	server          server.Manager
+	mods            mods.Manager
+	defender        paldefender.Manager
+	palrest         palrest.Client
+	monitor         monitor.Manager
+	scheduler       scheduler.Manager
+	saveIndex       *saveindex.Manager
+	serverSaveIndex *saveindex.Manager
+	breeding        *breeding.Service
+	community       *communityservers.Service
+	communityAPI    *CommunityServersHandler
+	astrbot         *astrbotclient.Client
+	ai              *aitranslation.Service
+	networkProxy    *networkproxy.Service
+	auth            *panelauth.Service
+	authLimiter     *authRateLimiter
+	cache           *ttlCache
+	gmIdempotency   *gmIdempotencyStore
+	saveImports     *saveImportInspectionStore
+	webUI           fs.FS
 }
 
 func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manager, modsManager mods.Manager, defenderManager paldefender.Manager, restClient palrest.Client, monitorManager monitor.Manager, schedulerManager scheduler.Manager) *gin.Engine {
@@ -63,7 +71,33 @@ func NewRouter(cfg appconfig.Config, store *db.Store, serverManager server.Manag
 	webFiles, _ := webui.Load(cfg.FrontendDist)
 	saveManager := saveindex.NewManager(cfg)
 	initializeSaveSources(cfg, store, saveManager)
-	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, breeding: breeding.New(cfg, store, saveManager), astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), webUI: webFiles}
+	liveCfg := cfg
+	liveCfg.SaveIndexCacheDir = filepath.Join(cfg.SaveIndexCacheDir, "server-live")
+	serverSaveManager := saveindex.NewManager(liveCfg)
+	if err := cleanupSaveImportInspections(cfg); err != nil {
+		log.Printf("save import inspection cleanup failed: %v", err)
+	}
+	networkProxyService := networkproxy.New(cfg)
+	var communityService *communityservers.Service
+	var communityAPI *CommunityServersHandler
+	if cfg.CommunityServersEnabled {
+		service, err := communityservers.New(communityservers.Options{
+			BaseURL:         cfg.CommunityServersAPIBaseURL,
+			Fetcher:         communityProxyFetcher{baseURL: cfg.CommunityServersAPIBaseURL, proxy: networkProxyService},
+			ProxyConfigured: networkProxyService.CommunityProxyConfigured,
+			CachePath:       filepath.Join(cfg.DataDir, "cache", "community-servers.json"),
+			FreshTTL:        time.Duration(cfg.CommunityServersCacheTTL) * time.Second,
+			StaleTTL:        time.Duration(cfg.CommunityServersStaleTTL) * time.Second,
+			RateLimit:       cfg.CommunityServersRateLimit,
+		})
+		if err != nil {
+			log.Printf("community server discovery disabled: %v", err)
+		} else {
+			communityService = service
+			communityAPI = NewCommunityServersHandler(service)
+		}
+	}
+	s := Server{cfg: cfg, store: store, server: serverManager, mods: modsManager, defender: defenderManager, palrest: restClient, monitor: monitorManager, scheduler: schedulerManager, saveIndex: saveManager, serverSaveIndex: serverSaveManager, breeding: breeding.New(cfg, store, saveManager), community: communityService, communityAPI: communityAPI, astrbot: astrbotclient.New(cfg), ai: aitranslation.New(cfg, store), networkProxy: networkProxyService, auth: panelauth.New(store), authLimiter: newAuthRateLimiter(), cache: newTTLCache(), gmIdempotency: newGMIdempotencyStore(), saveImports: newSaveImportInspectionStore(defaultSaveImportInspectionTTL), webUI: webFiles}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(PerformanceMiddleware(cfg))
@@ -377,12 +411,13 @@ func (s Server) serverBootstrap(c *gin.Context) {
 func (s Server) serverLogs(c *gin.Context) {
 	tail, _ := strconv.Atoi(c.DefaultQuery("tail", "200"))
 	query := server.LogQuery{
-		Tail:   tail,
-		Search: c.Query("search"),
-		Level:  c.Query("level"),
-		Since:  c.Query("since"),
+		Channel: c.Query("channel"),
+		Tail:    tail,
+		Search:  c.Query("search"),
+		Level:   c.Query("level"),
+		Since:   c.Query("since"),
 	}
-	logs, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "logs", query.Tail, query.Search, query.Level, query.Since), 2*time.Second, func(ctx context.Context) (server.LogResult, error) {
+	logs, _, err := cachedAs(s, c, cacheKey(cacheKeyServerPrefix, "logs", query.Channel, query.Tail, query.Search, query.Level, query.Since), 2*time.Second, func(ctx context.Context) (server.LogResult, error) {
 		return s.server.Logs(ctx, query)
 	})
 	if err != nil {
@@ -535,6 +570,7 @@ func (s Server) serverRestart(c *gin.Context) {
 		return
 	}
 	s.invalidateServerCaches()
+	s.invalidateServerSaveIndex()
 	ok(c, gin.H{"status": "restarted"})
 }
 
@@ -560,22 +596,22 @@ func (s Server) serverSafeRestart(c *gin.Context) {
 		return
 	}
 	s.invalidateServerCaches()
+	s.invalidateServerSaveIndex()
 	accepted(c, j)
 }
 
 func (s Server) serverForceStop(c *gin.Context) {
-	resp, err := s.palworldREST().Do(c.Request.Context(), http.MethodPost, "stop", nil)
-	if err != nil {
-		fail(c, http.StatusBadGateway, "palworld_force_stop_failed", err.Error())
+	if err := s.server.Stop(c.Request.Context()); err != nil {
+		fail(c, http.StatusInternalServerError, "server_force_stop_failed", err.Error())
 		return
 	}
 	s.invalidateServerCaches()
 	status, statusErr := s.server.Status(c.Request.Context())
 	if statusErr != nil {
-		ok(c, gin.H{"status": "stopped", "palworld": resp, "status_error": statusErr.Error()})
+		ok(c, gin.H{"status": "stopped", "status_error": statusErr.Error()})
 		return
 	}
-	ok(c, gin.H{"status": "stopped", "palworld": resp, "server": status})
+	ok(c, gin.H{"status": "stopped", "server": status})
 }
 
 func (s Server) getStartup(c *gin.Context) {
@@ -670,42 +706,49 @@ func (s Server) verifyBackup(c *gin.Context) {
 }
 
 func (s Server) getPalworldConfig(c *gin.Context) {
-	settings, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
+	if err := s.cleanupExpiredConfigDrafts(c.Request.Context()); err != nil {
+		fail(c, http.StatusInternalServerError, "config_draft_cleanup_failed", err.Error())
+		return
+	}
+	snapshot, err := server.ReadPalworldConfigSnapshot(s.cfg.PalWorldSettingsPath())
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "config_read_failed", err.Error())
 		return
 	}
-	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath(), "settings": settings, "issues": palconfig.Validate(settings)})
+	ok(c, s.palworldConfigResponse(c.Request.Context(), snapshot.Document, snapshot.Revision, nil))
 }
 
 func (s Server) updatePalworldConfig(c *gin.Context) {
-	var raw map[string]any
-	if err := c.ShouldBindJSON(&raw); err != nil {
+	if err := s.cleanupExpiredConfigDrafts(c.Request.Context()); err != nil {
+		fail(c, http.StatusInternalServerError, "config_draft_cleanup_failed", err.Error())
+		return
+	}
+	request, err := decodePalworldConfigUpdate(c)
+	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	updates := raw
-	if nested, found := raw["settings"].(map[string]any); found {
-		updates = nested
-	}
-	current, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
+	snapshot, err := server.ReadPalworldConfigSnapshot(s.cfg.PalWorldSettingsPath())
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "config_read_failed", err.Error())
 		return
 	}
-	next := palconfig.Merge(current, updates)
+	next, modified, err := mergePalworldConfigUpdate(snapshot.Document, request)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "config_invalid", err.Error())
+		return
+	}
 	issues := palconfig.Validate(next)
 	if hasPalconfigErrors(issues) {
 		fail(c, http.StatusBadRequest, "config_invalid", "palworld config has validation errors")
 		return
 	}
-	if err := palconfig.Write(s.cfg.PalWorldSettingsPath(), next); err != nil {
-		fail(c, http.StatusInternalServerError, "config_write_failed", err.Error())
+	draft, err := s.createPalworldConfigDraft(c.Request.Context(), palconfig.Document{Settings: next, RawValues: snapshot.Document.RawValues}, modified, snapshot.Revision)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "config_draft_create_failed", err.Error())
 		return
 	}
-	_ = s.server.MarkPendingRestart(c.Request.Context())
-	s.invalidateServerCaches()
-	ok(c, gin.H{"path": s.cfg.PalWorldSettingsPath(), "settings": next, "pending_restart": true, "issues": issues})
+	ok(c, s.palworldConfigResponse(c.Request.Context(), palconfig.Document{Settings: next}, snapshot.Revision, &draft))
 }
 
 func (s Server) getPalworldConfigSchema(c *gin.Context) {
@@ -713,21 +756,21 @@ func (s Server) getPalworldConfigSchema(c *gin.Context) {
 }
 
 func (s Server) validatePalworldConfig(c *gin.Context) {
-	var raw map[string]any
-	if err := c.ShouldBindJSON(&raw); err != nil {
+	request, err := decodePalworldConfigUpdate(c)
+	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	updates := raw
-	if nested, found := raw["settings"].(map[string]any); found {
-		updates = nested
-	}
-	current, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
+	current, err := palconfig.ReadDocument(s.cfg.PalWorldSettingsPath())
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "config_read_failed", err.Error())
 		return
 	}
-	next := palconfig.Merge(current, updates)
+	next, _, err := mergePalworldConfigUpdate(current, request)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "config_invalid", err.Error())
+		return
+	}
 	issues := palconfig.Validate(next)
 	ok(c, gin.H{"issues": issues, "valid": !hasPalconfigErrors(issues)})
 }
@@ -785,9 +828,6 @@ func (s Server) workshopStatus(c *gin.Context) {
 }
 
 func (s Server) searchWorkshopMods(c *gin.Context) {
-	if !s.requireWorkshopLogin(c) {
-		return
-	}
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "24"))
 	params := mods.WorkshopSearchParams{
 		Query:    c.Query("q"),
@@ -805,9 +845,6 @@ func (s Server) searchWorkshopMods(c *gin.Context) {
 }
 
 func (s Server) getWorkshopMod(c *gin.Context) {
-	if !s.requireWorkshopLogin(c) {
-		return
-	}
 	item, err := s.mods.WorkshopDetail(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		failWorkshop(c, err)
@@ -1233,20 +1270,28 @@ func (s Server) palPost(path string) gin.HandlerFunc {
 			fail(c, http.StatusBadGateway, "palworld_api_failed", err.Error())
 			return
 		}
+		if path == "save" {
+			s.invalidateServerSaveIndex()
+		}
 		ok(c, resp)
 	}
 }
 
 func (s Server) palworldREST() palrest.Client {
-	client := s.palrest
 	settings, err := palconfig.Read(s.cfg.PalWorldSettingsPath())
-	if err == nil {
-		if port := strings.TrimSpace(settings["RESTAPIPort"]); port != "" {
-			client.BaseURL = restBaseURLWithPort(client.BaseURL, port)
-		}
-		if password := strings.TrimSpace(settings["AdminPassword"]); password != "" {
-			client.Password = password
-		}
+	if err != nil {
+		settings = nil
+	}
+	return s.palworldRESTForSettings(settings)
+}
+
+func (s Server) palworldRESTForSettings(settings palconfig.Settings) palrest.Client {
+	client := s.palrest
+	if port := strings.TrimSpace(settings["RESTAPIPort"]); port != "" {
+		client.BaseURL = restBaseURLWithPort(client.BaseURL, port)
+	}
+	if settings != nil {
+		client.Password = settings["AdminPassword"]
 	}
 	if strings.TrimSpace(client.BaseURL) == "" {
 		client.BaseURL = fmt.Sprintf("http://127.0.0.1:%d/v1/api", s.cfg.RESTPort)

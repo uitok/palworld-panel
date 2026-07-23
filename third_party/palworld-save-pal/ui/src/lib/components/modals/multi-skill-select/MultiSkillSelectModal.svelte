@@ -1,0 +1,154 @@
+<script lang="ts">
+	import { Button, Card, Tooltip, Combobox, List, TooltipButton } from '$components/ui';
+	import { type Pal, type SelectOption, type SkillType } from '$types';
+	import { Save, X, Delete, Trash, Plus } from 'lucide-svelte';
+	import { activeSkillsData, passiveSkillsData } from '$lib/data';
+	import { isSkillAvailableForCharacter } from '$lib/utils/skillFilters';
+	import { ActiveSkillOption, PassiveSkillOption } from '$components/pal';
+	import * as m from '$i18n/messages';
+	import { c } from '$lib/utils/commonTranslations';
+
+	let {
+		title = '',
+		type = 'Active',
+		pal,
+		closeModal
+	} = $props<{
+		title?: string;
+		type?: SkillType;
+		pal?: Pal;
+		closeModal: (values: string[] | null) => void;
+	}>();
+
+	let values: string[] = $state([]);
+	const selectOptions: SelectOption[] = $derived.by(() => {
+		if (type === 'Active') {
+			return Object.values(activeSkillsData.activeSkills)
+				.filter((skill) => isSkillAvailableForCharacter(skill.id, pal.character_key))
+				.filter((aSkill) => !Object.values(pal.active_skills).some((skill) => skill === aSkill.id))
+				.filter((aSkill) => !values.some((v) => v === aSkill.id))
+				.sort((a, b) => a.details.element.localeCompare(b.details.element))
+				.map((s) => ({
+					value: s.id,
+					label: s.localized_name
+				}));
+		} else {
+			return Object.values(passiveSkillsData.passiveSkills)
+				.filter((pSkill) => !Object.values(pal.passive_skills).some((p) => p === pSkill.id))
+				.filter((pSkill) => !values.some((v) => v === pSkill.id))
+				.sort((a, b) => b.details.rank - a.details.rank)
+				.map((s) => ({
+					value: s.id,
+					label: s.localized_name
+				}));
+		}
+	});
+
+	function handleClear() {
+		closeModal('Empty');
+	}
+
+	function handleClose(values: string[] | null) {
+		closeModal(values);
+	}
+</script>
+
+<Card class="min-w-[calc(100vw/3)]">
+	<h3 class="h3">{title}</h3>
+	<div class="flex w-full items-center">
+		<Combobox
+			label={`${type} Skills`}
+			options={selectOptions}
+			placeholder={`Choose ${type} Skills...`}
+			onChange={(value) => values.push(value as string)}
+		>
+			{#snippet selectOption(option)}
+				{#if type === 'Active'}
+					<ActiveSkillOption {option} />
+				{:else if type === 'Passive'}
+					<PassiveSkillOption {option} />
+				{/if}
+			{/snippet}
+		</Combobox>
+		<TooltipButton
+			onclick={() => values.push(...selectOptions.map((option) => option.value as string))}
+			popupLabel={m.add_all_skills()}
+		>
+			<Plus />
+		</TooltipButton>
+	</div>
+
+	{#if values.length > 0}
+		<List items={values} listClass="max-h-60 overflow-y-auto" canSelect={false}>
+			{#snippet listHeader()}
+				<div>
+					<span class="font-bold">{type} Skills</span>
+				</div>
+			{/snippet}
+			{#snippet listItem(skill)}
+				{#if type === 'Passive'}
+					{@const passiveSkill = passiveSkillsData.getByKey(skill)}
+					<PassiveSkillOption
+						option={{ label: passiveSkill?.localized_name || skill, value: skill }}
+					/>
+				{:else if type === 'Active'}
+					{@const activeSkill = activeSkillsData.getByKey(skill)}
+					<ActiveSkillOption
+						option={{ label: activeSkill?.localized_name || skill, value: skill }}
+					/>
+				{/if}
+			{/snippet}
+			{#snippet listItemActions(skill)}
+				<Button
+					variant="ghost"
+					size="icon"
+					onclick={() => (values = values.filter((s) => s !== skill))}
+				>
+					<Trash size={16} />
+				</Button>
+			{/snippet}
+			{#snippet listItemPopup(skill)}
+				{#if type === 'Passive'}
+					{@const passiveSkill = passiveSkillsData.getByKey(skill)}
+					<div class="flex grow flex-col">
+						<span class="grow truncate">{passiveSkill?.localized_name || skill}</span>
+						<span class="text-xs">{passiveSkill?.description}</span>
+					</div>
+				{:else if type === 'Active'}
+					{@const activeSkill = activeSkillsData.getByKey(skill)}
+					<div class="flex grow flex-col">
+						<span class="grow truncate">{activeSkill?.localized_name || skill}</span>
+						<span class="text-xs">{activeSkill?.description}</span>
+					</div>
+				{/if}
+			{/snippet}
+		</List>
+	{/if}
+
+	<div class="mt-2 flex flex-row items-center space-x-2">
+		<Tooltip position="bottom">
+			<Button variant="ghost" size="icon" onclick={handleClear}>
+				<Delete />
+			</Button>
+			{#snippet popup()}
+				<span>{m.clear()}</span>
+			{/snippet}
+		</Tooltip>
+		<Tooltip position="bottom">
+			<Button variant="ghost" size="icon" onclick={() => handleClose(values)}>
+				<Save />
+			</Button>
+			{#snippet popup()}
+				<span>{c.save}</span>
+			{/snippet}
+		</Tooltip>
+		<Tooltip position="bottom">
+			<Button variant="ghost" size="icon" onclick={() => handleClose(null)}>
+				<X />
+			</Button>
+			{#snippet popup()}
+				<span>{m.cancel()}</span>
+			{/snippet}
+		</Tooltip>
+	</div>
+</Card>

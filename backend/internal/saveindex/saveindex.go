@@ -8,18 +8,33 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"palpanel/internal/appconfig"
 )
 
 var ErrDisabled = errors.New("save indexer is disabled")
+
+const (
+	staleAfterRebuildFailureWarning = "returning stale save index after rebuild failed"
+	oodleHealthTimeout              = time.Second
+	oodleHealthCacheTTL             = 5 * time.Second
+)
+
+var (
+	escapedBytePattern         = regexp.MustCompile(`\\[xX][0-9A-Fa-f]{2}`)
+	windowsAbsolutePathPattern = regexp.MustCompile(`(?i)(?:[a-z]:[\\/]|\\\\)[^\s"'<>|]+`)
+	httpURLPattern             = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
+)
 
 type Manager struct {
 	cfg         appconfig.Config
@@ -31,7 +46,18 @@ type Manager struct {
 	cache       *cacheFile
 	cacheMTime  time.Time
 	cacheLoaded bool
+	oodleMu     sync.Mutex
+	oodleAt     time.Time
+	oodle       *bool
+
+	autoMu          sync.Mutex
+	rebuildInFlight bool
+	lastAutoRebuild time.Time
 }
+
+// autoRebuildDebounce throttles access-driven rebuilds so a rapidly autosaving
+// server cannot trigger a parse storm.
+const autoRebuildDebounce = 10 * time.Second
 
 func NewManager(cfg appconfig.Config) *Manager {
 	timeout := time.Duration(cfg.SaveIndexTimeoutSeconds) * time.Second
@@ -186,17 +212,20 @@ type Index struct {
 }
 
 type Status struct {
-	Enabled    bool     `json:"enabled"`
-	State      string   `json:"state"`
-	Stale      bool     `json:"stale"`
-	SourcePath string   `json:"source_path"`
-	UpdatedAt  string   `json:"updated_at"`
-	DurationMS int      `json:"duration_ms"`
-	Error      string   `json:"error,omitempty"`
-	Warnings   []string `json:"warnings"`
-	Counts     Counts   `json:"counts"`
-	Parser     string   `json:"parser,omitempty"`
-	CachePath  string   `json:"cache_path,omitempty"`
+	Enabled        bool     `json:"enabled"`
+	State          string   `json:"state"`
+	Stale          bool     `json:"stale"`
+	SourcePath     string   `json:"source_path"`
+	UpdatedAt      string   `json:"updated_at"`
+	DurationMS     int      `json:"duration_ms"`
+	Error          string   `json:"error,omitempty"`
+	ErrorCode      string   `json:"error_code,omitempty"`
+	ErrorDetail    string   `json:"error_detail,omitempty"`
+	OodleAvailable *bool    `json:"oodle_available,omitempty"`
+	Warnings       []string `json:"warnings"`
+	Counts         Counts   `json:"counts"`
+	Parser         string   `json:"parser,omitempty"`
+	CachePath      string   `json:"cache_path,omitempty"`
 }
 
 type cacheFile struct {
@@ -219,6 +248,103 @@ type sidecarError struct {
 	Message string `json:"message"`
 }
 
+// IndexerError wraps a failure reported by the sav-cli sidecar. Only an
+// enumerated Code and bounded, redacted Detail may be exposed to API clients.
+type IndexerError struct {
+	Code     string
+	Detail   string
+	Summary  string
+	Warnings []string
+}
+
+func (e *IndexerError) Error() string {
+	if e != nil && e.Summary != "" {
+		return e.Summary
+	}
+	if e == nil || e.Code == "" {
+		return "save indexer failed; inspect the sav-cli text logs"
+	}
+	return "save indexer failed (" + e.Code + "); inspect the sav-cli text logs"
+}
+
+// knownIndexerCodes is the allowlist of sidecar error codes that are safe to
+// surface to the panel. Codes outside this set are discarded so an untrusted
+// or corrupted sidecar cannot inject arbitrary text into diagnostics.
+var knownIndexerCodes = map[string]bool{
+	"save_indexer_unavailable": true,
+	"save_index_timeout":       true,
+	"parser_incompatible":      true,
+	"save_path_not_found":      true,
+	"level_sav_not_found":      true,
+	"index_failed":             true,
+	"save_path_required":       true,
+	"bad_request":              true,
+	"method_not_allowed":       true,
+	"json_encode_failed":       true,
+}
+
+func safeIndexerCode(code string) string {
+	code = strings.TrimSpace(code)
+	if knownIndexerCodes[code] {
+		return code
+	}
+	return ""
+}
+
+func safeIndexerDetail(detail string, privatePaths ...string) string {
+	detail = strings.ToValidUTF8(detail, "")
+	detail = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, detail)
+	detail = escapedBytePattern.ReplaceAllString(detail, "[byte]")
+	for _, privatePath := range privatePaths {
+		privatePath = strings.TrimSpace(privatePath)
+		if privatePath == "" {
+			continue
+		}
+		variants := map[string]bool{
+			privatePath:                               true,
+			filepath.Clean(privatePath):               true,
+			strings.ReplaceAll(privatePath, `\`, "/"): true,
+			strings.ReplaceAll(privatePath, "/", `\`): true,
+		}
+		for variant := range variants {
+			detail = replaceFold(detail, variant, "<redacted>")
+		}
+	}
+	detail = windowsAbsolutePathPattern.ReplaceAllString(detail, "<redacted>")
+	detail = httpURLPattern.ReplaceAllString(detail, "<redacted>")
+	detail = strings.Join(strings.Fields(detail), " ")
+	runes := []rune(detail)
+	if len(runes) > 512 {
+		detail = string(runes[:512]) + "…"
+	}
+	return detail
+}
+
+func replaceFold(value, target, replacement string) string {
+	if target == "" {
+		return value
+	}
+	pattern, err := regexp.Compile(`(?i:` + regexp.QuoteMeta(target) + `)`)
+	if err != nil {
+		return value
+	}
+	return pattern.ReplaceAllString(value, replacement)
+}
+
+func classifyIndexerRequestError(err error) *IndexerError {
+	code := "save_indexer_unavailable"
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		code = "save_index_timeout"
+	}
+	return &IndexerError{Code: code}
+}
+
 func EmptyIndex() Index {
 	return Index{
 		Version:     1,
@@ -233,7 +359,10 @@ func EmptyIndex() Index {
 	}
 }
 
-func (m *Manager) Status(ctx context.Context) Status {
+func (m *Manager) Status(ctx context.Context) (status Status) {
+	defer func() {
+		status = m.withOodleStatus(ctx, status)
+	}()
 	if !m.cfg.SaveIndexerEnabled {
 		return Status{Enabled: false, State: "disabled", Warnings: []string{}}
 	}
@@ -243,9 +372,14 @@ func (m *Manager) Status(ctx context.Context) Status {
 	}
 	cached, err := m.loadCache()
 	if err != nil {
-		return Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Error: err.Error(), Warnings: []string{}, CachePath: m.cachePath()}
+		status := Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Warnings: []string{}, CachePath: m.cachePath()}
+		if errors.Is(err, os.ErrNotExist) {
+			return status
+		}
+		status.Error = err.Error()
+		return status
 	}
-	status := cached.Status
+	status = normalizeCachedStatus(cached.Status)
 	status.Enabled = true
 	status.SourcePath = worldDir
 	status.CachePath = m.cachePath()
@@ -269,13 +403,20 @@ func (m *Manager) Current(ctx context.Context) (Index, Status, error) {
 	cached, err := m.loadCache()
 	if err != nil {
 		index := EmptyIndex()
-		status := Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Error: err.Error(), Warnings: []string{}, CachePath: m.cachePath()}
+		status := Status{Enabled: true, State: "not_indexed", SourcePath: worldDir, Warnings: []string{}, CachePath: m.cachePath()}
+		if errors.Is(err, os.ErrNotExist) {
+			return index, status, nil
+		}
+		status.Error = err.Error()
 		return index, status, err
 	}
-	status := cached.Status
+	status := normalizeCachedStatus(cached.Status)
 	status.Enabled = true
 	status.SourcePath = worldDir
 	status.CachePath = m.cachePath()
+	if status.Counts == (Counts{}) {
+		status.Counts = cached.Index.Counts
+	}
 	if cached.Fingerprint != fp {
 		status.State = "stale"
 		status.Stale = true
@@ -300,19 +441,63 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 	index, err := m.callIndexer(ctx, worldDir)
 	if err != nil {
 		status := Status{Enabled: true, State: "error", Stale: false, SourcePath: worldDir, Error: err.Error(), Warnings: []string{}, CachePath: m.cachePath()}
+		var indexerErr *IndexerError
+		if errors.As(err, &indexerErr) {
+			status.ErrorCode = indexerErr.Code
+			status.ErrorDetail = indexerErr.Detail
+			for _, warning := range indexerErr.Warnings {
+				status.Warnings = appendUnique(status.Warnings, warning)
+			}
+		}
+		if status.ErrorCode == "parser_incompatible" {
+			status = m.withOodleStatus(ctx, status)
+			if status.OodleAvailable != nil && !*status.OodleAvailable {
+				status.Warnings = appendUnique(status.Warnings, oodleUnavailableWarning)
+			}
+		}
 		if cached, cacheErr := m.loadCache(); cacheErr == nil {
-			cached.Status.State = "error"
+			cached.Status = normalizeCachedStatus(cached.Status)
+			cached.Status.State = "stale"
 			cached.Status.Stale = true
-			cached.Status.Error = err.Error()
+			cached.Status.Error = status.Error
+			cached.Status.ErrorCode = status.ErrorCode
+			cached.Status.ErrorDetail = status.ErrorDetail
+			cached.Status.OodleAvailable = status.OodleAvailable
 			cached.Status.CachePath = m.cachePath()
-			cached.Index.Warnings = appendUnique(cached.Index.Warnings, "returning stale save index after rebuild failed")
+			for _, warning := range status.Warnings {
+				cached.Status.Warnings = appendUnique(cached.Status.Warnings, warning)
+			}
+			cached.Status.Warnings = appendUnique(cached.Status.Warnings, staleAfterRebuildFailureWarning)
+			cached.Index.Warnings = appendUnique(cached.Index.Warnings, staleAfterRebuildFailureWarning)
 			_ = m.saveCache(cached.Fingerprint, cached.Index, cached.Status)
 			return cached.Index, cached.Status, err
 		}
 		return EmptyIndex(), status, err
 	}
+	unsettled := false
+	if latestFingerprint, fingerprintErr := fingerprintWorld(worldDir); fingerprintErr == nil && latestFingerprint != fp {
+		// An autosave can land while the sidecar is parsing its snapshot. Retry
+		// once against the newer files so a manual rebuild does not immediately
+		// return as stale.
+		retryStart := latestFingerprint
+		if retryIndex, retryErr := m.callIndexer(ctx, worldDir); retryErr == nil {
+			index = retryIndex
+			if retryEnd, retryFingerprintErr := fingerprintWorld(worldDir); retryFingerprintErr == nil && retryEnd == retryStart {
+				fp = retryEnd
+			} else {
+				fp = retryStart
+				unsettled = true
+			}
+		} else {
+			unsettled = true
+			index.Warnings = appendUnique(index.Warnings, "save files changed during indexing and the automatic retry failed")
+		}
+	}
 	index.SourcePath = worldDir
 	index.Counts = countsFor(index)
+	if unsettled {
+		index.Warnings = appendUnique(index.Warnings, "save files are still changing; pause writes briefly and rebuild again for a current snapshot")
+	}
 	status := Status{
 		Enabled:    true,
 		State:      "ready",
@@ -324,12 +509,59 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 		Parser:     index.Parser,
 		CachePath:  m.cachePath(),
 	}
+	if unsettled {
+		status.State = "stale"
+		status.Stale = true
+	}
 	if err := m.saveCache(fp, index, status); err != nil {
 		status.State = "error"
 		status.Error = err.Error()
 		return index, status, err
 	}
 	return index, status, nil
+}
+
+// EnsureFresh triggers a single background rebuild when the cached index is
+// stale relative to the current save files. It never blocks the caller: the
+// current (possibly stale) cache is served immediately and the next request
+// picks up the refreshed index. Concurrent calls coalesce, and a debounce
+// window prevents a rapidly autosaving server from causing a parse storm.
+func (m *Manager) EnsureFresh(ctx context.Context) {
+	if !m.cfg.SaveIndexerEnabled {
+		return
+	}
+	_, fp, err := m.fingerprint()
+	if err != nil {
+		return
+	}
+	cached, err := m.loadCache()
+	if err != nil || cached.Fingerprint == fp {
+		// No cache yet (leave the first build to an explicit action) or already
+		// current — nothing to do.
+		return
+	}
+
+	m.autoMu.Lock()
+	if m.rebuildInFlight || time.Since(m.lastAutoRebuild) < autoRebuildDebounce {
+		m.autoMu.Unlock()
+		return
+	}
+	m.rebuildInFlight = true
+	m.lastAutoRebuild = time.Now()
+	m.autoMu.Unlock()
+
+	go func() {
+		defer func() {
+			m.autoMu.Lock()
+			m.rebuildInFlight = false
+			m.autoMu.Unlock()
+		}()
+		// Detach from the request context so a returning client does not cancel
+		// the rebuild mid-parse.
+		rebuildCtx, cancel := context.WithTimeout(context.Background(), time.Duration(m.cfg.SaveIndexTimeoutSeconds+30)*time.Second)
+		defer cancel()
+		_, _, _ = m.Rebuild(rebuildCtx)
+	}()
 }
 
 func (m *Manager) FindWorldDir() (string, error) {
@@ -400,7 +632,7 @@ func (m *Manager) callIndexer(ctx context.Context, worldDir string) (Index, erro
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return Index{}, fmt.Errorf("save indexer request failed: %w", err)
+		return Index{}, classifyIndexerRequestError(err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -409,45 +641,125 @@ func (m *Manager) callIndexer(ctx context.Context, worldDir string) (Index, erro
 	}
 	var envelope sidecarEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return Index{}, errors.New("save indexer returned a non-JSON response; verify the sav-cli version and inspect its text logs")
+		return Index{}, &IndexerError{
+			Code:    "parser_incompatible",
+			Summary: "save indexer returned a non-JSON response; verify the sav-cli version and inspect its text logs",
+		}
 	}
 	if resp.StatusCode >= 400 || !envelope.OK {
 		if envelope.Error != nil {
-			return Index{}, errors.New("save indexer failed; inspect the sav-cli text logs")
+			code := safeIndexerCode(envelope.Error.Code)
+			privatePaths := []string{worldDir, m.cfg.SaveIndexCacheDir, os.TempDir()}
+			if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+				privatePaths = append(privatePaths, homeDir)
+			}
+			detail := safeIndexerDetail(envelope.Error.Message, privatePaths...)
+			if detail != "" {
+				log.Printf("save indexer sidecar error code=%s detail=%q", code, detail)
+			}
+			exposedDetail := ""
+			if code != "" {
+				exposedDetail = detail
+			}
+			return Index{}, &IndexerError{Code: code, Detail: exposedDetail, Warnings: append([]string(nil), envelope.Warnings...)}
 		}
-		return Index{}, fmt.Errorf("save indexer returned status %d", resp.StatusCode)
+		return Index{}, &IndexerError{Code: "save_indexer_unavailable"}
 	}
 	var index Index
 	if err := json.Unmarshal(envelope.Data, &index); err != nil {
-		return Index{}, fmt.Errorf("decode save index response: %w", err)
+		return Index{}, &IndexerError{
+			Code:    "parser_incompatible",
+			Summary: "save indexer returned incompatible index data; verify the sav-cli version and inspect its text logs",
+		}
 	}
 	ensureSlices(&index)
 	return index, nil
 }
+
+func (m *Manager) withOodleStatus(ctx context.Context, status Status) Status {
+	if status.Enabled {
+		status.OodleAvailable = m.probeOodleAvailability(ctx)
+	}
+	return status
+}
+
+// probeOodleAvailability reads the sav-cli capability contract with a short,
+// independent timeout. Results, including an unknown result, are cached briefly
+// so frequently-polled status endpoints do not create a health-check storm.
+func (m *Manager) probeOodleAvailability(ctx context.Context) *bool {
+	m.oodleMu.Lock()
+	defer m.oodleMu.Unlock()
+
+	if !m.oodleAt.IsZero() && time.Since(m.oodleAt) < oodleHealthCacheTTL {
+		return copyBool(m.oodle)
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, oodleHealthTimeout)
+	defer cancel()
+	url := strings.TrimRight(m.cfg.SaveIndexerURL, "/") + "/health"
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+	if err != nil {
+		m.oodleAt = time.Now()
+		m.oodle = nil
+		return nil
+	}
+	resp, err := m.client.Do(req)
+	if err != nil {
+		m.oodleAt = time.Now()
+		m.oodle = nil
+		return nil
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Oodle *bool `json:"oodle"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		m.oodleAt = time.Now()
+		m.oodle = nil
+		return nil
+	}
+	m.oodleAt = time.Now()
+	if resp.StatusCode >= http.StatusBadRequest || !envelope.OK || envelope.Data.Oodle == nil {
+		m.oodle = nil
+		return nil
+	}
+	m.oodle = copyBool(envelope.Data.Oodle)
+	return copyBool(m.oodle)
+}
+
+func copyBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+const oodleUnavailableWarning = "sav-cli was built without cgo/Oodle support; Oodle-compressed (PlM) saves cannot be parsed. Use a release build with cgo enabled."
 
 func (m *Manager) cachePath() string {
 	return filepath.Join(m.cfg.SaveIndexCacheDir, "index-cache.json")
 }
 
 func (m *Manager) loadCache() (cacheFile, error) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+
 	path := m.cachePath()
 	st, err := os.Stat(path)
 	if err != nil {
-		m.cacheMu.Lock()
 		m.cache = nil
 		m.cacheLoaded = false
 		m.cacheMTime = time.Time{}
-		m.cacheMu.Unlock()
 		return cacheFile{}, err
 	}
 
-	m.cacheMu.Lock()
 	if m.cacheLoaded && m.cache != nil && m.cacheMTime.Equal(st.ModTime()) {
-		cached := *m.cache
-		m.cacheMu.Unlock()
-		return cached, nil
+		return *m.cache, nil
 	}
-	m.cacheMu.Unlock()
 
 	var cached cacheFile
 	b, err := os.ReadFile(path)
@@ -458,11 +770,9 @@ func (m *Manager) loadCache() (cacheFile, error) {
 		return cached, err
 	}
 	ensureSlices(&cached.Index)
-	m.cacheMu.Lock()
 	m.cache = &cached
 	m.cacheMTime = st.ModTime()
 	m.cacheLoaded = true
-	m.cacheMu.Unlock()
 	return cached, nil
 }
 
@@ -480,18 +790,40 @@ func (m *Manager) saveCache(fingerprint string, index Index, status Status) erro
 	if err != nil {
 		return err
 	}
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+
 	path := m.cachePath()
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	temporary, err := os.CreateTemp(m.cfg.SaveIndexCacheDir, ".index-cache-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(b); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
 	st, err := os.Stat(path)
 	if err == nil {
-		m.cacheMu.Lock()
 		copy := cached
 		m.cache = &copy
 		m.cacheMTime = st.ModTime()
 		m.cacheLoaded = true
-		m.cacheMu.Unlock()
 	}
 	return nil
 }
@@ -542,7 +874,10 @@ func findWorldDir(root string) (string, error) {
 
 func fingerprintWorld(worldDir string) (string, error) {
 	var files []string
-	for _, name := range []string{"Level.sav", "LevelMeta.sav"} {
+	// LevelMeta.sav is not consumed by the indexer and is rewritten by the
+	// server independently, so including it makes an otherwise current cache
+	// appear stale. Only fingerprint files that affect indexed entities.
+	for _, name := range []string{"Level.sav"} {
 		path := filepath.Join(worldDir, name)
 		if _, err := os.Stat(path); err == nil {
 			files = append(files, path)
@@ -605,11 +940,27 @@ func countsFor(index Index) Counts {
 	}
 }
 
-func appendUnique(items []string, value string) []string {
-	for _, item := range items {
-		if item == value {
-			return items
+func normalizeCachedStatus(status Status) Status {
+	if status.State == "error" && status.Stale {
+		status.State = "stale"
+		status.Error = ""
+		status.Warnings = appendUnique(status.Warnings, staleAfterRebuildFailureWarning)
+	}
+	return status
+}
+
+func appendUnique(items []string, values ...string) []string {
+	for _, value := range values {
+		found := false
+		for _, item := range items {
+			if item == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			items = append(items, value)
 		}
 	}
-	return append(items, value)
+	return items
 }

@@ -32,6 +32,20 @@ previous_dir="$(find "$tmp/previous" -mindepth 1 -maxdepth 1 -type d -print -qui
 candidate_dir="$(find "$tmp/candidate" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 [[ -n "$previous_dir" && -n "$candidate_dir" ]]
 
+fake_bin="$tmp/fake-bin"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "inspect" ]]; then
+  printf '%s\n' "${PALPANEL_FAKE_DOCKER_USER:?}"
+  exit 0
+fi
+printf 'unexpected fake docker invocation: %s\n' "$*" >&2
+exit 1
+EOF
+chmod +x "$fake_bin/docker"
+
 if [[ "$(id -u)" -eq 0 ]]; then
   useradd --system --no-create-home --shell /usr/sbin/nologin "$service_user"
 else
@@ -49,16 +63,26 @@ export PALPANEL_SKIP_SYSTEMD=1
 "$previous_dir/palpanelctl" install >/dev/null
 printf '# upgrade-preserve-config\n' >>"$PALPANEL_ETC_DIR/palpanel.env"
 mkdir -p \
+  "$PALPANEL_SYSTEM_DATA_DIR/docker-client" \
   "$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/SaveGames/0/world" \
+  "$PALPANEL_SYSTEM_DATA_DIR/logs" \
+  "$PALPANEL_SYSTEM_DATA_DIR/wineprefix" \
   "$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/Config/WindowsServer" \
   "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod" \
   "$PALPANEL_SYSTEM_DATA_DIR/backups"
 printf 'sqlite-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/palpanel.db"
 printf 'save-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/SaveGames/0/world/Level.sav"
+printf 'game-log-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/logs/palserver.log"
+printf 'wine-prefix-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/wineprefix/prefix.marker"
 printf 'palworld-config-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/Config/WindowsServer/PalWorldSettings.ini"
 printf 'mod-settings-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/server/Mods/PalModSettings.ini"
 printf 'mod-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod/Info.json"
 printf 'backup-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip"
+printf 'docker-client-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json"
+chmod 755 "$PALPANEL_SYSTEM_DATA_DIR/docker-client"
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown root:root "$PALPANEL_SYSTEM_DATA_DIR/docker-client"
+fi
 
 config_hash="$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')"
 database_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/palpanel.db" | awk '{print $1}')"
@@ -67,8 +91,20 @@ palworld_config_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/Co
 mod_settings_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/PalModSettings.ini" | awk '{print $1}')"
 mod_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod/Info.json" | awk '{print $1}')"
 backup_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip" | awk '{print $1}')"
+docker_client_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json" | awk '{print $1}')"
+game_log_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/logs/palserver.log" | awk '{print $1}')"
+wine_prefix_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/wineprefix/prefix.marker" | awk '{print $1}')"
 
-"$candidate_dir/palpanelctl" install >/dev/null
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown -R root:root \
+    "$PALPANEL_SYSTEM_DATA_DIR/server" \
+    "$PALPANEL_SYSTEM_DATA_DIR/logs" \
+    "$PALPANEL_SYSTEM_DATA_DIR/wineprefix"
+  PATH="$fake_bin:$PATH" PALPANEL_FAKE_DOCKER_USER=1000:989 \
+    "$candidate_dir/palpanelctl" install --docker >/dev/null
+else
+  "$candidate_dir/palpanelctl" install >/dev/null
+fi
 [[ "$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')" == "$config_hash" ]]
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/palpanel.db" | awk '{print $1}')" == "$database_hash" ]]
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/SaveGames/0/world/Level.sav" | awk '{print $1}')" == "$save_hash" ]]
@@ -76,6 +112,23 @@ backup_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip" | 
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/PalModSettings.ini" | awk '{print $1}')" == "$mod_settings_hash" ]]
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod/Info.json" | awk '{print $1}')" == "$mod_hash" ]]
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip" | awk '{print $1}')" == "$backup_hash" ]]
+[[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json" | awk '{print $1}')" == "$docker_client_hash" ]]
+[[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/logs/palserver.log" | awk '{print $1}')" == "$game_log_hash" ]]
+[[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/wineprefix/prefix.marker" | awk '{print $1}')" == "$wine_prefix_hash" ]]
+[[ "$(stat -c '%a' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "700" ]]
+if [[ "$(id -u)" -eq 0 ]]; then
+  [[ "$(stat -c '%U:%G' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "$service_user:$service_user" ]]
+  [[ "$(stat -c '%u:%g' "$PALPANEL_SYSTEM_DATA_DIR/server")" == "1000:989" ]]
+  [[ "$(stat -c '%u:%g' "$PALPANEL_SYSTEM_DATA_DIR/logs")" == "1000:989" ]]
+  [[ "$(stat -c '%u:%g' "$PALPANEL_SYSTEM_DATA_DIR/wineprefix")" == "1000:989" ]]
+  mount_mode="$(stat -c '%a' "$PALPANEL_SYSTEM_DATA_DIR/server")"
+  log_mode="$(stat -c '%a' "$PALPANEL_SYSTEM_DATA_DIR/logs/palserver.log")"
+  (( (8#$mount_mode & 070) == 070 ))
+  (( (8#$log_mode & 060) == 060 ))
+fi
+grep -Fxq "Environment=HOME=$PALPANEL_SYSTEM_DATA_DIR" "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -Fxq "Environment=DOCKER_CONFIG=$PALPANEL_SYSTEM_DATA_DIR/docker-client" "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -Fxq 'ProtectHome=true' "$PALPANEL_SYSTEMD_DIR/palpanel.service"
 [[ -L "$PALPANEL_INSTALL_ROOT/current" ]]
 [[ "$(readlink -f "$PALPANEL_INSTALL_ROOT/current")" == "$PALPANEL_INSTALL_ROOT/$(basename "$candidate_dir" | sed 's/^palpanel_//; s/_linux_amd64$//')" ]]
 

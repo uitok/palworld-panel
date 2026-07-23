@@ -27,6 +27,10 @@ const DefaultUE4SSArchiveSHA256 = "4b47d4bceddd2f561a4e395bfa00924ccfc945af576a2
 const DefaultUE4SSDownloadMaxMB = 64
 const DefaultAITranslationTimeoutSeconds = 90
 const DefaultMonitorRetentionDays = 7
+const DefaultCommunityServersAPIBaseURL = "https://api.battlemetrics.com"
+const DefaultCommunityServersCacheTTLSeconds = 60
+const DefaultCommunityServersStaleTTLSeconds = 86400
+const DefaultCommunityServersRateLimit = 30
 
 var DefaultDockerRunnerBaseImageMirrorPrefixes = []string{
 	"docker.m.daocloud.io",
@@ -67,6 +71,12 @@ type Config struct {
 	SteamWebAPIKeySource         string
 	SteamAPIBaseURL              string
 	SteamAPITimeoutSeconds       int
+	CommunityServersEnabled      bool
+	CommunityServersAPIBaseURL   string
+	CommunityServersProxyURL     string
+	CommunityServersCacheTTL     int
+	CommunityServersStaleTTL     int
+	CommunityServersRateLimit    int
 	SteamCMDDownloadURL          string
 	SteamCMDDownloadMaxBytes     int64
 	UE4SSVersion                 string
@@ -301,6 +311,12 @@ func Load() (Config, error) {
 		SteamWebAPIKeySource:         steamWebAPIKeySource,
 		SteamAPIBaseURL:              strings.TrimRight(env("PALPANEL_STEAM_API_BASE_URL", DefaultSteamAPIBaseURL), "/"),
 		SteamAPITimeoutSeconds:       envInt("PALPANEL_STEAM_API_TIMEOUT_SECONDS", DefaultSteamAPITimeoutSeconds),
+		CommunityServersEnabled:      envBool("PALPANEL_COMMUNITY_SERVERS_ENABLED", true),
+		CommunityServersAPIBaseURL:   strings.TrimRight(env("PALPANEL_COMMUNITY_SERVERS_API_BASE_URL", DefaultCommunityServersAPIBaseURL), "/"),
+		CommunityServersProxyURL:     strings.TrimSpace(os.Getenv("PALPANEL_COMMUNITY_SERVERS_PROXY_URL")),
+		CommunityServersCacheTTL:     envInt("PALPANEL_COMMUNITY_SERVERS_CACHE_TTL_SECONDS", DefaultCommunityServersCacheTTLSeconds),
+		CommunityServersStaleTTL:     envInt("PALPANEL_COMMUNITY_SERVERS_STALE_TTL_SECONDS", DefaultCommunityServersStaleTTLSeconds),
+		CommunityServersRateLimit:    envInt("PALPANEL_COMMUNITY_SERVERS_RATE_LIMIT", DefaultCommunityServersRateLimit),
 		SteamCMDDownloadURL:          strings.TrimSpace(env("PALPANEL_STEAMCMD_DOWNLOAD_URL", DefaultSteamCMDDownloadURL)),
 		SteamCMDDownloadMaxBytes:     int64(envInt("PALPANEL_STEAMCMD_DOWNLOAD_MAX_MB", DefaultSteamCMDDownloadMaxMB)) * 1024 * 1024,
 		UE4SSVersion:                 strings.TrimSpace(env("PALPANEL_UE4SS_VERSION", DefaultUE4SSVersion)),
@@ -346,6 +362,21 @@ func Load() (Config, error) {
 	}
 	if cfg.SteamAPITimeoutSeconds < 1 || cfg.SteamAPITimeoutSeconds > 300 {
 		return Config{}, fmt.Errorf("PALPANEL_STEAM_API_TIMEOUT_SECONDS must be between 1 and 300")
+	}
+	if err := validateHTTPBaseURL("PALPANEL_COMMUNITY_SERVERS_API_BASE_URL", cfg.CommunityServersAPIBaseURL); err != nil {
+		return Config{}, err
+	}
+	if err := validateProxyURL("PALPANEL_COMMUNITY_SERVERS_PROXY_URL", cfg.CommunityServersProxyURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.CommunityServersCacheTTL < 5 || cfg.CommunityServersCacheTTL > 3600 {
+		return Config{}, fmt.Errorf("PALPANEL_COMMUNITY_SERVERS_CACHE_TTL_SECONDS must be between 5 and 3600")
+	}
+	if cfg.CommunityServersStaleTTL < cfg.CommunityServersCacheTTL || cfg.CommunityServersStaleTTL > 7*24*60*60 {
+		return Config{}, fmt.Errorf("PALPANEL_COMMUNITY_SERVERS_STALE_TTL_SECONDS must be between the cache TTL and 604800")
+	}
+	if cfg.CommunityServersRateLimit < 1 || cfg.CommunityServersRateLimit > 60 {
+		return Config{}, fmt.Errorf("PALPANEL_COMMUNITY_SERVERS_RATE_LIMIT must be between 1 and 60")
 	}
 	if err := validateHTTPBaseURL("PALPANEL_STEAMCMD_DOWNLOAD_URL", cfg.SteamCMDDownloadURL); err != nil {
 		return Config{}, err
@@ -451,6 +482,15 @@ func (c Config) WorkshopModsDir() string {
 	return filepath.Join(c.ModsDir(), "Workshop")
 }
 
+// WorkshopSteamCMDConfigDir stores the Linux SteamCMD user-data directory used
+// for Docker/Wine Workshop downloads. SteamCMD keeps its machine authorization
+// under $HOME/Steam (not beside /opt/steamcmd), and some authorization files
+// live outside its config subdirectory, so the complete user-data tree must be
+// persisted between short-lived containers.
+func (c Config) WorkshopSteamCMDConfigDir() string {
+	return filepath.Join(c.DataDir, "steamcmd-workshop-config")
+}
+
 func (c Config) PalModSettingsPath() string {
 	return filepath.Join(c.ModsDir(), "PalModSettings.ini")
 }
@@ -512,6 +552,23 @@ func (c Config) AITranslationKeyPath() string {
 	return filepath.Join(c.DataDir, "secrets", "ai-translation.key")
 }
 
+func (c Config) NetworkProxyConfigPath() string {
+	return filepath.Join(c.DataDir, "secrets", "network-proxy.json")
+}
+
+func (c Config) SteamCMDProxyRestorePath() string {
+	return filepath.Join(c.DataDir, "secrets", "steamcmd-proxy-restore.json")
+}
+
+// SteamWorkshopCredentialsPath stores the Steam account and password used for
+// explicit SteamCMD Workshop authentication on native Windows and Linux/Docker. The file is
+// deliberately kept outside the SteamCMD installation so SteamCMD updates do
+// not replace it and so PalPanel can apply the same private-file policy used by
+// other managed secrets.
+func (c Config) SteamWorkshopCredentialsPath() string {
+	return filepath.Join(c.DataDir, "secrets", "steam-workshop-credentials.json")
+}
+
 func (c Config) EffectiveSteamWebAPIKey() string {
 	if key := strings.TrimSpace(c.SteamWebAPIKey); key != "" {
 		return key
@@ -565,8 +622,24 @@ func validateHTTPBaseURL(name, raw string) error {
 	return nil
 }
 
+func validateProxyURL(name, raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%s must be an absolute proxy URL without query or fragment", name)
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+		return nil
+	default:
+		return fmt.Errorf("%s must use http, https, socks5, or socks5h", name)
+	}
+}
+
 func validateScalarEnvironment() error {
-	for _, name := range []string{"PALPANEL_REQUIRE_AUTH", "PALPANEL_SAVE_INDEXER_ENABLED"} {
+	for _, name := range []string{"PALPANEL_REQUIRE_AUTH", "PALPANEL_SAVE_INDEXER_ENABLED", "PALPANEL_COMMUNITY_SERVERS_ENABLED"} {
 		raw := strings.TrimSpace(os.Getenv(name))
 		if raw == "" {
 			continue
@@ -579,6 +652,9 @@ func validateScalarEnvironment() error {
 		"PALPANEL_PALDEFENDER_REST_PORT",
 		"PALPANEL_MAX_UPLOAD_MB",
 		"PALPANEL_STEAM_API_TIMEOUT_SECONDS",
+		"PALPANEL_COMMUNITY_SERVERS_CACHE_TTL_SECONDS",
+		"PALPANEL_COMMUNITY_SERVERS_STALE_TTL_SECONDS",
+		"PALPANEL_COMMUNITY_SERVERS_RATE_LIMIT",
 		"PALPANEL_STEAMCMD_DOWNLOAD_MAX_MB",
 		"PALPANEL_UE4SS_DOWNLOAD_MAX_MB",
 		"PALPANEL_GAME_PORT",

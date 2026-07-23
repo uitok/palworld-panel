@@ -187,7 +187,7 @@ func newRunningWorldTestManager(t *testing.T, startSucceeds bool) (Manager, func
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
-  inspect) if [ -f %s ]; then echo exited; else echo running; fi ;;
+  inspect) if [ -f %s ]; then printf '%%s\n' '[{"RestartCount":0,"State":{"Status":"exited","OOMKilled":false,"ExitCode":0,"StartedAt":"","FinishedAt":""}}]'; else printf '%%s\n' '[{"RestartCount":0,"State":{"Status":"running","OOMKilled":false,"ExitCode":0,"StartedAt":"","FinishedAt":""}}]'; fi ;;
   stop) touch %s ;;
   rm) exit 0 ;;
   run) %s ;;

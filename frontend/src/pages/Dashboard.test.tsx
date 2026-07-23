@@ -30,7 +30,7 @@ describe('Dashboard world reset and stopped logs', () => {
       warnings: [], paths: {},
     });
     mocks.serverApi.getMetrics.mockResolvedValue({});
-    mocks.serverApi.getLogs.mockResolvedValue({ logs: 'last persisted line', source: 'file', available: true });
+    mocks.serverApi.getLogs.mockResolvedValue({ logs: 'last persisted line', source: 'paldefender-game', available: true });
     mocks.serverApi.getWorld.mockResolvedValue({
       active_world_id: 'ABC123', save_exists: true, last_modified: '2026-07-10T00:00:00Z', server_running: false, reset_available: true,
     });
@@ -47,7 +47,10 @@ describe('Dashboard world reset and stopped logs', () => {
     );
 
     expect(await screen.findByText('last persisted line')).toBeInTheDocument();
-    expect(screen.getByText('持久日志')).toBeInTheDocument();
+	expect(screen.getAllByText('游戏事件').length).toBeGreaterThan(0);
+	await waitFor(() => expect(mocks.serverApi.getLogs).toHaveBeenCalledWith(80, '', '', '', 'game'));
+	fireEvent.change(screen.getByLabelText('日志来源'), { target: { value: 'launcher' } });
+	await waitFor(() => expect(mocks.serverApi.getLogs).toHaveBeenCalledWith(80, '', '', '', 'launcher'));
     fireEvent.click(await screen.findByRole('button', { name: '重置世界' }));
     expect((await screen.findAllByText('ABC123')).length).toBeGreaterThan(0);
     const execute = screen.getByRole('button', { name: '执行重置' });

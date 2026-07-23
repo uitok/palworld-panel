@@ -11,9 +11,10 @@ func TestPalTemplateWriteReadListOverwriteAndDelete(t *testing.T) {
 	defer cleanup()
 	level := 50
 	partner := 3
+	awakening := true
 	template := PalTemplate{
 		PalID: "Anubis", Nickname: "Arena Anubis", Gender: "none", Level: &level,
-		PartnerSkillLevel: &partner, Shiny: boolPointer(true),
+		PartnerSkillLevel: &partner, Shiny: boolPointer(true), IsAwakening: &awakening,
 		IVs:          map[string]int{"Health": 100, "AttackShot": 90, "Defense": 80},
 		PalSouls:     map[string]int{"Health": 10, "Attack": 10},
 		ActiveSkills: []string{"SandTornado", "RockLance"}, Passives: []string{"Legend", "CraftSpeed_up3"},
@@ -23,7 +24,7 @@ func TestPalTemplateWriteReadListOverwriteAndDelete(t *testing.T) {
 		t.Fatalf("WritePalTemplate = %#v, %v", info, err)
 	}
 	read, err := manager.ReadPalTemplate("reward_anubis.json")
-	if err != nil || read.Gender != "None" || read.Level == nil || *read.Level != 50 || len(read.Passives) != 2 {
+	if err != nil || read.Gender != "None" || read.Level == nil || *read.Level != 50 || read.IsAwakening == nil || !*read.IsAwakening || len(read.Passives) != 2 {
 		t.Fatalf("ReadPalTemplate = %#v, %v", read, err)
 	}
 	read.Nickname = "Updated"
@@ -64,6 +65,38 @@ func TestPalTemplateValidationRejectsUnsafeOrInvalidValues(t *testing.T) {
 		if _, err := manager.WritePalTemplate(name, test.template); err == nil {
 			t.Errorf("%s template should fail", test.name)
 		}
+	}
+}
+
+func TestPalTemplateValidationUsesLegalGameLimits(t *testing.T) {
+	maximumPartnerSkill := 5
+	maximumCondensedPals := 116
+	valid := PalTemplate{
+		PalID:             "Anubis",
+		PartnerSkillLevel: &maximumPartnerSkill,
+		CondensedPals:     &maximumCondensedPals,
+		IVs:               map[string]int{"Health": 100, "AttackMelee": 100, "AttackShot": 100, "Defense": 100},
+		PalSouls:          map[string]int{"Health": 20, "Attack": 20, "Defense": 20, "CraftSpeed": 20},
+	}
+	if err := validatePalTemplate(&valid); err != nil {
+		t.Fatalf("legal maximum template should pass: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		template PalTemplate
+	}{
+		{"partner-skill", PalTemplate{PalID: "Anubis", PartnerSkillLevel: intPointer(6)}},
+		{"condensed-pals", PalTemplate{PalID: "Anubis", CondensedPals: intPointer(117)}},
+		{"iv", PalTemplate{PalID: "Anubis", IVs: map[string]int{"Health": 101}}},
+		{"soul", PalTemplate{PalID: "Anubis", PalSouls: map[string]int{"Health": 21}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validatePalTemplate(&test.template); err == nil {
+				t.Fatal("out-of-range template should fail")
+			}
+		})
 	}
 }
 
@@ -111,3 +144,4 @@ func TestReadPalTemplateRejectsTrailingJSON(t *testing.T) {
 }
 
 func boolPointer(value bool) *bool { return &value }
+func intPointer(value int) *int    { return &value }

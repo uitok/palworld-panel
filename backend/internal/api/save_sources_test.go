@@ -176,6 +176,50 @@ func TestExtractSaveArchiveRejectsUnsafeEntries(t *testing.T) {
 	}
 }
 
+func TestExtractSaveArchiveExcludesBackupAndHistoryDirectories(t *testing.T) {
+	archive := writeTestZIP(t, []zipEntry{
+		{name: "live/Level.sav", body: "live"},
+		{name: "nested/backup/old/Level.sav", body: "backup"},
+		{name: "nested/BACKUPS/old/Level.sav", body: "backups"},
+		{name: "nested/History/old/Level.sav", body: "history"},
+	})
+	destination := filepath.Join(t.TempDir(), "files")
+	if err := extractSaveArchive(archive, destination, 1024, saveArchiveZIP); err != nil {
+		t.Fatalf("extractSaveArchive returned error: %v", err)
+	}
+	for _, excluded := range []string{
+		filepath.Join(destination, "nested", "backup"),
+		filepath.Join(destination, "nested", "BACKUPS"),
+		filepath.Join(destination, "nested", "History"),
+	} {
+		if _, err := os.Stat(excluded); !os.IsNotExist(err) {
+			t.Errorf("excluded directory exists at %s: %v", excluded, err)
+		}
+	}
+}
+
+func TestExcludedArchiveEntriesStillCountTowardExpandedSizeLimit(t *testing.T) {
+	entries := []zipEntry{
+		{name: "live/Level.sav", body: "live"},
+		{name: "backup/large.bin", body: strings.Repeat("x", 32)},
+	}
+	for _, test := range []struct {
+		name    string
+		archive func(*testing.T, []zipEntry) string
+		format  saveArchiveFormat
+	}{
+		{name: "zip", archive: writeTestZIP, format: saveArchiveZIP},
+		{name: "tar gzip", archive: func(t *testing.T, entries []zipEntry) string { return writeTestTAR(t, entries, true) }, format: saveArchiveTARGzip},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := extractSaveArchive(test.archive(t, entries), filepath.Join(t.TempDir(), "files"), 8, test.format)
+			if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+				t.Fatalf("error = %v, want expanded size rejection", err)
+			}
+		})
+	}
+}
+
 func TestExtractSaveTARRejectsUnsafeEntries(t *testing.T) {
 	archive := writeTestTAR(t, []zipEntry{{name: "link", body: "target", mode: os.ModeSymlink | 0o777}}, false)
 	err := extractSaveArchive(archive, filepath.Join(t.TempDir(), "files"), 1024, saveArchiveTAR)

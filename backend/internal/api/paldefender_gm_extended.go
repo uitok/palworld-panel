@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"palpanel/internal/paldefender"
+	"palpanel/internal/pallocalize"
 )
 
 func (s Server) palDefenderGMProgression(c *gin.Context) {
@@ -82,6 +84,39 @@ func (s Server) palDefenderGMGivePals(c *gin.Context) {
 	})
 }
 
+func (s Server) palDefenderGMGiveCustomPal(c *gin.Context) {
+	var request paldefender.PalTemplate
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RESTGiveCustomPal(ctx, c.Param("id"), request)
+	})
+}
+
+func (s Server) palDefenderGMGiveCustomPals(c *gin.Context) {
+	var request paldefender.GiveCustomPalsRequest
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RESTGiveCustomPals(ctx, c.Param("id"), request.Template, request.Count)
+	})
+}
+
+func (s Server) palDefenderGMReleasePal(c *gin.Context) {
+	var request paldefender.ReleasePalRequest
+	if err := bindPalDefenderGMJSON(c, &request); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	s.runPalDefenderGMWrite(c, request, func(ctx context.Context) (any, error) {
+		return s.defender.RCONReleasePal(ctx, c.Param("id"), request)
+	})
+}
+
 func (s Server) palDefenderGMGivePalTemplates(c *gin.Context) {
 	var request paldefender.GivePalTemplatesRequest
 	if err := bindPalDefenderGMJSON(c, &request); err != nil {
@@ -95,7 +130,7 @@ func (s Server) palDefenderGMGivePalTemplates(c *gin.Context) {
 
 func (s Server) palDefenderGMExportPals(c *gin.Context) {
 	s.runPalDefenderGMWrite(c, gin.H{"player": c.Param("id")}, func(ctx context.Context) (any, error) {
-		return s.defender.RCONExportPals(ctx, c.Param("id"))
+		return s.defender.ExportPals(ctx, c.Param("id"))
 	})
 }
 
@@ -148,6 +183,44 @@ func (s Server) palDefenderGMTechnologyCatalog(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"catalog": response, "reference_url": "https://paldeck.cc/technology"})
+}
+
+func (s Server) palDefenderGMLocalTechnologyCatalog(c *gin.Context) {
+	limit, err := parseGMCatalogLimit(c)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	items := pallocalize.SearchTechnologies(c.Query("q"), limit)
+	ok(c, gin.H{"items": items, "returned": len(items)})
+}
+
+func (s Server) palDefenderGMPalCatalog(c *gin.Context) {
+	limit, err := parseGMCatalogLimit(c)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	items := pallocalize.SearchPals(c.Query("q"), limit)
+	ok(c, gin.H{"items": items, "returned": len(items)})
+}
+
+func (s Server) palDefenderGMPassiveCatalog(c *gin.Context) {
+	limit, err := parseGMCatalogLimit(c)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	items := pallocalize.SearchPassives(c.Query("q"), limit)
+	ok(c, gin.H{"items": items, "returned": len(items)})
+}
+
+func parseGMCatalogLimit(c *gin.Context) (int, error) {
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	if err != nil || limit < 1 || limit > 5000 {
+		return 0, errors.New("limit must be between 1 and 5000")
+	}
+	return limit, nil
 }
 
 func (s Server) palDefenderGMSkinCatalog(c *gin.Context) {

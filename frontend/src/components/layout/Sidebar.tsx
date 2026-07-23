@@ -4,6 +4,7 @@ import { ChevronDown, LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react
 import { useServerStore } from '../../store/useServerStore';
 import { appRoutes, type AppRoute } from '../../routes';
 import { appConfig } from '../../config/defaults';
+import { useI18n, type TranslationKey } from '../../i18n';
 
 interface SidebarProps {
   mobile?: boolean;
@@ -19,29 +20,36 @@ const formatUptime = (seconds?: number) => {
 
 interface SidebarEntry {
   id: string;
-  label: string;
+  labelKey: TranslationKey;
   routeIDs: string[];
 }
 
-const sidebarGroups: Array<{ id: string; title: string; entries: SidebarEntry[] }> = [
-  { id: 'setup', title: '开始', entries: [{ id: 'setup', label: '开服向导', routeIDs: ['setup'] }] },
-  { id: 'workspace', title: '工作台', entries: [{ id: 'server-center', label: '服务器中心', routeIDs: ['dashboard', 'monitor'] }] },
+const sidebarGroups: Array<{ id: string; titleKey: TranslationKey; entries: SidebarEntry[] }> = [
+  { id: 'setup', titleKey: 'nav.setupGroup', entries: [{ id: 'setup', labelKey: 'nav.setup', routeIDs: ['setup'] }] },
+  {
+    id: 'workspace',
+    titleKey: 'nav.workspaceGroup',
+    entries: [
+      { id: 'server-center', labelKey: 'nav.serverCenter', routeIDs: ['dashboard', 'monitor'] },
+      { id: 'community-servers', labelKey: 'route.communityServers', routeIDs: ['community-servers'] },
+    ],
+  },
   {
     id: 'world',
-    title: '世界管理',
+    titleKey: 'nav.worldGroup',
     entries: [
-      { id: 'players-world', label: '玩家与世界', routeIDs: ['player-center', 'world-archive'] },
-      { id: 'saves-breeding', label: '存档管理工具', routeIDs: ['save-sources', 'pal-inventory', 'breeding', 'live-map'] },
-      { id: 'mods', label: 'Mod 管理', routeIDs: ['mods'] },
+      { id: 'players-world', labelKey: 'nav.playersWorld', routeIDs: ['player-center', 'world-archive'] },
+      { id: 'saves-breeding', labelKey: 'nav.saveTools', routeIDs: ['save-sources', 'pal-inventory', 'breeding', 'live-map'] },
+      { id: 'mods', labelKey: 'nav.mods', routeIDs: ['mods'] },
     ],
   },
   {
     id: 'system',
-    title: '运维与安全',
+    titleKey: 'nav.systemGroup',
     entries: [
-      { id: 'backup-tasks', label: '备份计划', routeIDs: ['backups', 'tasks'] },
-      { id: 'security-audit', label: '安全与审计', routeIDs: ['security', 'banlist', 'audit'] },
-      { id: 'settings', label: '系统设置', routeIDs: ['settings'] },
+      { id: 'backup-tasks', labelKey: 'nav.backupTasks', routeIDs: ['backups', 'tasks'] },
+      { id: 'security-audit', labelKey: 'nav.securityAudit', routeIDs: ['security', 'banlist', 'audit'] },
+      { id: 'settings', labelKey: 'nav.settings', routeIDs: ['settings'] },
     ],
   },
 ];
@@ -52,6 +60,7 @@ const routeIsActive = (route: AppRoute, currentPath: string) =>
   currentPath === route.path || Boolean(route.activePaths?.includes(currentPath));
 
 export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) => {
+  const { t } = useI18n();
   const { isSidebarCollapsed, setIsSidebarCollapsed, session, logout, status, metrics } = useServerStore();
   const location = useLocation();
   const collapsed = !mobile && isSidebarCollapsed;
@@ -90,7 +99,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
   return (
     <aside className={`pp-rail ${mobile ? 'is-mobile' : ''} ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="pp-brandmark">
-        <NavLink to="/dashboard" onClick={onNavigate} className="pp-brandmark__logo" aria-label={`${appConfig.brand} 总览`}>
+        <NavLink to="/dashboard" onClick={onNavigate} className="pp-brandmark__logo" aria-label={t('nav.overview', { brand: appConfig.brand })}>
           <img src="/brand/palpanel-mark.svg" alt="" width="32" height="32" />
         </NavLink>
         <NavLink to="/dashboard" onClick={onNavigate} className="pp-brandmark__copy" aria-hidden={collapsed}>
@@ -102,18 +111,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
             type="button"
             onClick={() => setIsSidebarCollapsed(!collapsed)}
             className="pp-rail-toggle"
-            title={collapsed ? '展开侧边栏' : '收起侧边栏'}
-            aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+            title={collapsed ? t('nav.expand') : t('nav.collapse')}
+            aria-label={collapsed ? t('nav.expand') : t('nav.collapse')}
           >
             {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
           </button>
         )}
       </div>
 
-      <nav className="pp-nav" aria-label="主导航">
+      <nav className="pp-nav" aria-label={t('nav.main')}>
         {sidebarGroups.map((group) => (
           <React.Fragment key={group.id}>
-            <div className="pp-nav__group">{group.title}</div>
+            <div className="pp-nav__group">{t(group.titleKey)}</div>
             {group.entries.map((entry) => {
               const routes = entry.routeIDs.map((routeID) => routesByID.get(routeID)).filter((route): route is AppRoute => Boolean(route));
               const primaryRoute = routes[0];
@@ -125,11 +134,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
                     key={entry.id}
                     to={primaryRoute.path}
                     onClick={onNavigate}
-                    title={collapsed ? entry.label : undefined}
+                    title={collapsed ? t(entry.labelKey) : undefined}
                     className={`pp-nav__item ${active ? 'is-active' : ''}`}
                   >
                     {primaryRoute.icon}
-                    <span className="pp-nav__label pp-truncate">{entry.label}</span>
+                    <span className="pp-nav__label pp-truncate">{t(entry.labelKey)}</span>
                   </NavLink>
                 );
               }
@@ -144,7 +153,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
                     aria-expanded={expanded}
                   >
                     {primaryRoute.icon}
-                    <span className="pp-nav__label pp-truncate">{entry.label}</span>
+                    <span className="pp-nav__label pp-truncate">{t(entry.labelKey)}</span>
                     <ChevronDown size={14} className={`pp-nav__chevron ${expanded ? 'is-open' : ''}`} />
                   </button>
                   {expanded && (
@@ -156,7 +165,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
                           onClick={onNavigate}
                           className={`pp-nav__subitem ${routeIsActive(route, currentPath) ? 'is-active' : ''}`}
                         >
-                          {route.navLabel}
+                          {t(route.titleKey)}
                         </NavLink>
                       ))}
                     </div>
@@ -169,15 +178,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
       </nav>
 
       {!collapsed && (
-        <section className="pp-heartbeat" aria-label="服务器心跳">
+        <section className="pp-heartbeat" aria-label={t('nav.serverHeartbeat')}>
           <div className="pp-heartbeat__top">
             <span className={`pp-pulse ${running ? '' : 'is-down'}`} />
-            <span className="pp-heartbeat__label">服务器心跳</span>
-            <span className="pp-heartbeat__state">{running ? '运行中' : '已停止'}</span>
+            <span className="pp-heartbeat__label">{t('nav.serverHeartbeat')}</span>
+            <span className="pp-heartbeat__state">{running ? t('nav.running') : t('nav.stopped')}</span>
           </div>
           <div className="pp-heartbeat__meta">
-            <span><strong>{online}/{capacity}</strong>在线</span>
-            <span className="pp-right"><strong>{formatUptime(metrics?.uptime)}</strong>运行时间</span>
+            <span><strong>{online}/{capacity}</strong>{t('nav.online')}</span>
+            <span className="pp-right"><strong>{formatUptime(metrics?.uptime)}</strong>{t('nav.uptime')}</span>
           </div>
         </section>
       )}
@@ -186,9 +195,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobile = false, onNavigate }) 
         <span className="pp-rail-account__avatar">{(session?.name || appConfig.brand).slice(0, 2).toUpperCase()}</span>
         <span className="pp-rail-account__copy">
           <strong>{session?.name || 'Admin'}</strong>
-          <span>管理员会话</span>
+          <span>{t('nav.adminSession')}</span>
         </span>
-        <button type="button" onClick={() => void logout()} className="pp-rail-account__logout" title="退出登录" aria-label="退出登录">
+        <button type="button" onClick={() => void logout()} className="pp-rail-account__logout" title={t('nav.logout')} aria-label={t('nav.logout')}>
           <LogOut size={15} />
         </button>
       </div>

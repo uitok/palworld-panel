@@ -79,7 +79,7 @@ func TestOfficialOneDotZeroRESTReadContracts(t *testing.T) {
 	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		responses := map[string]any{
 			"/v1/api/info": map[string]any{
-				"version": "v1.0.0.81201", "servername": "PalPanel", "description": "test", "worldguid": "world-guid",
+				"version": "v1.0.1.81201", "servername": "PalPanel", "description": "test", "worldguid": "world-guid",
 			},
 			"/v1/api/players": map[string]any{"players": []any{map[string]any{
 				"name": "Player", "accountName": "account", "playerId": "player-id", "userId": "steam-id",

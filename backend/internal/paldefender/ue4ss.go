@@ -398,7 +398,11 @@ func (m Manager) downloadPinnedUE4SSOnce(ctx context.Context, destination string
 	if err != nil {
 		return err
 	}
-	response, err := m.client.Do(request)
+	client, err := m.publicHTTPClient()
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}

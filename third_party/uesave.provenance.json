@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "repository_url": "https://github.com/trumank/uesave",
+  "commit": "a5271781df0ed021d72e5ad6eab1c59d5199451c",
+  "git_tree_oid": "d8fc034a4ef57ce75608f5fa4aa2ada8f02e741d",
+  "git_tree_manifest_sha256": "285a17b371edb2308d135560dc0680e54bbe9b9cec5be43160739276275f4863",
+  "git_mode_counts": {
+    "100644": 69,
+    "120000": 2
+  },
+  "git_mode_exceptions": [
+    "120000 uesave/README.md -> ../README.md",
+    "120000 uesave_cli/README.md -> ../README.md"
+  ],
+  "windows_snapshot_symlink_handling": "The two upstream mode-120000 entries are stored as regular files containing the exact Git link blob '../README.md' because the pristine snapshot has no .git metadata and Windows tar could not create symbolic links.",
+  "retrieval_date": "2026-07-22",
+  "archive_url": "https://codeload.github.com/trumank/uesave/tar.gz/a5271781df0ed021d72e5ad6eab1c59d5199451c",
+  "archive_sha256": "78f1293202411e42c2da1620e2a6628e291b20555e92a79cba87907f79c4615f",
+  "snapshot_manifest_algorithm": "SHA-256 of UTF-8 lines '<file-sha256>  <byte-count>  <forward-slash-path>\\n', sorted by ordinal path",
+  "snapshot_manifest_sha256": "0e8afe6ab9e90ceb00673f7356eced2f41a6be117f16e068c4ac2b9427ac8044",
+  "snapshot_file_count": 71,
+  "snapshot_size_bytes": 1461565,
+  "expected_license": "MIT; complete upstream text is preserved in LICENSE.",
+  "standalone_license_file": true,
+  "license_material": "LICENSE",
+  "license_material_sha256": "deeabbe360012f52f145850eece6571b69b79f3b6a900872bf1176859ad0f64b",
+  "verification_commands": [
+    "git -C .cache/task-5a/uesave-git rev-parse a5271781df0ed021d72e5ad6eab1c59d5199451c^{commit}",
+    "git -C .cache/task-5a/uesave-git rev-parse a5271781df0ed021d72e5ad6eab1c59d5199451c^{tree}",
+    "Get-FileHash .cache/task-5a/uesave-a527178.tar.gz -Algorithm SHA256",
+    "& .\\scripts\\verify-uid-remapper-sources.ps1"
+  ]
+}

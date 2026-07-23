@@ -1,8 +1,8 @@
 name: astrbot_plugin_palpanel
 display_name: PalPanel 幻兽帕鲁助手
-desc: 连接 PalPanel，为 QQ 群提供角色绑定、签到积分和配种计算入口。
-short_desc: PalPanel 角色绑定、签到积分与配种助手。
-version: 0.1.0
+desc: 连接 PalPanel，为 QQ 群提供角色绑定、签到积分、配种计算、社区服查询和安全服务器运维。
+short_desc: PalPanel 查询、运维与配种助手。
+version: 0.2.0
 author: PalPanel
 repo: https://github.com/uitok/palworld-panel
 support_platforms:

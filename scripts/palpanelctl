@@ -18,6 +18,7 @@ opt_root="${PALPANEL_INSTALL_ROOT:-/opt/palpanel}"
 etc_dir="${PALPANEL_ETC_DIR:-/etc/palpanel}"
 system_data_dir="${PALPANEL_SYSTEM_DATA_DIR:-/var/lib/palpanel}"
 systemd_dir="${PALPANEL_SYSTEMD_DIR:-/etc/systemd/system}"
+bin_link="${PALPANEL_BIN_LINK:-/usr/local/bin/palpanelctl}"
 service_user="${PALPANEL_SERVICE_USER:-palpanel}"
 test_mode="${PALPANEL_TEST_MODE:-0}"
 
@@ -227,11 +228,11 @@ supervise() {
   fi
 
   rotate_log "$log_dir/palcalc-bridge.log"
-  PALCALC_BRIDGE_URLS="http://127.0.0.1:$palcalc_port" PALCALC_BRIDGE_CONCURRENCY=1 \
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 PALCALC_BRIDGE_URLS="http://127.0.0.1:$palcalc_port" PALCALC_BRIDGE_CONCURRENCY=1 \
     "$palcalc_bin" >>"$log_dir/palcalc-bridge.log" 2>&1 &
   printf '%s\n' "$!" >"$runtime_dir/palcalc-bridge.pid"
   if ! wait_for_health "$palcalc_health_url" "$runtime_dir/palcalc-bridge.pid" 90; then
-    printf 'palcalc-bridge failed its health check\n' >&2
+    printf 'palcalc-bridge failed its health check; inspect %s\n' "$log_dir/palcalc-bridge.log" >&2
     return 1
   fi
 
@@ -339,6 +340,94 @@ show_config() {
   printf '%s\n' "$path"
 }
 
+steam_login() {
+  local account_name="${1:-}"
+  [[ $# -eq 1 ]] || fail "usage: palpanelctl steam-login STEAM_ACCOUNT"
+  [[ "$account_name" =~ ^[A-Za-z0-9_]{3,64}$ ]] || fail "Steam account must contain 3-64 ASCII letters, digits, or underscores"
+  command -v docker >/dev/null 2>&1 || fail "docker is required for Linux SteamCMD login"
+
+  local path
+  local image
+  local data_dir
+  local auth_dir
+  local owner_uid
+  local owner_gid
+  local bridge_pid=""
+  local bridge_file=""
+  local -a proxy_args=()
+  path="$(config_path)"
+  image="$(read_config_value PALPANEL_DOCKER_IMAGE "$path")"
+  [[ -n "$image" ]] || image="palworld-wine-runner:local"
+  if system_mode; then
+    data_dir="$system_data_dir"
+    owner_uid="$(id -u "$service_user")"
+    owner_gid="$(id -g "$service_user")"
+  else
+    data_dir="$portable_data"
+    owner_uid="$(id -u)"
+    owner_gid="$(id -g)"
+  fi
+  auth_dir="$data_dir/steamcmd-workshop-config"
+  mkdir -p "$auth_dir"
+  chmod 700 "$auth_dir"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "$owner_uid:$owner_gid" "$auth_dir"
+  fi
+
+  docker image inspect "$image" >/dev/null 2>&1 || fail "Docker/Wine runner image $image is missing; install or update the server from PalPanel first"
+
+  mkdir -p "$runtime_dir" "$log_dir"
+  bridge_file="$runtime_dir/steam-proxy-bridge.$BASHPID"
+  rm -f "$bridge_file"
+  PALPANEL_DATA_DIR="$data_dir" "$backend_bin" network-proxy-bridge --config "$path" --address-file "$bridge_file" >>"$log_dir/controller.log" 2>&1 &
+  bridge_pid="$!"
+  for _ in $(seq 1 50); do
+    [[ -s "$bridge_file" ]] && break
+    kill -0 "$bridge_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+
+  local proxy_name
+  local proxy_value
+  if [[ -s "$bridge_file" ]]; then
+    proxy_value="http://$(tr -d '\r\n' <"$bridge_file")"
+    proxy_args+=("--network" "host")
+    for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+      proxy_args+=("-e" "$proxy_name=$proxy_value")
+    done
+  else
+    wait "$bridge_pid" 2>/dev/null || true
+    bridge_pid=""
+    for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+      proxy_value="${!proxy_name:-}"
+      [[ -n "$proxy_value" ]] && proxy_args+=("-e" "$proxy_name")
+    done
+  fi
+
+  printf 'SteamCMD will now request the password and Steam Guard code locally. PalPanel will not receive them.\n'
+  set +e
+  docker run --rm -it \
+    --add-host host.docker.internal:host-gateway \
+    -e "PALPANEL_HOST_UID=$owner_uid" \
+    -e "PALPANEL_HOST_GID=$owner_gid" \
+    -v "$auth_dir:/root/Steam" \
+    "${proxy_args[@]}" \
+    "$image" steam-auth-login "$account_name"
+  local docker_status="$?"
+  set -e
+  if [[ -n "$bridge_pid" ]]; then
+    kill -TERM "$bridge_pid" 2>/dev/null || true
+    wait "$bridge_pid" 2>/dev/null || true
+  fi
+  rm -f "$bridge_file"
+  chmod 700 "$auth_dir"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown -R "$owner_uid:$owner_gid" "$auth_dir"
+  fi
+  printf 'SteamCMD exited. Return to Mod Management and click Verify login.\n'
+  return "$docker_status"
+}
+
 require_root() {
   [[ "$test_mode" == "1" ]] && return 0
   [[ "$(id -u)" -eq 0 ]] || fail "this command must be run as root"
@@ -384,6 +473,121 @@ set_config_value() {
   mv -f "$temporary" "$path"
 }
 
+resolve_system_path() {
+  local value="$1"
+  if [[ "$value" == /* ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s/%s\n' "$system_data_dir" "$value"
+  fi
+}
+
+configured_system_path() {
+  local name="$1"
+  local fallback="$2"
+  local value
+  value="$(read_config_value "$name" "$etc_dir/palpanel.env")"
+  [[ -n "$value" ]] || value="$fallback"
+  resolve_system_path "$value"
+}
+
+path_is_child_or_same() {
+  local path="$1"
+  local parent="$2"
+  [[ "$path" == "$parent" || "$path" == "$parent/"* ]]
+}
+
+docker_container_user() {
+  local docker_bin="$1"
+  local container="$2"
+  local configured_user
+  configured_user="$("$docker_bin" inspect --format '{{.Config.User}}' "$container" 2>/dev/null || true)"
+  configured_user="${configured_user//$'\r'/}"
+  configured_user="${configured_user//$'\n'/}"
+  case "$configured_user" in
+    ''|root|0|0:0)
+      return 1
+      ;;
+    *[!0-9:]*|*:*:*)
+      return 1
+      ;;
+  esac
+  local uid="${configured_user%%:*}"
+  local gid="$configured_user"
+  if [[ "$configured_user" != *:* ]]; then
+    gid="$(id -g "$service_user")"
+  else
+    gid="${configured_user##*:}"
+  fi
+  [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s:%s\n' "$uid" "$gid"
+}
+
+prepare_docker_mount() {
+  local path="$1"
+  local container_owner="$2"
+  if [[ -L "$path" ]]; then
+    fail "refusing symbolic link for Docker game mount: $path"
+  fi
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    fail "Docker game mount is not a directory: $path"
+  fi
+  if [[ ! -e "$path" ]]; then
+    mkdir -p "$path"
+    chown "$service_user:$service_user" "$path"
+  elif [[ -n "$container_owner" ]]; then
+    chown -R --no-dereference "$container_owner" "$path"
+    chmod -R g+rwX "$path"
+  fi
+}
+
+configure_data_permissions() {
+  local docker_access="$1"
+  local config_path="$etc_dir/palpanel.env"
+  if (( ! docker_access )); then
+    chown -R --no-dereference "$service_user:$service_user" "$system_data_dir"
+    return
+  fi
+
+  local server_dir
+  local logs_dir
+  local wine_prefix_dir
+  local data_dir
+  local docker_container
+  local docker_bin
+  local container_owner=""
+  data_dir="$(configured_system_path PALPANEL_DATA_DIR "$system_data_dir")"
+  server_dir="$(configured_system_path PALPANEL_SERVER_DIR "$data_dir/server")"
+  logs_dir="$(configured_system_path PALPANEL_LOGS_DIR "$data_dir/logs")"
+  wine_prefix_dir="$(configured_system_path PALPANEL_WINE_PREFIX_DIR "$data_dir/wineprefix")"
+  docker_container="$(read_config_value PALPANEL_DOCKER_CONTAINER "$config_path")"
+  [[ -n "$docker_container" ]] || docker_container="palworld-wine-server"
+  docker_bin="$(read_config_value PALPANEL_DOCKER_BIN "$config_path")"
+  [[ -n "$docker_bin" ]] || docker_bin="docker"
+
+  if container_owner="$(docker_container_user "$docker_bin" "$docker_container")"; then
+    :
+  else
+    printf 'Docker container %s is not available or has no numeric user; preserving existing game mount ownership.\n' "$docker_container" >&2
+  fi
+
+  prepare_docker_mount "$server_dir" "$container_owner"
+  prepare_docker_mount "$logs_dir" "$container_owner"
+  prepare_docker_mount "$wine_prefix_dir" "$container_owner"
+
+  chown root:"$service_user" "$system_data_dir"
+  chmod 750 "$system_data_dir"
+  local find_args=("$system_data_dir" -mindepth 1)
+  local mount
+  for mount in "$server_dir" "$logs_dir" "$wine_prefix_dir"; do
+    if path_is_child_or_same "$mount" "$system_data_dir"; then
+      find_args+=( ! -path "$mount" ! -path "$mount/*" )
+    fi
+  done
+  find_args+=( -exec chown --no-dereference "$service_user:$service_user" {} + )
+  find "${find_args[@]}"
+}
+
 install_system() {
   require_root
   require_binary "$backend_bin"
@@ -412,9 +616,24 @@ install_system() {
   local version_dir="$opt_root/$version"
   local staging="$opt_root/.${version}.tmp.$BASHPID"
   rm -rf "$staging"
+  local docker_config_dir="$system_data_dir/docker-client"
   mkdir -p "$staging" "$etc_dir" "$system_data_dir" "$systemd_dir"
   chmod 755 "$opt_root"
-  chmod 750 "$etc_dir" "$system_data_dir"
+  chmod 750 "$etc_dir"
+  if [[ "$test_mode" != "1" ]]; then
+    # Lock the parent before validation so the service user cannot swap the child entry.
+    chown root:root "$system_data_dir"
+  fi
+  chmod 750 "$system_data_dir"
+  if [[ -L "$docker_config_dir" ]]; then
+    fail "refusing symbolic link for Docker client directory: $docker_config_dir"
+  fi
+  if [[ -e "$docker_config_dir" ]]; then
+    [[ -d "$docker_config_dir" ]] || fail "Docker client path is not a directory: $docker_config_dir"
+  else
+    mkdir "$docker_config_dir"
+  fi
+  chmod 700 "$docker_config_dir"
   local item
   for item in bin backend systemd config licenses LICENSE README.md THIRD_PARTY_LICENSES.txt palpanelctl; do
     [[ -e "$package_dir/$item" ]] && cp -a "$package_dir/$item" "$staging/"
@@ -426,6 +645,11 @@ install_system() {
   rm -f "$opt_root/.current.new"
   ln -s "$version_dir" "$opt_root/.current.new"
   mv -Tf "$opt_root/.current.new" "$opt_root/current"
+
+  if [[ "$test_mode" != "1" ]]; then
+    mkdir -p "$(dirname -- "$bin_link")"
+    ln -sfn "$opt_root/current/palpanelctl" "$bin_link"
+  fi
 
   if [[ "$test_mode" != "1" ]]; then
     if ! id "$service_user" >/dev/null 2>&1; then
@@ -450,7 +674,8 @@ install_system() {
   chmod 600 "$etc_dir/palpanel.env"
   if [[ "$test_mode" != "1" ]]; then
     chown "$service_user:$service_user" "$etc_dir/palpanel.env"
-    chown -R "$service_user:$service_user" "$system_data_dir"
+    chown "$service_user:$service_user" "$docker_config_dir"
+    configure_data_permissions "$docker_access"
   fi
 
   sed -e "s|/opt/palpanel|$opt_root|g" -e "s|/etc/palpanel|$etc_dir|g" -e "s|/var/lib/palpanel|$system_data_dir|g" \
@@ -478,6 +703,13 @@ uninstall_system() {
   [[ $# -eq 0 ]] || fail "unknown uninstall option: $1"
   if service_control_enabled; then
     systemctl disable --now palpanel.service palpanel-sav-cli.service palpanel-palcalc.service 2>/dev/null || true
+  fi
+  if [[ -L "$bin_link" ]]; then
+    local linked_target
+    linked_target="$(readlink -f -- "$bin_link" 2>/dev/null || true)"
+    if [[ "$linked_target" == "$opt_root/"* ]]; then
+      rm -f "$bin_link"
+    fi
   fi
   rm -f "$systemd_dir/palpanel.service" "$systemd_dir/palpanel-sav-cli.service" "$systemd_dir/palpanel-palcalc.service"
   if service_control_enabled; then
@@ -508,6 +740,7 @@ Commands:
   status               show process or systemd status
   logs [-f]            show or follow bounded logs
   config [edit]        print or edit the active config path
+  steam-login ACCOUNT  securely create/refresh the Linux SteamCMD login cache
   install [--docker] [--listen HOST:PORT]
                        install under /opt and enable systemd services
   uninstall [--purge]  remove programs; preserve config/data unless purged
@@ -546,6 +779,7 @@ case "$command" in
     ;;
   logs) show_logs "$@" ;;
   config) show_config "$@" ;;
+  steam-login) steam_login "$@" ;;
   install) install_system "$@" ;;
   uninstall) uninstall_system "$@" ;;
   -h|--help|help) usage ;;

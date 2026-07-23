@@ -19,6 +19,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/id"
+	"palpanel/internal/networkproxy"
 )
 
 const (
@@ -34,17 +35,24 @@ type commandRunner func(context.Context, string, string, ...string) ([]byte, err
 // Client owns all native SteamCMD setup and command execution. Commands that
 // share an installation directory are serialized, including across clients.
 type Client struct {
-	cfg                 appconfig.Config
-	httpClient          *http.Client
-	goos                string
-	timeout             time.Duration
-	runCommand          commandRunner
-	credentialHardener  credentialHardener
-	interactiveLauncher interactiveLauncher
-	sessionVerifier     sessionVerifier
-	now                 func() time.Time
-	loginMu             sync.Mutex
-	login               loginState
+	cfg          appconfig.Config
+	httpClient   *http.Client
+	goos         string
+	timeout      time.Duration
+	runCommand   commandRunner
+	loginRunner  func(context.Context, LoginRequest) ([]byte, error)
+	now          func() time.Time
+	network      *networkproxy.Service
+	credentialMu sync.Mutex
+	loginMu      sync.Mutex
+	login        loginState
+}
+
+// SetCredentialLoginRunner supplies the runtime-specific SteamCMD login
+// executor used when SteamCMD runs in a managed container instead of natively.
+// The callback must keep credentials out of process arguments.
+func (c *Client) SetCredentialLoginRunner(runner func(context.Context, LoginRequest) ([]byte, error)) {
+	c.loginRunner = runner
 }
 
 type commandGate struct {
@@ -55,16 +63,14 @@ var commandGates sync.Map
 
 func New(cfg appconfig.Config) *Client {
 	client := &Client{
-		cfg:                 cfg,
-		httpClient:          &http.Client{Timeout: defaultDownloadTimeout},
-		goos:                runtime.GOOS,
-		timeout:             defaultCommandTimeout,
-		runCommand:          runCommand,
-		credentialHardener:  hardenCredentialTree,
-		interactiveLauncher: launchInteractiveSteamCMD,
-		now:                 time.Now,
+		cfg:        cfg,
+		httpClient: &http.Client{Timeout: defaultDownloadTimeout},
+		goos:       runtime.GOOS,
+		timeout:    defaultCommandTimeout,
+		runCommand: runCommand,
+		now:        time.Now,
+		network:    networkproxy.New(cfg),
 	}
-	client.sessionVerifier = client.verifyCachedSession
 	return client
 }
 
@@ -223,7 +229,9 @@ func (c *Client) AppInfo(ctx context.Context, appID string) (string, error) {
 
 // DownloadWorkshopTo downloads into a unique staging tree and only exposes
 // destination/itemID after the command and filesystem verification succeed.
-func (c *Client) DownloadWorkshopTo(ctx context.Context, appID, itemID, destination, accountName string) error {
+func (c *Client) DownloadWorkshopTo(ctx context.Context, appID, itemID, destination string) error {
+	c.credentialMu.Lock()
+	defer c.credentialMu.Unlock()
 	if err := validateNumericID("Workshop app", appID); err != nil {
 		return err
 	}
@@ -242,24 +250,13 @@ func (c *Client) DownloadWorkshopTo(ctx context.Context, appID, itemID, destinat
 	if err := c.Ensure(ctx); err != nil {
 		return err
 	}
-	login, err := c.RequireLogin(ctx, accountName)
+	credentials, err := c.explicitCredentials()
 	if err != nil {
 		return err
-	}
-
-	release, err := c.acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := c.validateInstalled(); err != nil {
-		return fmt.Errorf("revalidate SteamCMD before Workshop download: %w", err)
 	}
 	if err := c.validateManaged(destination); err != nil {
 		return fmt.Errorf("revalidate Workshop staging directory before download: %w", err)
 	}
-	commandCtx, cancel := c.commandContext(ctx)
-	defer cancel()
 
 	stageRoot, err := os.MkdirTemp(destination, ".steamcmd-workshop-")
 	if err != nil {
@@ -270,32 +267,28 @@ func (c *Client) DownloadWorkshopTo(ctx context.Context, appID, itemID, destinat
 		return err
 	}
 
-	loginArgs := []string{"+@NoPromptForPassword", "1", "+login", login.AccountName}
-	args := []string{"+@sSteamCmdForcePlatformType", "windows", "+force_install_dir", stageRoot}
-	args = append(args, loginArgs...)
-	args = append(args, "+workshop_download_item", appID, itemID, "validate", "+quit")
-	out, runErr := c.runCommand(commandCtx, c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, args...)
+	beforeLogin := []string{
+		"force_install_dir " + steamScriptArg(stageRoot),
+	}
+	commands := []string{
+		"workshop_download_item " + appID + " " + itemID + " validate",
+	}
+	out, runErr := c.runCachedLoginOutput(ctx, credentials.AccountName, beforeLogin, commands)
 	if runErr != nil {
-		if loginFailureOutput(out) {
-			c.invalidateLogin()
-			return ErrLoginRequired
+		c.setSteamGuardRequired(errors.Is(runErr, ErrSteamGuardRequired))
+		if errors.Is(runErr, ErrLoginRequired) || errors.Is(runErr, ErrSteamGuardRequired) || errors.Is(runErr, ErrInvalidCredentials) {
+			_ = c.markCredentialsUnverified(ctx)
 		}
-		return c.commandError(commandCtx, runErr, out, login.AccountName)
+		return runErr
 	}
-	if err := commandCtx.Err(); err != nil {
-		return fmt.Errorf("SteamCMD Workshop download interrupted: %w", err)
-	}
-	if loginFailureOutput(out) {
-		c.invalidateLogin()
-		return ErrLoginRequired
-	}
-	if err := workshopCommandFailure(out, itemID, login.AccountName); err != nil {
+	c.setSteamGuardRequired(false)
+	if err := workshopCommandFailure(out, itemID, credentials.AccountName, credentials.Password); err != nil {
 		return err
 	}
 
 	source := filepath.Join(stageRoot, "steamapps", "workshop", "content", appID, itemID)
 	if err := c.validateDownloadedTree(source); err != nil {
-		detail := sanitizeOutput(string(out), login.AccountName)
+		detail := sanitizeOutput(string(out), credentials.AccountName, credentials.Password)
 		if detail != "" {
 			return fmt.Errorf("SteamCMD did not produce a complete Workshop item: %w; command output: %s", err, detail)
 		}
@@ -335,7 +328,7 @@ func (c *Client) executeValidatedRedacted(ctx context.Context, validate func() e
 	}
 	commandCtx, cancel := c.commandContext(ctx)
 	defer cancel()
-	out, runErr := c.runCommand(commandCtx, c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, args...)
+	out, runErr := c.runConfiguredCommand(commandCtx, args...)
 	if runErr != nil {
 		return out, c.commandError(commandCtx, runErr, out, secrets...)
 	}
@@ -351,6 +344,23 @@ func (c *Client) commandContext(ctx context.Context) (context.Context, context.C
 		timeout = defaultCommandTimeout
 	}
 	return context.WithTimeout(ctx, timeout)
+}
+
+func (c *Client) runConfiguredCommand(ctx context.Context, args ...string) ([]byte, error) {
+	run := func() ([]byte, error) {
+		return c.runCommand(ctx, c.cfg.SteamCMDBinaryPath(), c.cfg.SteamCMDDir, args...)
+	}
+	if c.network == nil {
+		return run()
+	}
+	rawProxy, err := c.network.InstallProxyURL()
+	if err != nil {
+		return nil, err
+	}
+	if rawProxy == "" {
+		return run()
+	}
+	return withSteamCMDProxy(ctx, rawProxy, c.cfg.SteamCMDProxyRestorePath(), run)
 }
 
 func (c *Client) commandError(ctx context.Context, runErr error, output []byte, secrets ...string) error {
@@ -523,6 +533,18 @@ func (c *Client) download(ctx context.Context, destination string) error {
 	if client == nil {
 		client = &http.Client{Timeout: defaultDownloadTimeout}
 	}
+	if c.network != nil {
+		rawProxy, err := c.network.InstallProxyURL()
+		if err != nil {
+			return err
+		}
+		if rawProxy != "" {
+			client, err = networkproxy.HTTPClient(client, rawProxy, defaultDownloadTimeout)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	response, err := client.Do(req)
 	if err != nil {
 		return err
@@ -681,8 +703,8 @@ func sanitizeOutput(output string, secrets ...string) string {
 	return output
 }
 
-func workshopCommandFailure(output []byte, itemID, accountName string) error {
-	detail := sanitizeOutput(string(output), accountName)
+func workshopCommandFailure(output []byte, itemID string, secrets ...string) error {
+	detail := sanitizeOutput(string(output), secrets...)
 	lower := strings.ToLower(detail)
 	if !strings.Contains(lower, "error! download item") &&
 		!strings.Contains(lower, "download item "+strings.ToLower(itemID)+" failed") {

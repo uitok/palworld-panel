@@ -45,6 +45,8 @@ func run(args []string) error {
 		return runIndex(args[1:])
 	case "inspect":
 		return runInspect(args[1:])
+	case "verify-build":
+		return runVerifyBuild(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "-h", "--help", "help":
@@ -100,6 +102,31 @@ func runInspect(args []string) error {
 		payload["error"] = safeDiagnostic(inspectErr.Error())
 	}
 	return writeJSON(*output, payload)
+}
+
+func runVerifyBuild(args []string) error {
+	oodleAvailable := sav.OodleAvailable()
+	if err := verifyBuild(args, oodleAvailable); err != nil {
+		return err
+	}
+	fmt.Println(buildVerificationMessage(oodleAvailable))
+	return nil
+}
+
+func buildVerificationMessage(oodleAvailable bool) string {
+	return fmt.Sprintf("sav-cli build verification passed: oodle=%t", oodleAvailable)
+}
+
+func verifyBuild(args []string, oodleAvailable bool) error {
+	fs := flag.NewFlagSet("verify-build", flag.ContinueOnError)
+	requireOodle := fs.Bool("require-oodle", false, "fail when this build does not include Oodle support")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *requireOodle && !oodleAvailable {
+		return errors.New("Oodle support is required, but this sav-cli build reports oodle=false")
+	}
+	return nil
 }
 
 func safeDiagnostic(value string) string {
@@ -181,6 +208,7 @@ func usage() error {
 	return errors.New(`usage:
   sav_cli index --save-dir <world-dir|save-root|Level.sav> [--output <path|-]
   sav_cli inspect --file <Level.sav|LevelMeta.sav> [--output <path|-]
+  sav_cli verify-build [--require-oodle]
   sav_cli serve [--host 127.0.0.1] [--port 8090]
   sav_cli --version`)
 }

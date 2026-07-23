@@ -52,7 +52,13 @@ PowerShell 7 is recommended; Windows PowerShell 5.1 is also supported by the scr
 Building requires the Go version in `backend/go.mod`, Node.js 22, npm, and MinGW-w64 GCC
 for the CGO `sav-cli` build.
 
+`./scripts/build-sav-cli-dev.ps1` always enables CGO, selects MinGW, and runs
+`sav-cli verify-build --require-oodle`; a no-cgo development binary is deleted
+instead of being left behind for the launcher to use.
+
 ```powershell
+./scripts/build-sav-cli-dev.ps1
+
 $runtime = Join-Path $PSScriptRoot "..\dev-runtime\windows"
 .\scripts\package.ps1 `
   -Version v0.0.0-windows-dev `
@@ -101,6 +107,23 @@ restarts, and stops Palworld. Process identity, owned UDP endpoints, and a non-e
 PalPanel lifecycle log are required as live-start evidence; current Palworld builds do not
 reliably emit server stdout. Dependency loading is checked separately in native
 `UE4SS.log` and `PalDefender\Logs\*.log` files.
+
+After an extracted Windows package and a complete game installation are present under the
+runtime root, run the focused control-plane check as well:
+
+```powershell
+.\scripts\windows-live-game-check.ps1 `
+  -RuntimeRoot ".\dev-runtime\windows"
+```
+
+This focused check does not download or install anything. It starts the packaged backend
+and real dedicated server, then requires official REST `info/players`, RCON
+`Info/ShowPlayers/Save`, an observed `.sav` update, a new process after restart, direct
+official REST shutdown, and PalPanel safe-stop completion without the managed-force-stop
+fallback. It also verifies the safe-stop audit record and writes compact evidence below
+`dev-runtime/windows/artifacts/live-game-*`. `-PackageDir` can select a specific extracted
+package; otherwise the newest valid extracted Windows package under the runtime root is
+used.
 
 On success, the per-run test and temp directories can be removed; the package, SteamCMD,
 game installation, and reports remain cached. `-KeepArtifacts` also keeps the isolated
@@ -196,30 +219,27 @@ developer or self-hosted run.
   `/gm` still requires a running server, confirmed dependency load, and an authorized test
   player before destructive player operations can be tested manually.
 
-## Steam Workshop login gate
+## Steam Workshop credentials
 
-Workshop search, details, translation, and every Workshop download path stay hidden or
-blocked until PalPanel verifies a reusable local SteamCMD login cache. The login dialog
-accepts only the Steam account name. PalPanel then opens a separate SteamCMD console on the
-same Windows desktop; enter the Steam password and any Steam Guard challenge only in that
-console. Neither value is accepted by the browser/API, placed in environment variables, or
-persisted by PalPanel. PalPanel stores only the validated account name, never reads
-SteamCMD's credential configuration, and restricts the SteamCMD `config` directory ACL to
-the current Windows account, SYSTEM, and Administrators.
+Workshop search, details, and translation are available without Steam authentication. A
+Workshop download requires a local administrator to configure a Steam account and password
+through the panel. PalPanel verifies them with an explicit SteamCMD login; Steam Guard codes
+or Steam Mobile approval authorize the managed SteamCMD installation. The account and password
+are stored in the ACL-restricted `data\secrets\steam-workshop-credentials.json` file. This is
+an explicit security tradeoff: the password is stored as local plaintext. Steam Guard codes
+are accepted only for one verification attempt and are never persisted.
 
-Starting or verifying the login requires the admin-only `security:write` permission and a
-real loopback TCP client; forwarded client-IP headers do not satisfy this restriction. A
-backend restart reloads the selected account name and probes the existing cache with
-non-interactive password prompting disabled. If verification fails or expires, return to
-the login dialog and complete the local SteamCMD flow again.
+Each download creates a private temporary SteamCMD runscript, configures `force_install_dir`
+before login, and uses the locally approved cached account without putting the saved password
+in the download script. Missing or expired machine authorization requires reauthorization.
+The script is deleted afterward, and stale scripts from interrupted processes are removed
+before the next attempt. Starting, verifying, or clearing credentials requires
+`security:write` and a real loopback TCP client; forwarded client-IP headers do not satisfy
+this restriction.
 
-This gate applies only to Steam Workshop. GitHub, public HTTPS ZIP, local ZIP, and local Mod
-scan/action flows remain available without a Steam login. PalDefender is also an explicit
-exception; installing it always checks and installs the pinned UE4SS dependency first.
-
-Do not copy or publish `runtime\steamcmd\config`, `runtime\steamcmd\userdata`, SteamCMD
-logs, or Workshop staging directories. The repository's development runtime is ignored by
-Git, but evidence and support bundles still need a manual redaction review before sharing.
+Do not copy or publish `data\secrets`, SteamCMD logs, or Workshop staging directories. The
+repository's development runtime is ignored by Git, but evidence and support bundles still
+need a manual redaction review before sharing.
 
 ## GM protocol and live-player validation
 
@@ -258,3 +278,15 @@ stage; a blocked Steam CDN fails the game-install job with its retained backend 
 port conflict fails the live start; and a missing translation environment variable fails
 before any API request. Rerun with the same runtime root to reuse valid downloads, or pass a
 new `-TestRoot` to isolate smoke configuration while keeping the shared game cache.
+
+## Process-tree monitoring validation
+
+While the server is running, verify the monitor snapshot reports
+`cpu_available=true` and `memory_available=true`. The reported working set must
+represent the complete managed tree rooted at `PalServer.exe`, including
+`PalServer-Win64-Shipping-Cmd.exe`, rather than the roughly 8 MB bootstrap
+process alone. Compare Task Manager's process tree with `/api/monitor/snapshot`;
+CPU should move under load and memory should be materially above the launcher
+working set. When native collection is unavailable, the dashboard must show
+`不可用`; a genuine zero remains `0.0%`, and a positive value below 0.1% is
+shown as `<0.1%`.

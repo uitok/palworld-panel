@@ -116,6 +116,25 @@ OptionSettings=(AdminPassword="secret",RCONEnabled=False)`
 	}
 }
 
+func TestLiveDockerCPUCollection(t *testing.T) {
+	containerName := strings.TrimSpace(os.Getenv("PALPANEL_LIVE_DOCKER_CONTAINER"))
+	if containerName == "" {
+		t.Skip("set PALPANEL_LIVE_DOCKER_CONTAINER to exercise docker stats against a running container")
+	}
+	manager := Manager{
+		cfg: appconfig.Config{DockerBinary: "docker", DockerContainer: containerName},
+		run: runCommand,
+	}
+	sample := db.MonitorSample{}
+	manager.fillDockerStats(t.Context(), &sample, docker.ContainerStatus{})
+	if !sample.CPUAvailable || sample.CPUPercent <= 0 {
+		t.Fatalf("live Docker CPU sample unavailable: %#v", sample)
+	}
+	if !sample.MemoryAvailable || sample.MemoryUsageBytes <= 0 || sample.MemoryLimitBytes <= 0 {
+		t.Fatalf("live Docker memory sample unavailable: %#v", sample)
+	}
+}
+
 func TestRESTHealthUsesCurrentServerPasswordInsteadOfStalePanelPassword(t *testing.T) {
 	root := t.TempDir()
 	store, err := db.Open(filepath.Join(root, "monitor.db"))
@@ -197,16 +216,14 @@ func TestSampleCollectsWindowsStatsAndCanDisableHistory(t *testing.T) {
 	}}, palrest.New(restServer.URL, "", ""))
 	manager.goos = "windows"
 	manager.diskUsage = func(string) (int64, int64, error) { return 100, 1000, nil }
-	manager.run = func(_ context.Context, name string, _ ...string) ([]byte, error) {
-		switch name {
-		case "tasklist":
-			return []byte(`"PalServer.exe","123","Console","1","1,024 K"` + "\n"), nil
-		default:
-			return nil, errors.New("unexpected command")
+	manager.processStats = func(_ context.Context, pid int) (ProcessStats, error) {
+		if pid != 123 {
+			t.Fatalf("CPU collector PID = %d", pid)
 		}
+		return ProcessStats{CPUPercent: 18.75, MemoryUsageBytes: 768 * 1024 * 1024, ProcessCount: 2}, nil
 	}
 	sample, err := manager.Sample(t.Context())
-	if err != nil || sample.MemoryUsageBytes != 1024*1024 || !sample.DiskAvailable || sample.DiskFreeBytes != 100 {
+	if err != nil || !sample.CPUAvailable || sample.CPUPercent != 18.75 || sample.MemoryUsageBytes != 768*1024*1024 || !sample.MemoryAvailable || !sample.DiskAvailable || sample.DiskFreeBytes != 100 {
 		t.Fatalf("Sample = %#v, %v", sample, err)
 	}
 	history, err := manager.History(t.Context(), 10)
@@ -252,7 +269,7 @@ OptionSettings=(RCONEnabled=True,RCONPort=25575)`
 
 	sample = db.MonitorSample{}
 	manager.run = func(_ context.Context, _ string, _ ...string) ([]byte, error) { return []byte("bad output"), nil }
-	manager.fillDockerStats(t.Context(), &sample)
+	manager.fillDockerStats(t.Context(), &sample, docker.ContainerStatus{})
 	if !strings.Contains(sample.UnavailableReason, "unexpected output") {
 		t.Fatalf("unexpected reason: %q", sample.UnavailableReason)
 	}

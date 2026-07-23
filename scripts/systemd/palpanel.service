@@ -10,6 +10,8 @@ User=palpanel
 Group=palpanel
 UMask=0077
 Environment=PALPANEL_DATA_DIR=/var/lib/palpanel
+Environment=HOME=/var/lib/palpanel
+Environment=DOCKER_CONFIG=/var/lib/palpanel/docker-client
 Environment=PALPANEL_BACKEND_DIR=/opt/palpanel/current/backend
 Environment=PALPANEL_RUNNER_DIR=/opt/palpanel/current/backend/deployments/wine-runner
 Environment=PALPANEL_SAVE_INDEXER_ENABLED=true

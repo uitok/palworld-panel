@@ -55,6 +55,16 @@ x-import-inspection: &importInspection
   content:
     application/json:
       schema: {$ref: '#/components/schemas/ImportInspectionEnvelope'}
+x-save-import-inspection: &saveImportInspection
+  description: Inspected save-world candidates. Private extraction paths are never returned.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveImportInspectionEnvelope'}
+x-save-import-conflict: &saveImportConflict
+  description: Save import conflict. Multi-world direct uploads include a resumable inspection ID and candidates.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveImportConflictEnvelope'}
 x-local-mod-scan: &localModScan
   description: Reconciliation of Mod files, database records, persistent ignore state, and safe action capabilities.
   content:
@@ -75,6 +85,86 @@ x-ai-translation-test: &aiTranslationTest
   content:
     application/json:
       schema: {$ref: '#/components/schemas/AITranslationTestEnvelope'}
+x-network-proxy-config: &networkProxyConfig
+  description: Public download/server-update and community-server proxy settings. The download scope includes SteamCMD, Workshop, GitHub/HTTPS mods, PalDefender, and UE4SS. Credentials are never returned.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/NetworkProxyConfigEnvelope'}
+x-network-proxy-test: &networkProxyTest
+  description: Bounded connectivity test for one saved proxy scope.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/NetworkProxyTestEnvelope'}
+x-community-server-result: &communityServerResult
+  description: Filtered page of discoverable Palworld community servers, possibly served from stale cache.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/CommunityServerResultEnvelope'}
+x-community-server-status: &communityServerStatus
+  description: Upstream reachability, proxy, cache freshness, and persistent-cache state.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/CommunityServerSourceStatusEnvelope'}
+x-breeding-status: &breedingStatus
+  description: PalCalc sidecar availability and bounded diagnostic status.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/BreedingStatusEnvelope'}
+x-astrbot-server-status: &astrBotServerStatus
+  description: Minimal server and online-player status for signed AstrBot commands.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/AstrBotServerStatusEnvelope'}
+x-save-index-status: &saveIndexStatus
+  description: Save index state, parser capability, and bounded diagnostics.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveIndexStatusEnvelope'}
+x-player-list: &playerList
+  description: Deduplicated players merged from save index, official REST, and PalDefender.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/PlayerListEnvelope'}
+x-player-detail: &playerDetail
+  description: One deduplicated player with save and online metadata.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/PlayerDetailEnvelope'}
+x-player-inventory: &playerInventory
+  description: Player inventory containers from the selected save view.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/PlayerInventoryEnvelope'}
+x-mod-config-adapters: &modConfigAdapters
+  description: Registered typed Mod configuration adapters and their opaque files.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigurationAdapterListEnvelope'}
+x-mod-config-files: &modConfigFiles
+  description: Editable configuration files identified by opaque IDs.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigFileListEnvelope'}
+x-mod-config-document: &modConfigDocument
+  description: Revisioned UTF-8 configuration document.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigDocumentEnvelope'}
+x-mod-config-backups: &modConfigBackups
+  description: Backup timeline for a configuration file.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/ModConfigBackupListEnvelope'}
+x-monitor-snapshot: &monitorSnapshot
+  description: Host and workload resource sample with lifecycle diagnostics and derived risks.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/MonitorSnapshotEnvelope'}
+x-monitor-history: &monitorHistory
+  description: Chronological monitor samples with separate host and workload memory.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/MonitorHistoryEnvelope'}
 x-read-responses: &readResponses
   '200': *success
   '401': *error
@@ -94,6 +184,11 @@ x-id-parameter: &idParameter
   in: path
   required: true
   schema: {type: string}
+x-player-source-parameter: &playerSourceParameter
+  name: source
+  in: query
+  required: false
+  schema: {type: string, enum: [server]}
 x-idempotency-key: &idempotencyKey
   name: Idempotency-Key
   in: header
@@ -111,6 +206,31 @@ x-json-request: &jsonRequest
     application/json:
       schema: {$ref: '#/components/schemas/JsonObject'}
 paths:
+  /community-servers:
+    get:
+      operationId: listCommunityServers
+      tags: [server]
+      x-palpanel-permission: read
+      parameters: &communityServerQueryParameters
+        - {name: region, in: query, schema: {type: string, enum: [cn, global], default: cn}}
+        - {name: search, in: query, schema: {type: string, maxLength: 128}}
+        - {name: min_players, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: max_players, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: password, in: query, schema: {type: boolean}}
+        - {name: version, in: query, schema: {type: string, maxLength: 64}}
+        - {name: status, in: query, schema: {type: string, enum: [online, offline, all], default: online}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+      responses: {'200': *communityServerResult, '400': *error, '401': *error, '429': *error, '502': *error, '503': *error}
+  /community-servers/source-status:
+    get: {operationId: getCommunityServerSourceStatus, tags: [server], x-palpanel-permission: read, responses: {'200': *communityServerStatus, '401': *error}}
+  /community-servers/refresh:
+    post:
+      operationId: refreshCommunityServers
+      tags: [server]
+      x-palpanel-permission: read
+      parameters: *communityServerQueryParameters
+      responses: {'200': *communityServerResult, '400': *error, '401': *error, '403': *error, '429': *error, '502': *error, '503': *error}
   /health:
     get: {operationId: getHealth, tags: [system], security: [], x-palpanel-permission: public, responses: {'200': *success}}
   /ready:
@@ -150,6 +270,18 @@ paths:
     get: {operationId: getCurrentPrincipal, tags: [auth], x-palpanel-permission: read, responses: {'200': *session, '401': *error}}
   /auth/logout:
     post: {operationId: logout, tags: [auth], x-palpanel-permission: read, responses: *writeResponses}
+  /auth/password:
+    put:
+      operationId: changeOwnPassword
+      tags: [auth]
+      security: [{sessionCookie: []}]
+      x-palpanel-permission: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PasswordChangeRequest'}
+      responses: {'200': *success, '400': *error, '401': *error, '403': *error, '422': *error, '429': *error, '500': *error}
   /auth/api-keys:
     get: {operationId: listDevelopmentKeys, tags: [auth], x-palpanel-permission: read, responses: {'200': *developmentKeys, '401': *error, '500': *error}}
     post:
@@ -175,6 +307,29 @@ paths:
   /system/debug:
     get: {operationId: getDebugLogging, tags: [system], x-palpanel-permission: read, responses: *readResponses}
     put: {operationId: updateDebugLogging, tags: [system], x-palpanel-permission: 'config:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /settings/network-proxy:
+    get: {operationId: getNetworkProxyConfig, tags: [system], x-palpanel-permission: read, responses: {'200': *networkProxyConfig, '401': *error, '500': *error}}
+    put:
+      operationId: updateNetworkProxyConfig
+      tags: [system]
+      x-palpanel-permission: 'config:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NetworkProxyConfigUpdate'}
+      responses: {'200': *networkProxyConfig, '400': *error, '401': *error, '403': *error, '500': *error}
+  /settings/network-proxy/test:
+    post:
+      operationId: testNetworkProxy
+      tags: [system]
+      x-palpanel-permission: 'config:write'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/NetworkProxyTestRequest'}
+      responses: {'200': *networkProxyTest, '400': *error, '401': *error, '403': *error, '502': *error}
   /alerts:
     get: {operationId: listAlerts, tags: [system], x-palpanel-permission: read, responses: *readResponses}
   /alerts/{id}/ack:
@@ -230,7 +385,17 @@ paths:
   /server/bootstrap:
     post: {operationId: bootstrapServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/logs:
-    get: {operationId: getServerLogs, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    get:
+      operationId: getServerLogs
+      tags: [server]
+      x-palpanel-permission: read
+      parameters:
+        - {name: channel, in: query, required: false, schema: {type: string, enum: [game, launcher, paldefender-rest]}}
+        - {name: tail, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 5000, default: 200}}
+        - {name: search, in: query, required: false, schema: {type: string}}
+        - {name: level, in: query, required: false, schema: {type: string}}
+        - {name: since, in: query, required: false, schema: {type: string}}
+      responses: *readResponses
   /server/world:
     get: {operationId: getWorld, tags: [server], x-palpanel-permission: read, responses: *readResponses}
   /server/world/reset:
@@ -252,7 +417,19 @@ paths:
   /server/restart:
     post: {operationId: restartServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/safe-restart:
-    post: {operationId: safeRestartServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
+    post:
+      operationId: safeRestartServer
+      tags: [server]
+      x-palpanel-permission: 'server:control'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SafeLifecycleRequest'}}}}
+      responses: *writeResponses
+  /server/safe-stop:
+    post:
+      operationId: safeStopServer
+      tags: [server]
+      x-palpanel-permission: 'server:control'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SafeLifecycleRequest'}}}}
+      responses: *writeResponses
   /server/force-stop:
     post: {operationId: forceStopServer, tags: [server], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /server/startup:
@@ -261,9 +438,9 @@ paths:
   /server/initialize-config:
     post: {operationId: initializeServerConfig, tags: [server], x-palpanel-permission: 'config:write', responses: *writeResponses}
   /monitor/snapshot:
-    get: {operationId: getMonitorSnapshot, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: getMonitorSnapshot, tags: [server], x-palpanel-permission: read, responses: {'200': *monitorSnapshot, '401': *error, '500': *error}}
   /monitor/history:
-    get: {operationId: getMonitorHistory, tags: [server], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: getMonitorHistory, tags: [server], x-palpanel-permission: read, responses: {'200': *monitorHistory, '401': *error, '500': *error}}
   /server/backup:
     post: {operationId: createBackup, tags: [server], x-palpanel-permission: 'backup:write', responses: *writeResponses}
   /backups:
@@ -323,12 +500,37 @@ paths:
   /server/shutdown:
     post: {operationId: shutdownServer, tags: [server], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
   /config/palworld:
-    get: {operationId: getPalworldConfig, tags: [content], x-palpanel-permission: read, responses: *readResponses}
-    put: {operationId: updatePalworldConfig, tags: [content], x-palpanel-permission: 'config:write', requestBody: *jsonRequest, responses: *writeResponses}
+    get:
+      operationId: getPalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      responses: {'200': {description: Palworld config, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigEnvelope'}}}}, '401': *error, '403': *error, '500': *error}
+    put:
+      operationId: updatePalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigUpdateRequest'}}}}
+      responses: {'200': {description: Draft created, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigEnvelope'}}}}, '400': *error, '401': *error, '403': *error, '500': *error}
+  /config/palworld/apply:
+    post:
+      operationId: applyPalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write + server:control'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigApplyRequest'}}}}
+      responses: {'202': *accepted, '400': *error, '401': *error, '403': *error, '409': *error, '410': *error, '500': *error}
   /config/palworld/schema:
-    get: {operationId: getPalworldConfigSchema, tags: [content], x-palpanel-permission: read, responses: *readResponses}
+    get:
+      operationId: getPalworldConfigSchema
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      responses: {'200': {description: Palworld config schema, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigSchemaEnvelope'}}}}, '401': *error, '403': *error, '500': *error}
   /config/palworld/validate:
-    post: {operationId: validatePalworldConfig, tags: [content], x-palpanel-permission: read, requestBody: *jsonRequest, responses: *writeResponses}
+    post:
+      operationId: validatePalworldConfig
+      tags: [content]
+      x-palpanel-permission: 'config:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigValidateRequest'}}}}
+      responses: {'200': {description: Validation result, content: {application/json: {schema: {$ref: '#/components/schemas/PalworldConfigValidationEnvelope'}}}}, '400': *error, '401': *error, '403': *error, '500': *error}
   /mods:
     get: {operationId: listMods, tags: [content], x-palpanel-permission: read, responses: *readResponses}
   /mods/local/scan:
@@ -358,7 +560,7 @@ paths:
       x-palpanel-permission: read
       responses:
         '200':
-          description: SteamCMD cached-session authentication status. No credential contents are returned.
+          description: SteamCMD Workshop authentication status. Secret credential contents are never returned.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
@@ -377,7 +579,7 @@ paths:
             schema: {$ref: '#/components/schemas/SteamWorkshopAuthRequest'}
       responses:
         '200':
-          description: A separate SteamCMD console was opened for interactive login.
+          description: Explicit SteamCMD login succeeded and the Windows or Linux/Docker account/password were saved locally with private host permissions.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
@@ -398,7 +600,7 @@ paths:
             schema: {$ref: '#/components/schemas/SteamWorkshopAuthRequest'}
       responses:
         '200':
-          description: Cached SteamCMD session verification result.
+          description: Explicit SteamCMD verification using the saved password and an optional transient Steam Guard code.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
@@ -408,6 +610,20 @@ paths:
         '409': *error
         '502': *error
         '504': *error
+  /mods/workshop/auth/credentials:
+    delete:
+      operationId: clearWorkshopAuthentication
+      tags: [content]
+      x-palpanel-permission: 'security:write'
+      responses:
+        '200':
+          description: Saved Steam Workshop credentials were removed from the current host.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SteamWorkshopAuthStatusEnvelope'}
+        '401': *error
+        '403': *error
+        '502': *error
   /mods/workshop/search:
     get: {operationId: searchWorkshop, tags: [content], x-palpanel-permission: read, responses: *readResponses}
   /mods/workshop/{id}:
@@ -456,6 +672,72 @@ paths:
     post: {operationId: uploadMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
   /mods/workshop:
     post: {operationId: downloadWorkshopItem, tags: [content], x-palpanel-permission: 'mods:write', requestBody: *jsonRequest, responses: *writeResponses}
+  /mods/configurations:
+    get: {operationId: listModConfigurations, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigAdapters, '401': *error}}
+  /mods/configurations/{adapter}:
+    parameters: [{name: adapter, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: getModConfiguration
+      tags: [content]
+      x-palpanel-permission: read
+      parameters: &modConfigFileQuery [{name: file, in: query, required: false, description: Opaque file ID; required when an adapter exposes multiple files., schema: {type: string}}]
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '413': *error}
+    put:
+      operationId: updateModConfiguration
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      parameters: *modConfigFileQuery
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigWriteRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
+  /mods/configurations/{adapter}/backups:
+    parameters: [{name: adapter, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: listModConfigurationBackups
+      tags: [content]
+      x-palpanel-permission: read
+      parameters: *modConfigFileQuery
+      responses: {'200': *modConfigBackups, '400': *error, '401': *error, '403': *error, '404': *error}
+  /mods/configurations/{adapter}/backups/{backup}/restore:
+    parameters:
+      - {name: adapter, in: path, required: true, schema: {type: string}}
+      - {name: backup, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: restoreModConfigurationBackup
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      parameters: *modConfigFileQuery
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigRestoreRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
+  /mods/{id}/files:
+    parameters: [*idParameter]
+    get: {operationId: listModConfigFiles, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigFiles, '401': *error, '403': *error, '404': *error}}
+  /mods/{id}/files/{file}:
+    parameters:
+      - *idParameter
+      - {name: file, in: path, required: true, schema: {type: string}}
+    get: {operationId: getModConfigFile, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '413': *error}}
+    put:
+      operationId: updateModConfigFile
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigWriteRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
+  /mods/{id}/files/{file}/backups:
+    parameters:
+      - *idParameter
+      - {name: file, in: path, required: true, schema: {type: string}}
+    get: {operationId: listModConfigFileBackups, tags: [content], x-palpanel-permission: read, responses: {'200': *modConfigBackups, '400': *error, '401': *error, '403': *error, '404': *error}}
+  /mods/{id}/files/{file}/backups/{backup}/restore:
+    parameters:
+      - *idParameter
+      - {name: file, in: path, required: true, schema: {type: string}}
+      - {name: backup, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: restoreModConfigFileBackup
+      tags: [content]
+      x-palpanel-permission: 'mods:write'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ModConfigRestoreRequest'}}}}
+      responses: {'200': *modConfigDocument, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '413': *error}
   /mods/{id}/enable:
     parameters: [*idParameter]
     post: {operationId: enableMod, tags: [content], x-palpanel-permission: 'mods:write', responses: *writeResponses}
@@ -539,6 +821,12 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/PalDefenderGiveItemsRequest'}
       responses: {'200': *success, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error, '502': *error, '503': *error, '504': *error}
+  /security/paldefender/gm/players/{id}/items/remove:
+    parameters: [*idParameter]
+    post: {operationId: removePalDefenderGMItems, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderRemoveItemsRequest'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/teleport:
+    parameters: [*idParameter]
+    post: {operationId: teleportPalDefenderGMPlayer, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderTeleportRequest'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/progression:
     parameters: [*idParameter]
     get: {operationId: getPalDefenderGMProgression, tags: [security], x-palpanel-permission: read, responses: *readResponses}
@@ -556,12 +844,39 @@ paths:
     parameters: [*idParameter]
     get: {operationId: getPalDefenderGMPals, tags: [security], x-palpanel-permission: read, responses: *readResponses}
     post: {operationId: givePalDefenderGMPals, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGivePalsRequest'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/custom-pal:
+    parameters: [*idParameter]
+    post: {operationId: givePalDefenderGMCustomPal, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderPalTemplate'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/custom-pals:
+    parameters: [*idParameter]
+    post: {operationId: givePalDefenderGMCustomPals, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGiveCustomPalsRequest'}}}}, responses: *writeResponses}
+  /security/paldefender/gm/players/{id}/pals/release:
+    parameters: [*idParameter]
+    post: {operationId: releasePalDefenderGMPal, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderReleasePalRequest'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/pal-templates:
     parameters: [*idParameter]
     post: {operationId: givePalDefenderGMPalTemplates, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PalDefenderGivePalTemplatesRequest'}}}}, responses: *writeResponses}
   /security/paldefender/gm/players/{id}/export-pals:
     parameters: [*idParameter]
-    post: {operationId: exportPalDefenderGMPals, tags: [security], x-palpanel-permission: 'players:write', parameters: [*idempotencyKey], responses: *writeResponses}
+    post:
+      operationId: exportPalDefenderGMPals
+      tags: [security]
+      x-palpanel-permission: 'players:write'
+      parameters: [*idempotencyKey]
+      responses:
+        '200':
+          description: Newly generated PalDefender export templates.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PalDefenderExportPalsEnvelope'}
+        '400': *error
+        '401': *error
+        '403': *error
+        '404': *error
+        '409': *error
+        '502': *error
+        '503': *error
+        '504': *error
   /security/paldefender/gm/players/{id}/exported-pal-templates:
     parameters: [*idParameter]
     get: {operationId: listExportedPalDefenderGMPalTemplates, tags: [security], x-palpanel-permission: read, responses: *readResponses}
@@ -610,6 +925,33 @@ paths:
     get: {operationId: listRuntimePalDefenderGMCommands, tags: [security], x-palpanel-permission: 'security:write', responses: *readResponses}
   /security/paldefender/gm/catalog/technology:
     get: {operationId: listPalDefenderTechnologyCatalog, tags: [security], x-palpanel-permission: read, responses: *readResponses}
+  /security/paldefender/gm/catalog/technologies:
+    get:
+      operationId: searchPalDefenderLocalTechnologyCatalog
+      tags: [security]
+      x-palpanel-permission: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+      responses: *readResponses
+  /security/paldefender/gm/catalog/pals:
+    get:
+      operationId: searchPalDefenderPalCatalog
+      tags: [security]
+      x-palpanel-permission: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+      responses: *readResponses
+  /security/paldefender/gm/catalog/passives:
+    get:
+      operationId: searchPalDefenderPassiveCatalog
+      tags: [security]
+      x-palpanel-permission: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+      responses: *readResponses
   /security/paldefender/gm/catalog/skins:
     get: {operationId: listPalDefenderSkinCatalog, tags: [security], x-palpanel-permission: read, responses: *readResponses}
   /security/paldefender/gm/catalog/references:
@@ -635,11 +977,44 @@ paths:
     parameters: [*idParameter]
     post: {operationId: togglePalDefenderAdmin, tags: [security], x-palpanel-permission: 'security:write', parameters: [*idempotencyKey], responses: *writeResponses}
   /save/index/status:
-    get: {operationId: getSaveIndexStatus, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: getSaveIndexStatus, tags: [world], x-palpanel-permission: read, responses: {'200': *saveIndexStatus, '401': *error}}
   /save/index/rebuild:
     post: {operationId: rebuildSaveIndex, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /save-sources:
     get: {operationId: listSaveSources, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /save-sources/import/inspect:
+    post:
+      operationId: inspectSaveSourceImport
+      tags: [world]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/SaveImportInspectRequest'}
+      responses:
+        '200': *saveImportInspection
+        '400': *error
+        '401': *error
+        '403': *error
+  /save-sources/import/inspect/{id}/select:
+    parameters: [*idParameter]
+    post:
+      operationId: selectSaveSourceImportCandidate
+      tags: [world]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaveImportSelectRequest'}
+      responses:
+        '200': *saveImportInspection
+        '400': *error
+        '401': *error
+        '403': *error
+        '409': *error
+        '410': *error
   /save-sources/import:
     post:
       operationId: importSaveSource
@@ -650,7 +1025,16 @@ paths:
         content:
           multipart/form-data:
             schema: {$ref: '#/components/schemas/SaveSourceImportRequest'}
-      responses: *writeResponses
+          application/json:
+            schema: {$ref: '#/components/schemas/SaveImportCommitRequest'}
+      responses:
+        '200': *success
+        '400': *error
+        '401': *error
+        '403': *error
+        '409': *saveImportConflict
+        '422': *error
+        '500': *error
   /save-sources/{id}/activate:
     parameters: [*idParameter]
     post: {operationId: activateSaveSource, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
@@ -663,6 +1047,8 @@ paths:
     delete: {operationId: deleteSaveSource, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /breeding/catalog:
     get: {operationId: getBreedingCatalog, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /breeding/status:
+    get: {operationId: getBreedingStatus, tags: [world], x-palpanel-permission: read, responses: {'200': *breedingStatus, '401': *error}}
   /breeding/history:
     get: {operationId: listBreedingHistory, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /breeding/presets:
@@ -732,14 +1118,37 @@ paths:
     post: {operationId: createAstrBotBindingChallenge, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
   /integrations/astrbot/quick-solves:
     post: {operationId: runAstrBotQuickSolve, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: *writeResponses}
+  /integrations/astrbot/server-status:
+    post: {operationId: getAstrBotServerStatus, tags: [integrations], security: [], x-palpanel-permission: hmac-integration, requestBody: *jsonRequest, responses: {'200': *astrBotServerStatus, '401': *error, '503': *error}}
+  /integrations/astrbot/server-control:
+    post:
+      operationId: controlAstrBotServer
+      tags: [integrations]
+      security: []
+      x-palpanel-permission: hmac-integration
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AstrBotControlRequest'}}}}
+      responses: *writeResponses
+  /integrations/astrbot/community-servers:
+    post:
+      operationId: listAstrBotCommunityServers
+      tags: [integrations]
+      security: []
+      x-palpanel-permission: hmac-integration
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AstrBotCommunityServerRequest'}}}}
+      responses: {'200': *communityServerResult, '400': *error, '401': *error, '429': *error, '502': *error, '503': *error}
   /players:
-    get: {operationId: listSavePlayers, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    get:
+      operationId: listSavePlayers
+      tags: [world]
+      x-palpanel-permission: read
+      parameters: [*playerSourceParameter]
+      responses: {'200': *playerList, '400': *error, '401': *error, '404': *error}
   /players/{id}:
-    parameters: [*idParameter]
-    get: {operationId: getSavePlayer, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    parameters: [*idParameter, *playerSourceParameter]
+    get: {operationId: getSavePlayer, tags: [world], x-palpanel-permission: read, responses: {'200': *playerDetail, '400': *error, '401': *error, '404': *error}}
   /players/{id}/inventory:
-    parameters: [*idParameter]
-    get: {operationId: getPlayerInventory, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    parameters: [*idParameter, *playerSourceParameter]
+    get: {operationId: getPlayerInventory, tags: [world], x-palpanel-permission: read, responses: {'200': *playerInventory, '400': *error, '401': *error, '404': *error}}
   /guilds:
     get: {operationId: listGuilds, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /guilds/{id}:
@@ -792,12 +1201,270 @@ components:
       bearerFormat: ppk_...
       description: 'Revocable development key supplied as Authorization: Bearer ppk_...'
   schemas:
+    SaveIndexCounts:
+      type: object
+      required: [players, guilds, bases, pals, containers, map_entities]
+      properties:
+        players: {type: integer, minimum: 0}
+        guilds: {type: integer, minimum: 0}
+        bases: {type: integer, minimum: 0}
+        pals: {type: integer, minimum: 0}
+        containers: {type: integer, minimum: 0}
+        map_entities: {type: integer, minimum: 0}
+    SaveIndexStatus:
+      type: object
+      required: [enabled, state, stale, source_path, updated_at, duration_ms, warnings, counts]
+      properties:
+        enabled: {type: boolean}
+        state: {type: string, enum: [disabled, missing, not_indexed, ready, stale, error]}
+        stale: {type: boolean}
+        source_path: {type: string}
+        updated_at: {type: string}
+        duration_ms: {type: integer, minimum: 0}
+        error: {type: string}
+        error_code: {type: string}
+        error_detail: {type: string, maxLength: 513}
+        oodle_available: {type: boolean}
+        warnings: {type: array, items: {type: string}}
+        counts: {$ref: '#/components/schemas/SaveIndexCounts'}
+        parser: {type: string}
+        cache_path: {type: string}
+    Player:
+      type: object
+      required: [id, player_uid, steam_id, nickname, level, guild_id, guild_name, is_online, online_source, online_stale, last_online_time, location_x, location_y, location_z]
+      properties:
+        id: {type: string}
+        player_uid: {type: string}
+        steam_id: {type: string}
+        nickname: {type: string}
+        level: {type: integer, minimum: 0}
+        guild_id: {type: string}
+        guild_name: {type: string}
+        is_online: {type: boolean}
+        online_source: {type: string, enum: [none, rest, paldefender, rest+paldefender]}
+        online_stale: {type: boolean}
+        gm_user_id: {type: string}
+        last_online_time: {type: string}
+        location_x: {type: number}
+        location_y: {type: number}
+        location_z: {type: number}
+        inventory_summary: {type: object, additionalProperties: true}
+        ping: {type: number}
+        ip: {type: string}
+    PlayerDataView:
+      type: object
+      required: [scope, source_id, source_kind, source_name, online_overlay]
+      properties:
+        scope: {type: string, enum: [active, server]}
+        source_id: {type: string}
+        source_kind: {type: string, enum: [server, import]}
+        source_name: {type: string}
+        online_overlay: {type: boolean}
+    SaveInventorySlot:
+      type: object
+      required: [slot, item_id, item_name, count, durability]
+      properties:
+        slot: {type: integer, minimum: 0}
+        item_id: {type: string}
+        item_name: {type: string}
+        count: {type: integer, minimum: 0}
+        durability: {anyOf: [{type: number}, {type: 'null'}]}
+    SaveInventoryContainer:
+      type: object
+      required: [container_id, owner_type, owner_id, slots]
+      properties:
+        container_id: {type: string}
+        owner_type: {type: string}
+        owner_id: {type: string}
+        slots: {type: array, items: {$ref: '#/components/schemas/SaveInventorySlot'}}
+    ListSummary:
+      type: object
+      required: [total, limit, offset, returned, page]
+      properties:
+        total: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 0}
+        offset: {type: integer, minimum: 0}
+        returned: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+    PlayerListResult:
+      type: object
+      required: [players, status, summary, view]
+      properties:
+        players: {type: array, items: {$ref: '#/components/schemas/Player'}}
+        status: {$ref: '#/components/schemas/SaveIndexStatus'}
+        summary: {$ref: '#/components/schemas/ListSummary'}
+        view: {$ref: '#/components/schemas/PlayerDataView'}
+    PlayerDetailResult:
+      type: object
+      required: [player, status, view]
+      properties:
+        player: {$ref: '#/components/schemas/Player'}
+        status: {$ref: '#/components/schemas/SaveIndexStatus'}
+        view: {$ref: '#/components/schemas/PlayerDataView'}
+    PlayerInventoryResult:
+      type: object
+      required: [containers, status, view]
+      properties:
+        containers: {type: array, items: {$ref: '#/components/schemas/SaveInventoryContainer'}}
+        status: {$ref: '#/components/schemas/SaveIndexStatus'}
+        view: {$ref: '#/components/schemas/PlayerDataView'}
+    SaveIndexStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SaveIndexStatus'}
+    PlayerListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PlayerListResult'}
+    PlayerDetailEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PlayerDetailResult'}
+    PlayerInventoryEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PlayerInventoryResult'}
+    PalworldConfigUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings: {type: object, additionalProperties: true}
+        clear_secrets:
+          type: array
+          uniqueItems: true
+          items: {type: string, enum: [AdminPassword, ServerPassword]}
+    PalworldConfigApplyRequest:
+      type: object
+      additionalProperties: false
+      required: [draft_id]
+      properties:
+        draft_id: {type: string, minLength: 1}
+    PalworldConfigValidateRequest:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings: {type: object, additionalProperties: true}
+        clear_secrets:
+          type: array
+          uniqueItems: true
+          items: {type: string, enum: [AdminPassword, ServerPassword]}
+    PalworldConfigDraft:
+      type: object
+      required: [id, revision_sha256, status, created_at, updated_at]
+      properties:
+        id: {type: string}
+        revision_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        status: {type: string, enum: [draft, applying, completed, failed, stale, expired, superseded]}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        applied_job_id: {type: string}
+    PalworldSecretConfigured:
+      type: object
+      required: [configured]
+      properties:
+        configured: {type: boolean}
+    PalworldSecretState:
+      type: object
+      required: [admin_password, server_password]
+      properties:
+        admin_password: {$ref: '#/components/schemas/PalworldSecretConfigured'}
+        server_password: {$ref: '#/components/schemas/PalworldSecretConfigured'}
+    PalworldFormatIssue:
+      type: object
+      required: [field, code, severity, message]
+      properties:
+        field: {type: string}
+        code: {type: string}
+        severity: {type: string, enum: [warning, error]}
+        message: {type: string}
+    PalworldValidationIssue:
+      type: object
+      required: [severity, message]
+      properties:
+        field: {type: string}
+        severity: {type: string, enum: [warning, error]}
+        message: {type: string}
+    PalworldConfigFieldSchema:
+      type: object
+      required: [key, label, group, type, requires_restart, description]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        group: {type: string}
+        type: {type: string, enum: [string, bool, int, float, enum, list]}
+        default: {anyOf: [{type: string}, {type: 'null'}]}
+        enum: {type: array, items: {type: string}}
+        enum_labels: {type: object, additionalProperties: {type: string}}
+        min: {type: number}
+        max: {type: number}
+        requires_restart: {type: boolean}
+        risk: {type: string}
+        description: {type: string}
+    PalworldConfigSchema:
+      type: object
+      required: [version, fields]
+      properties:
+        version: {type: string}
+        fields: {type: array, items: {$ref: '#/components/schemas/PalworldConfigFieldSchema'}}
+    PalworldConfigValidation:
+      type: object
+      required: [valid, issues]
+      properties:
+        valid: {type: boolean}
+        issues: {type: array, items: {$ref: '#/components/schemas/PalworldValidationIssue'}}
+    PalworldConfig:
+      type: object
+      required: [path, settings, revision_sha256, secret_state, format_issues, issues, pending_restart]
+      properties:
+        path: {type: string}
+        settings: {type: object, additionalProperties: {type: string}}
+        revision_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        secret_state: {$ref: '#/components/schemas/PalworldSecretState'}
+        format_issues: {type: array, items: {$ref: '#/components/schemas/PalworldFormatIssue'}}
+        issues: {type: array, items: {$ref: '#/components/schemas/PalworldValidationIssue'}}
+        pending_restart: {type: boolean}
+        draft: {$ref: '#/components/schemas/PalworldConfigDraft'}
+    PalworldConfigEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalworldConfig'}
+    PalworldConfigSchemaEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalworldConfigSchema'}
+    PalworldConfigValidationEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalworldConfigValidation'}
     AuthCredentials:
       type: object
       required: [username, password]
       properties:
         username: {type: string, minLength: 3, maxLength: 32}
         password: {type: string, format: password, minLength: 12, maxLength: 128}
+    PasswordChangeRequest:
+      type: object
+      additionalProperties: false
+      required: [current_password, new_password]
+      properties:
+        current_password: {type: string, format: password, minLength: 1, maxLength: 128}
+        new_password: {type: string, format: password, minLength: 12, maxLength: 128}
     SessionInfo:
       type: object
       required: [name, role, permissions]
@@ -817,9 +1484,11 @@ components:
       additionalProperties: false
       properties:
         account_name: {type: string, minLength: 3, maxLength: 64, pattern: '^[A-Za-z0-9_]{3,64}$'}
+        password: {type: string, format: password, minLength: 1, maxLength: 512, writeOnly: true}
+        steam_guard_code: {type: string, minLength: 1, maxLength: 64, writeOnly: true}
     SteamWorkshopAuthStatus:
       type: object
-      required: [supported, steamcmd_installed, credentials_secure, login_in_progress, logged_in, verification_required]
+      required: [supported, steamcmd_installed, credentials_secure, login_in_progress, logged_in, verification_required, password_configured, steam_guard_required]
       properties:
         supported: {type: boolean}
         steamcmd_installed: {type: boolean}
@@ -829,6 +1498,8 @@ components:
         verification_required: {type: boolean}
         account_name: {type: string}
         last_verified_at: {type: string, format: date-time}
+        password_configured: {type: boolean}
+        steam_guard_required: {type: boolean}
         message: {type: string}
     DevelopmentKeyInput:
       type: object
@@ -886,6 +1557,328 @@ components:
         timeout_seconds: {type: integer, minimum: 1, maximum: 600}
         proxy_configured: {type: boolean}
         custom_header_names: {type: array, items: {type: string}}
+    NetworkProxyEndpoint:
+      type: object
+      required: [enabled, configured, url, authentication_configured, source, requires_restart, effective_for_next_task]
+      properties:
+        enabled: {type: boolean}
+        configured: {type: boolean}
+        url: {type: string, description: Proxy URL with all user information removed.}
+        scheme: {type: string, enum: [http, https, socks5, socks5h]}
+        authentication_configured: {type: boolean}
+        source: {type: string, enum: [managed, environment]}
+        requires_restart: {type: boolean, const: false}
+        effective_for_next_task: {type: boolean, const: true}
+    NetworkProxyConfig:
+      type: object
+      required: [install, community]
+      properties:
+        install: {$ref: '#/components/schemas/NetworkProxyEndpoint'}
+        community: {$ref: '#/components/schemas/NetworkProxyEndpoint'}
+    NetworkProxyConfigUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        install_enabled: {type: boolean}
+        install_proxy_url: {type: string, writeOnly: true}
+        clear_install_proxy: {type: boolean}
+        community_enabled: {type: boolean}
+        community_proxy_url: {type: string, writeOnly: true}
+        clear_community_proxy: {type: boolean}
+    NetworkProxyTestRequest:
+      type: object
+      additionalProperties: false
+      required: [scope]
+      properties:
+        scope: {type: string, enum: [install, community]}
+    NetworkProxyTestResult:
+      type: object
+      required: [ok, scope, target, latency_ms, http_status, proxy_scheme, proxy_enabled, message, host_ok, host_latency_ms]
+      properties:
+        ok: {type: boolean}
+        scope: {type: string, enum: [install, community]}
+        target: {type: string}
+        latency_ms: {type: integer, minimum: 0}
+        http_status: {type: integer, minimum: 0, maximum: 599}
+        proxy_scheme: {type: string, enum: [http, https, socks5, socks5h]}
+        proxy_enabled: {type: boolean}
+        message: {type: string}
+        host_ok: {type: boolean}
+        host_latency_ms: {type: integer, minimum: 0}
+        docker_ok: {type: boolean}
+        docker_latency_ms: {type: integer, minimum: 0}
+        failure_stage: {type: string}
+        diagnostic: {type: string, description: Redacted proxy type, bridge state, host-network state, and failure stage.}
+        host_network: {type: boolean}
+        bridge_enabled: {type: boolean}
+    CommunityServer:
+      type: object
+      required: [id, name, address, port, connect, players, max_players, password, country, status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        address: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        connect: {type: string, description: Copyable IP or hostname and port.}
+        players: {type: integer, minimum: 0}
+        max_players: {type: integer, minimum: 0}
+        password: {type: boolean}
+        country: {type: string}
+        version: {type: string}
+        description: {type: string}
+        status: {type: string, enum: [online, offline]}
+        updated_at: {type: string, format: date-time}
+    CommunityServerResult:
+      type: object
+      required: [servers, total, source_total, page, page_size, source, fetched_at, stale, cache_age_seconds]
+      properties:
+        servers: {type: array, items: {$ref: '#/components/schemas/CommunityServer'}}
+        total: {type: integer, minimum: 0}
+        source_total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        source: {type: string, enum: [battlemetrics]}
+        fetched_at: {type: string, format: date-time}
+        stale: {type: boolean}
+        cache_age_seconds: {type: integer, format: int64, minimum: 0}
+    CommunityServerSourceStatus:
+      type: object
+      required: [source, enabled, base_url, proxy_configured, reachable, cache_available, cache_fresh, cache_writable, cached_queries, rate_limit_per_minute]
+      properties:
+        source: {type: string, enum: [battlemetrics]}
+        enabled: {type: boolean}
+        base_url: {type: string, format: uri}
+        proxy_configured: {type: boolean}
+        reachable: {type: boolean}
+        cache_available: {type: boolean}
+        cache_fresh: {type: boolean}
+        cache_writable: {type: boolean}
+        cached_queries: {type: integer, minimum: 0}
+        last_attempt_at: {type: string, format: date-time}
+        last_success_at: {type: string, format: date-time}
+        last_error: {type: string}
+        cache_error: {type: string}
+        next_refresh_at: {type: string, format: date-time}
+        rate_limit_per_minute: {type: integer, minimum: 1, maximum: 60}
+    SafeLifecycleRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        waittime: {type: integer, minimum: 5, maximum: 300, default: 60}
+        message: {type: string, maxLength: 4096}
+    MonitorRiskReason:
+      type: object
+      required: [code, message, severity]
+      additionalProperties: false
+      properties:
+        code: {type: string, enum: [host_memory_pressure, swap_exhaustion, workload_memory_pressure, oom_killed, abnormal_exit]}
+        message: {type: string}
+        severity: {type: string, enum: [warning, critical]}
+    MonitorSample:
+      type: object
+      required:
+        - id
+        - created_at
+        - cpu_available
+        - cpu_percent
+        - memory_available
+        - memory_usage_bytes
+        - memory_limit_bytes
+        - host_memory_available
+        - host_memory_total_bytes
+        - host_memory_available_bytes
+        - host_swap_total_bytes
+        - host_swap_free_bytes
+        - workload_memory_available
+        - workload_memory_usage_bytes
+        - workload_memory_limit_bytes
+        - oom_killed
+        - lifecycle_available
+        - exit_code
+        - restart_count
+        - risk_reasons
+        - disk_available
+        - disk_free_bytes
+        - disk_total_bytes
+        - current_players
+        - max_players
+        - rest_healthy
+        - rcon_healthy
+        - game_port_healthy
+        - query_port_healthy
+      properties:
+        id: {type: string}
+        created_at: {type: string, format: date-time}
+        cpu_available: {type: boolean}
+        cpu_percent: {type: number}
+        memory_available: {type: boolean, description: Compatibility alias for workload_memory_available.}
+        memory_usage_bytes: {type: integer, format: int64, minimum: 0, description: Compatibility alias for workload_memory_usage_bytes.}
+        memory_limit_bytes: {type: integer, format: int64, minimum: 0, description: Compatibility alias for workload_memory_limit_bytes.}
+        host_memory_available: {type: boolean}
+        host_memory_total_bytes: {type: integer, format: int64, minimum: 0}
+        host_memory_available_bytes: {type: integer, format: int64, minimum: 0}
+        host_swap_total_bytes: {type: integer, format: int64, minimum: 0}
+        host_swap_free_bytes: {type: integer, format: int64, minimum: 0}
+        workload_memory_available: {type: boolean}
+        workload_memory_usage_bytes: {type: integer, format: int64, minimum: 0}
+        workload_memory_limit_bytes: {type: integer, format: int64, minimum: 0}
+        oom_killed: {type: boolean}
+        lifecycle_available: {type: boolean, description: True only when lifecycle fields were collected from a complete runtime state object.}
+        exit_code: {type: integer}
+        restart_count: {type: integer, minimum: 0}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        risk_reasons: {type: array, items: {$ref: '#/components/schemas/MonitorRiskReason'}}
+        disk_available: {type: boolean}
+        disk_free_bytes: {type: integer, format: int64, minimum: 0}
+        disk_total_bytes: {type: integer, format: int64, minimum: 0}
+        current_players: {type: integer, minimum: 0}
+        max_players: {type: integer, minimum: 0}
+        rest_healthy: {type: boolean}
+        rcon_healthy: {type: boolean}
+        game_port_healthy: {type: boolean}
+        query_port_healthy: {type: boolean}
+        unavailable_reason: {type: string}
+    MonitorSnapshot:
+      type: object
+      required: [sample]
+      properties:
+        sample: {$ref: '#/components/schemas/MonitorSample'}
+    MonitorSnapshotEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/MonitorSnapshot'}
+    MonitorHistoryEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/MonitorSample'}}
+    BreedingStatus:
+      type: object
+      required: [configured, available, latency_ms]
+      properties:
+        configured: {type: boolean}
+        available: {type: boolean}
+        upstream_version: {type: string}
+        database_version: {type: string}
+        latency_ms: {type: integer, format: int64, minimum: 0}
+        last_error: {type: string}
+        checked_at: {type: string, format: date-time}
+    AstrBotControlRequest:
+      type: object
+      required: [actor_qq_id, action]
+      additionalProperties: false
+      properties:
+        actor_qq_id: {type: string, minLength: 1, maxLength: 64}
+        group_id: {type: string, maxLength: 64}
+        action: {type: string, enum: [start, safe_stop, safe_restart, force_stop]}
+        waittime: {type: integer, minimum: 5, maximum: 300, default: 60}
+        message: {type: string, maxLength: 4096}
+    AstrBotCommunityServerRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        query: {type: string, maxLength: 128}
+        limit: {type: integer, minimum: 1, maximum: 10, default: 10}
+        country: {type: string, maxLength: 8, default: CN}
+    AstrBotOnlinePlayer:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        level: {type: number}
+    AstrBotServerStatus:
+      type: object
+      required: [server, online_count, online_players]
+      properties:
+        server:
+          type: object
+          required: [container, runtime_mode, pending_restart, setup_step]
+          properties:
+            container:
+              type: object
+              required: [exists, status]
+              properties:
+                exists: {type: boolean}
+                status: {type: string}
+            runtime_mode: {type: string}
+            pending_restart: {type: boolean}
+            setup_step: {type: string}
+        online_count: {type: integer, minimum: 0}
+        online_players: {type: array, items: {$ref: '#/components/schemas/AstrBotOnlinePlayer'}}
+        players_available: {type: boolean}
+        info:
+          type: object
+          properties:
+            server_name: {type: string}
+            version: {type: string}
+    ModConfigFile:
+      type: object
+      required: [id, name, path, extension, size, modified_at, revision, executable]
+      properties:
+        id: {type: string, description: Opaque file identifier; never a filesystem path.}
+        name: {type: string}
+        path: {type: string, description: Mod-relative display path.}
+        extension: {type: string, enum: [.json, .ini, .cfg, .toml, .yaml, .yml, .txt, .lua]}
+        size: {type: integer, format: int64, minimum: 0, maximum: 1048576}
+        modified_at: {type: string, format: date-time}
+        revision: {type: string}
+        executable: {type: boolean}
+        risk: {type: string}
+    ModConfigurationField:
+      type: object
+      required: [path, label, type, value]
+      properties:
+        path: {type: string}
+        label: {type: string}
+        type: {type: string, enum: [boolean, integer, number, string]}
+        value: {}
+        min: {type: integer, format: int64}
+        max: {type: integer, format: int64}
+    ModConfigDocument:
+      type: object
+      required: [file, content, format]
+      properties:
+        file: {$ref: '#/components/schemas/ModConfigFile'}
+        content: {type: string, maxLength: 1048576}
+        format: {type: string}
+        fields: {type: array, items: {$ref: '#/components/schemas/ModConfigurationField'}}
+    ModConfigWriteRequest:
+      type: object
+      required: [content, revision]
+      additionalProperties: false
+      properties:
+        content: {type: string, maxLength: 1048576}
+        revision: {type: string, minLength: 1}
+        confirm_executable: {type: boolean, default: false}
+    ModConfigRestoreRequest:
+      type: object
+      required: [revision]
+      additionalProperties: false
+      properties:
+        revision: {type: string, minLength: 1}
+    ModConfigBackup:
+      type: object
+      required: [id, revision, size, created_at]
+      properties:
+        id: {type: string}
+        revision: {type: string}
+        size: {type: integer, format: int64, minimum: 0, maximum: 1048576}
+        created_at: {type: string, format: date-time}
+    ModConfigurationAdapter:
+      type: object
+      required: [id, name, description, available, reload_behavior, files]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        description: {type: string}
+        workshop_id: {type: string}
+        available: {type: boolean}
+        reload_behavior: {type: string, enum: [online_reload, restart_required]}
+        files: {type: array, items: {$ref: '#/components/schemas/ModConfigFile'}}
     ModImportInspectRequest:
       type: object
       required: [source]
@@ -907,6 +1900,58 @@ components:
         name:
           type: string
           description: Optional display name for the imported save source.
+    SaveImportInspectRequest:
+      type: object
+      required: [file]
+      additionalProperties: false
+      properties:
+        file:
+          type: string
+          format: binary
+          description: Palworld world save archive in .zip, .tar, .tar.gz, or .tgz format.
+        name:
+          type: string
+          description: Optional display name retained for final import.
+    SaveImportSelectRequest:
+      type: object
+      required: [candidate_id]
+      additionalProperties: false
+      properties:
+        candidate_id: {type: string, minLength: 1}
+    SaveImportCommitRequest:
+      type: object
+      required: [inspection_id]
+      additionalProperties: false
+      properties:
+        inspection_id: {type: string, minLength: 1}
+        candidate_id: {type: string, minLength: 1}
+        name: {type: string}
+    SaveImportCandidate:
+      type: object
+      required: [id, relative_path, player_count, level_sha256, level_size, valid, warnings, errors]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        relative_path: {type: string}
+        world_id: {type: string}
+        player_count: {type: integer, minimum: 0}
+        level_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        level_size: {type: integer, format: int64, minimum: 0}
+        valid: {type: boolean}
+        warnings: {type: array, items: {type: string}}
+        errors: {type: array, items: {type: string}}
+    SaveImportInspection:
+      type: object
+      required: [id, file_name, candidates, selected_candidate_id, requires_selection, expires_at]
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        file_name: {type: string}
+        name: {type: string}
+        candidates: {type: array, items: {$ref: '#/components/schemas/SaveImportCandidate'}}
+        selected_candidate_id: {type: string}
+        requires_selection: {type: boolean}
+        expires_at: {type: string, format: date-time}
     ModImportSelectRequest:
       type: object
       required: [candidate_id]
@@ -1138,6 +2183,28 @@ components:
       additionalProperties: false
       properties:
         Items: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderItemGrant'}}
+    PalDefenderRemoveItemsRequest:
+      type: object
+      required: [Items]
+      additionalProperties: false
+      properties:
+        Items: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderItemGrant'}}
+    PalDefenderTeleportRequest:
+      oneOf:
+        - type: object
+          required: [Mode, X, Y]
+          additionalProperties: false
+          properties:
+            Mode: {type: string, const: coordinates}
+            X: {type: number, minimum: -10000000, maximum: 10000000}
+            Y: {type: number, minimum: -10000000, maximum: 10000000}
+            Z: {type: number, minimum: -10000000, maximum: 10000000}
+        - type: object
+          required: [Mode, TargetPlayer]
+          additionalProperties: false
+          properties:
+            Mode: {type: string, const: player}
+            TargetPlayer: {type: string, pattern: '^[A-Za-z0-9_-]{1,128}$'}
     PalDefenderProgressionGrantRequest:
       type: object
       minProperties: 1
@@ -1172,12 +2239,57 @@ components:
       additionalProperties: false
       properties:
         Pals: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/PalDefenderPalGrant'}}
+    PalDefenderReleasePalRequest:
+      type: object
+      required: [PalID]
+      additionalProperties: false
+      properties:
+        PalID: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_:-]{1,128}$'}
+        Level: {type: integer, minimum: 1, maximum: 255}
+        Gender: {type: string, enum: [male, female]}
+        Rank: {type: integer, minimum: 0, maximum: 255}
+        Lucky: {type: boolean}
+    PalDefenderPalCatalogEntry:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    PalDefenderPalCatalog:
+      type: object
+      required: [items, returned]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PalDefenderPalCatalogEntry'}}
+        returned: {type: integer}
+    PalDefenderTechnologyCatalogEntry:
+      type: object
+      required: [id, name, level, category, boss]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        level: {type: integer, minimum: 0}
+        category: {type: string}
+        boss: {type: boolean}
+        icon_url: {type: string, format: uri}
+    PalDefenderTechnologyCatalog:
+      type: object
+      required: [items, returned]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PalDefenderTechnologyCatalogEntry'}}
+        returned: {type: integer}
     PalDefenderGivePalTemplatesRequest:
       type: object
       required: [PalTemplates]
       additionalProperties: false
       properties:
         PalTemplates: {type: array, minItems: 1, maxItems: 20, items: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(\.json)?$'}}
+    PalDefenderGiveCustomPalsRequest:
+      type: object
+      required: [Template, Count]
+      additionalProperties: false
+      properties:
+        Template: {$ref: '#/components/schemas/PalDefenderPalTemplate'}
+        Count: {type: integer, minimum: 1, maximum: 20}
     PalDefenderPalTemplate:
       type: object
       required: [PalID]
@@ -1191,10 +2303,11 @@ components:
         Level: {type: integer, minimum: 1, maximum: 255}
         Exp: {type: integer, format: int64, minimum: 0, maximum: 2147483647}
         Shiny: {type: boolean}
-        PartnerSkillLevel: {type: integer, minimum: 1, maximum: 255}
-        CondensedPals: {type: integer, minimum: 0, maximum: 2147483647}
+        PartnerSkillLevel: {type: integer, minimum: 1, maximum: 5}
+        CondensedPals: {type: integer, minimum: 0, maximum: 116}
         UnusedStatusPoints: {type: integer, minimum: 0, maximum: 2147483647}
         FriendshipPoints: {type: integer, format: int64, minimum: 0, maximum: 2147483647}
+        IsAwakening: {type: boolean}
         PhysicalHealth: {type: string}
         WorkerSick: {type: string}
         ImportedCharacter: {type: boolean}
@@ -1207,8 +2320,8 @@ components:
         SAN: {type: number, minimum: 0, maximum: 2147483647}
         Support: {type: integer, minimum: 0, maximum: 2147483647}
         CraftSpeed: {type: integer, minimum: 0, maximum: 2147483647}
-        PalSouls: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 255}}
-        IVs: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 255}}
+        PalSouls: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 20}}
+        IVs: {type: object, additionalProperties: {type: integer, minimum: 0, maximum: 100}}
         ActiveSkills: {type: array, maxItems: 3, items: {type: string}}
         LearntSkills: {type: array, maxItems: 64, items: {type: string}}
         Passives: {type: array, maxItems: 64, items: {type: string}}
@@ -1223,6 +2336,22 @@ components:
         path: {type: string}
         size: {type: integer, format: int64}
         modified_at: {type: string, format: date-time}
+    PalDefenderExportPalsResult:
+      type: object
+      required: [player_id, command, output, templates, template_info, template]
+      properties:
+        player_id: {type: string}
+        command: {type: string}
+        output: {type: string}
+        templates: {type: array, minItems: 1, items: {$ref: '#/components/schemas/PalDefenderExportedPalTemplateInfo'}}
+        template_info: {$ref: '#/components/schemas/PalDefenderExportedPalTemplateInfo'}
+        template: {$ref: '#/components/schemas/PalDefenderPalTemplate'}
+    PalDefenderExportPalsEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PalDefenderExportPalsResult'}
     PalDefenderAccessSettingsUpdate:
       type: object
       required: [use_whitelist, whitelist_message, use_admin_whitelist, admin_auto_login, admin_ips]
@@ -1289,6 +2418,26 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/ImportInspection'}
+    SaveImportInspectionEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SaveImportInspection'}
+    SaveImportConflictEnvelope:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: {type: boolean, const: false}
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            inspection_id: {type: string}
+            candidates: {type: array, items: {$ref: '#/components/schemas/SaveImportCandidate'}}
+            expires_at: {type: string, format: date-time}
     LocalScanEnvelope:
       type: object
       required: [ok, data]
@@ -1313,6 +2462,66 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/AITranslationTestResult'}
+    NetworkProxyConfigEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/NetworkProxyConfig'}
+    NetworkProxyTestEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/NetworkProxyTestResult'}
+    CommunityServerResultEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/CommunityServerResult'}
+    CommunityServerSourceStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/CommunityServerSourceStatus'}
+    BreedingStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/BreedingStatus'}
+    AstrBotServerStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/AstrBotServerStatus'}
+    ModConfigurationAdapterListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ModConfigurationAdapter'}}
+    ModConfigFileListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ModConfigFile'}}
+    ModConfigDocumentEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/ModConfigDocument'}
+    ModConfigBackupListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ModConfigBackup'}}
     JsonObject:
       type: object
       additionalProperties: true

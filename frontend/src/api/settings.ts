@@ -6,7 +6,9 @@ import type {
   PalworldSettings,
   PalworldValidateResponse,
   ValidationIssue,
+  Job,
 } from '../types';
+import { createFallbackJob, mapJob } from './tasks';
 
 const fallbackConfig: PalworldConfigResponse = {
   settings: {},
@@ -26,6 +28,13 @@ const mapIssues = (raw: unknown): ValidationIssue[] => {
   });
 };
 
+const mapFormatIssues = (raw: unknown) => mapIssues(raw).map((issue, index) => ({
+  ...issue,
+  code: String((Array.isArray(raw) && raw[index] && typeof raw[index] === 'object'
+    ? (raw[index] as Record<string, unknown>).code
+    : '') || ''),
+}));
+
 export const mapPalworldConfig = (raw: unknown): PalworldConfigResponse => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const settings =
@@ -37,6 +46,14 @@ export const mapPalworldConfig = (raw: unknown): PalworldConfigResponse => {
     settings,
     path: String(data.path || fallbackConfig.path),
     pending_restart: Boolean(data.pending_restart),
+    revision_sha256: data.revision_sha256 ? String(data.revision_sha256) : undefined,
+    secret_state: data.secret_state && typeof data.secret_state === 'object'
+      ? data.secret_state as PalworldConfigResponse['secret_state']
+      : undefined,
+    format_issues: mapFormatIssues(data.format_issues),
+    draft: data.draft && typeof data.draft === 'object'
+      ? data.draft as PalworldConfigResponse['draft']
+      : undefined,
     issues: mapIssues(data.issues),
   };
 };
@@ -112,10 +129,17 @@ export const settingsApi = {
       },
     ),
 
-  updateSettings: (settings: Partial<PalworldSettings>) =>
+  updateSettings: (settings: Partial<PalworldSettings>, clearSecrets: string[] = []) =>
     handleRequest<unknown, PalworldConfigResponse>(
-      () => apiClient.put('/config/palworld', { settings }),
+      () => apiClient.put('/config/palworld', { settings, ...(clearSecrets.length ? { clear_secrets: clearSecrets } : {}) }),
       { ...fallbackConfig, settings: compactSettings(settings), pending_restart: true },
       { map: mapPalworldConfig, quiet: true, fallbackOnError: false },
+    ),
+
+  applySettings: (draftId: string) =>
+    handleRequest<unknown, Job>(
+      () => apiClient.post('/config/palworld/apply', { draft_id: draftId }),
+      createFallbackJob('palworld_config_apply', '已提交配置应用任务'),
+      { map: mapJob, quiet: true, fallbackOnError: false },
     ),
 };

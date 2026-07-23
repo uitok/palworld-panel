@@ -4,6 +4,7 @@ import { getErrorMessage } from '../../api/client';
 import { serverApi } from '../../api/server';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
+import { useI18n } from '../../i18n';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -12,13 +13,14 @@ interface AppLayoutProps {
 type Toast = { text: string; type: 'success' | 'error' | 'info' };
 
 export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
+  const { t } = useI18n();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [announceOpen, setAnnounceOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [announceMsg, setAnnounceMsg] = useState('');
   const [restartDelay, setRestartDelay] = useState(10);
-  const [restartReason, setRestartReason] = useState('服务器例行维护重启');
+  const [restartReason, setRestartReason] = useState(() => t('ops.defaultRestartReason'));
   const [toast, setToast] = useState<Toast | null>(null);
 
   useEffect(() => {
@@ -42,7 +44,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
     if (!announceMsg.trim()) return;
     try {
       await serverApi.announce(announceMsg);
-      showToast('公告请求已发送');
+      showToast(t('ops.announcementSent'));
       setAnnounceOpen(false);
       setAnnounceMsg('');
     } catch (error) {
@@ -52,9 +54,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   const handleSave = async () => {
     try {
-      showToast('正在保存世界...', 'info');
+      showToast(t('ops.savingWorld'), 'info');
       await serverApi.save();
-      showToast('世界保存请求已发送');
+      showToast(t('ops.worldSaveSent'));
       setSaveOpen(false);
     } catch (error) {
       showToast(getErrorMessage(error), 'error');
@@ -63,9 +65,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   const handleRestart = async () => {
     try {
-      showToast('正在提交安全重启任务...', 'info');
+      showToast(t('ops.submittingRestart'), 'info');
       await serverApi.safeRestart(restartDelay, restartReason);
-      showToast(`安全重启任务已提交，倒计时 ${restartDelay} 秒`);
+      showToast(t('ops.restartSubmitted', { seconds: restartDelay }));
       setRestartOpen(false);
     } catch (error) {
       showToast(getErrorMessage(error), 'error');
@@ -74,8 +76,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   return (
     <div className="min-h-dvh w-full font-sans text-slate-800">
-      <div className="pp-shell relative overflow-hidden lg:h-dvh lg:min-h-0">
-        <div className="hidden lg:block">
+      <div className="pp-shell relative overflow-hidden">
+        <div className="pp-shell__sidebar">
           <Sidebar />
         </div>
 
@@ -89,7 +91,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
           <main id="app-main">{children}</main>
 
-          <div className="pp-mobile-actions shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 lg:hidden">
+          <div className="pp-mobile-actions shrink-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
             <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
               <button
                 type="button"
@@ -97,7 +99,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-50"
               >
                 <Save size={16} />
-                保存
+                {t('common.save')}
               </button>
               <button
                 type="button"
@@ -105,7 +107,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl bg-sky-500 py-2 text-[11px] font-bold text-white shadow-sm shadow-sky-500/20 transition-colors hover:bg-sky-600"
               >
                 <Megaphone size={16} />
-                广播
+                {t('header.broadcast')}
               </button>
               <button
                 type="button"
@@ -113,7 +115,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl border border-rose-200 bg-white py-2 text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-50"
               >
                 <ServerCrash size={16} />
-                重启
+                {t('header.restart')}
               </button>
             </div>
           </div>
@@ -121,10 +123,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       </div>
 
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div className="pp-mobile-nav fixed inset-0 z-50">
           <button
             type="button"
-            aria-label="关闭导航"
+            aria-label={t('ops.closeNavigation')}
             className="pp-dialog-backdrop absolute inset-0"
             onClick={() => setMobileNavOpen(false)}
           />
@@ -144,14 +146,14 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       )}
 
       {announceOpen && (
-        <Dialog onClose={() => setAnnounceOpen(false)} title="广播服务器公告">
+        <Dialog onClose={() => setAnnounceOpen(false)} title={t('ops.announcementTitle')}>
           <p className="mb-4 text-xs font-medium leading-relaxed text-slate-400">
-            向所有在线玩家发送服务器公告。后端会代理 Palworld 官方 REST API。
+            {t('ops.announcementDescription')}
           </p>
           <textarea
             value={announceMsg}
             onChange={(event) => setAnnounceMsg(event.target.value)}
-            placeholder="例如：服务器将在 10 分钟后保存并重启维护。"
+            placeholder={t('ops.announcementPlaceholder')}
             rows={4}
             className="w-full resize-none rounded-xl border border-slate-200 p-3.5 text-xs font-medium text-slate-700 placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
           />
@@ -161,7 +163,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               onClick={() => setAnnounceOpen(false)}
               className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-50"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               type="button"
@@ -169,7 +171,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               className="flex items-center gap-2 rounded-xl bg-sky-500 px-5 py-2 text-xs font-semibold text-white hover:bg-sky-600"
             >
               <Send size={14} />
-              发送
+              {t('common.send')}
             </button>
           </div>
         </Dialog>
@@ -178,9 +180,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       {saveOpen && (
         <ConfirmDialog
           icon={<Info size={24} />}
-          title="保存世界数据？"
-          description="这会请求 Palworld 服务端将当前世界状态写入存档。服务器未启动时后端会返回降级状态。"
-          confirmText="确认保存"
+          title={t('ops.saveTitle')}
+          description={t('ops.saveDescription')}
+          confirmText={t('ops.confirmSave')}
           confirmClass="bg-sky-500 hover:bg-sky-600"
           onCancel={() => setSaveOpen(false)}
           onConfirm={handleSave}
@@ -188,13 +190,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       )}
 
       {restartOpen && (
-        <Dialog onClose={() => setRestartOpen(false)} title="确认重启服务器">
+        <Dialog onClose={() => setRestartOpen(false)} title={t('ops.restartTitle')}>
           <p className="mb-4 text-xs font-medium leading-relaxed text-slate-400">
-            在线玩家会断开连接，请确认已经保存世界或提前广播通知。
+            {t('ops.restartDescription')}
           </p>
           <div className="flex flex-col gap-4">
             <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
-              倒计时通知（秒）
+              {t('ops.countdown')}
               <input
                 type="number"
                 value={restartDelay}
@@ -205,7 +207,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-500">
-              停机原因
+              {t('ops.reason')}
               <input
                 type="text"
                 value={restartReason}
@@ -219,14 +221,14 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
                 onClick={() => setRestartOpen(false)}
                 className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-50"
               >
-                取消
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
                 onClick={handleRestart}
                 className="rounded-xl bg-rose-500 px-5 py-2 text-xs font-semibold text-white hover:bg-rose-600"
               >
-                安全重启
+                {t('ops.safeRestart')}
               </button>
             </div>
           </div>
@@ -240,7 +242,9 @@ const Dialog: React.FC<React.PropsWithChildren<{ title: string; onClose: () => v
   title,
   onClose,
   children,
-}) => (
+}) => {
+  const { t } = useI18n();
+  return (
   <div className="pp-dialog-backdrop fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
     <div
       role="dialog"
@@ -250,14 +254,15 @@ const Dialog: React.FC<React.PropsWithChildren<{ title: string; onClose: () => v
     >
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-base font-bold text-slate-900">{title}</h3>
-        <button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="关闭">
+        <button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label={t('common.close')}>
           <X size={18} />
         </button>
       </div>
       {children}
     </div>
   </div>
-);
+  );
+};
 
 const ConfirmDialog: React.FC<{
   icon: React.ReactNode;
@@ -267,7 +272,9 @@ const ConfirmDialog: React.FC<{
   confirmClass: string;
   onCancel: () => void;
   onConfirm: () => void;
-}> = ({ icon, title, description, confirmText, confirmClass, onCancel, onConfirm }) => (
+}> = ({ icon, title, description, confirmText, confirmClass, onCancel, onConfirm }) => {
+  const { t } = useI18n();
+  return (
   <div className="pp-dialog-backdrop fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
     <div
       role="dialog"
@@ -286,7 +293,7 @@ const ConfirmDialog: React.FC<{
           onClick={onCancel}
           className="flex-1 rounded-xl border border-slate-200 py-2.5 text-xs font-semibold text-slate-500 hover:bg-slate-50"
         >
-          取消
+          {t('common.cancel')}
         </button>
         <button
           type="button"
@@ -298,4 +305,5 @@ const ConfirmDialog: React.FC<{
       </div>
     </div>
   </div>
-);
+  );
+};

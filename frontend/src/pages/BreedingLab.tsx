@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Dna, Egg, FlaskConical, GitBranch, LoaderCircle, Pause, Play, RotateCcw, Search, Sparkles, Square, Timer, Trees } from 'lucide-react';
+import { Activity, Dna, Egg, FlaskConical, GitBranch, LoaderCircle, Pause, Play, RotateCcw, Search, Sparkles, Square, Timer, Trees } from 'lucide-react';
 import { breedingApi, type BreedSessionPrincipal, type BreedingAccess, type BreedingSubmitInput } from '../api/breeding';
 import { getErrorMessage } from '../api/client';
 import { saveIndexApi } from '../api/saveIndex';
@@ -39,6 +39,7 @@ export const BreedingLab: React.FC<BreedingLabProps> = ({ access = 'admin', prin
   const customContainers = useQuery({ queryKey: ['breeding-custom-containers', access], queryFn: () => breedingApi.customContainers(access), retry: false });
   const presets = useQuery({ queryKey: ['breeding-presets', access], queryFn: () => breedingApi.presets(access), retry: false });
   const saveStatus = useQuery({ queryKey: ['save-index-status'], queryFn: saveIndexApi.getStatus, enabled: !restricted });
+  const serviceStatus = useQuery({ queryKey: ['breeding-service-status'], queryFn: breedingApi.status, enabled: !restricted, retry: false, refetchInterval: 30_000 });
   const [target, setTarget] = useState('');
   const [targetQueue, setTargetQueue] = useState<QueuedTarget[]>([]);
   const [gender, setGender] = useState('wildcard');
@@ -135,8 +136,9 @@ export const BreedingLab: React.FC<BreedingLabProps> = ({ access = 'admin', prin
 
   return (
     <div className="page-shell breeding-page">
-      <div className="page-titlebar"><div><p className="eyebrow">PalCalc v1.17.6</p><h1>配种实验室</h1><p>{restricted ? '仅使用你绑定角色名下的帕鲁进行计算，无法查看其他玩家或服务器路径。' : '直接使用当前存档中的帕鲁，寻找满足目标词条和 IV 的最优配种路线。'}</p></div><span className={`state-pill ${restricted || saveStatus.data?.state === 'ready' ? 'ok' : 'warn'}`}>{restricted ? `已绑定 ${principal?.nickname || principal?.player_uid || '-'}` : `存档 ${saveStatus.data?.state || 'unknown'}`}</span></div>
-      <section className="status-strip breeding-status"><Metric icon={<DatabaseIcon />} label={restricted ? '绑定角色' : '可用帕鲁'} value={restricted ? (principal?.nickname || '-') : (saveStatus.data?.counts.pals || 0)} /><Metric icon={<Dna size={16} />} label="数据库" value={catalog.data?.version || '-'} /><Metric icon={<Timer size={16} />} label="任务" value={job?.status || 'idle'} /><Metric icon={<Sparkles size={16} />} label={restricted ? '积分' : '结果'} value={restricted ? (principal?.balance ?? '-') : result.length} /></section>
+      <div className="page-titlebar"><div><p className="eyebrow">PalCalc {serviceStatus.data?.upstream_version || 'v1.17.6'}</p><h1>配种实验室</h1><p>{restricted ? '仅使用你绑定角色名下的帕鲁进行计算，无法查看其他玩家或服务器路径。' : '直接使用当前存档中的帕鲁，寻找满足目标词条和 IV 的最优配种路线。'}</p></div><span className={`state-pill ${restricted || (saveStatus.data?.state === 'ready' && serviceStatus.data?.available) ? 'ok' : 'warn'}`}>{restricted ? `已绑定 ${principal?.nickname || principal?.player_uid || '-'}` : serviceStatus.data?.available ? 'PalCalc 可用' : 'PalCalc 不可用'}</span></div>
+      <section className="status-strip breeding-status"><Metric icon={<DatabaseIcon />} label={restricted ? '绑定角色' : '可用帕鲁'} value={restricted ? (principal?.nickname || '-') : (saveStatus.data?.counts.pals || 0)} /><Metric icon={<Dna size={16} />} label="数据库" value={catalog.data?.version || serviceStatus.data?.database_version || '-'} /><Metric icon={<Activity size={16} />} label="求解服务" value={restricted ? '受限会话' : serviceStatus.data?.available ? `${serviceStatus.data.latency_ms} 毫秒` : '离线'} /><Metric icon={<Timer size={16} />} label="任务" value={jobStatusLabel(job?.status)} /><Metric icon={<Sparkles size={16} />} label={restricted ? '积分' : '结果'} value={restricted ? (principal?.balance ?? '-') : result.length} /></section>
+      {!restricted && serviceStatus.data && !serviceStatus.data.available && <div className="pp-notice warn">配种求解侧车当前不可用：{serviceStatus.data.last_error || '请检查 palcalc-bridge 服务和日志'}。服务器管理与存档浏览不受影响。</div>}
       {error && <div className="pp-notice danger">{error}</div>}
 
       <div className="breeding-workspace">
@@ -174,8 +176,8 @@ export const BreedingLab: React.FC<BreedingLabProps> = ({ access = 'admin', prin
           <NumberSetting label="巨大蛋孵化（分钟）" value={gameSettings.massive_egg_incubation_minutes} onChange={(value) => setGameSettings({ ...gameSettings, massive_egg_incubation_minutes: value })} />
           <label className="toggle-setting"><span><strong>多个配种牧场</strong><small>允许路线阶段并行配种</small></span><input type="checkbox" checked={gameSettings.multiple_breeding_farms} onChange={(event) => setGameSettings({ ...gameSettings, multiple_breeding_farms: event.target.checked })} /></label>
           <label className="toggle-setting"><span><strong>多个孵化器</strong><small>允许多枚蛋并行孵化</small></span><input type="checkbox" checked={gameSettings.multiple_incubators} onChange={(event) => setGameSettings({ ...gameSettings, multiple_incubators: event.target.checked })} /></label>
-          <button type="button" className="pp-button accent wide solve-button" disabled={(!target && !targetQueue.length) || mutation.isPending || (!restricted && saveStatus.data?.state !== 'ready')} onClick={() => mutation.mutate()}>{mutation.isPending ? <LoaderCircle className="animate-spin" size={16} /> : <Play size={16} />}开始计算{targetQueue.length > 1 ? `（${targetQueue.length} 个目标${restricted ? `，${targetQueue.length} 积分` : ''}）` : restricted ? '（1 积分）' : ''}</button>
-          {job && <div className="job-progress"><span><strong>{job.message || job.status}</strong><small>{job.progress}%</small></span><div><i style={{ width: `${job.progress}%` }} /></div>{running && <div className="job-actions"><button type="button" onClick={() => void breedingApi.pause(job.id, access)}><Pause size={14} />暂停</button><button type="button" onClick={() => void breedingApi.resume(job.id, access)}><RotateCcw size={14} />恢复</button><button type="button" onClick={() => void breedingApi.cancel(job.id, access)}><Square size={14} />取消</button></div>}</div>}
+          <button type="button" className="pp-button accent wide solve-button" disabled={(!target && !targetQueue.length) || mutation.isPending || (!restricted && (saveStatus.data?.state !== 'ready' || serviceStatus.data?.available === false))} onClick={() => mutation.mutate()}>{mutation.isPending ? <LoaderCircle className="animate-spin" size={16} /> : <Play size={16} />}开始计算{targetQueue.length > 1 ? `（${targetQueue.length} 个目标${restricted ? `，${targetQueue.length} 积分` : ''}）` : restricted ? '（1 积分）' : ''}</button>
+          {job && <div className="job-progress"><span><strong>{jobMessageLabel(job.message, job.status)}</strong><small>{job.progress}%</small></span><div><i style={{ width: `${job.progress}%` }} /></div>{running && <div className="job-actions"><button type="button" onClick={() => void breedingApi.pause(job.id, access)}><Pause size={14} />暂停</button><button type="button" onClick={() => void breedingApi.resume(job.id, access)}><RotateCcw size={14} />恢复</button><button type="button" onClick={() => void breedingApi.cancel(job.id, access)}><Square size={14} />取消</button></div>}</div>}
         </section>
       </div>
 
@@ -194,4 +196,20 @@ const NumberSetting: React.FC<{ label: string; value: number; onChange: (value: 
 const PassiveGroup: React.FC<{ title: string; ids: string[]; catalog: Array<{ id: string; name: string }>; onRemove: (id: string) => void }> = ({ title, ids, catalog, onRemove }) => <div><span>{title}</span><div>{ids.length ? ids.map((id) => <button type="button" key={id} onClick={() => onRemove(id)}>{catalog.find((item) => item.id === id)?.name || id} ×</button>) : <small>未选择</small>}</div></div>;
 const formatDuration = (seconds: number) => { const hours = Math.floor(seconds / 3600); const minutes = Math.ceil((seconds % 3600) / 60); return hours ? `${hours} 小时 ${minutes} 分` : `${minutes} 分钟`; };
 
-const TreeNode: React.FC<{ node: BreedingTreeNode; depth: number }> = ({ node, depth }) => <div className={`tree-branch depth-${Math.min(depth, 4)}`}><article className={`tree-node ${node.type}`}><div><span className="node-type">{node.type === 'owned' ? '已有' : node.type === 'wild' ? '野生' : node.type === 'surgery' ? '手术' : node.type === 'bred' ? '配种' : '组合'}</span><strong>{node.pal_name}</strong><small>{node.gender} · {node.location_type || '路线节点'}</small></div><div className="node-meta"><span>{node.passives.length ? node.passives.join(' · ') : '无目标词条'}</span>{node.eggs != null && <span>{node.eggs} 枚蛋</span>}{node.probability != null && <span>{(node.probability * 100).toFixed(1)}%</span>}</div></article>{node.children && <div className="tree-children">{node.children.map((child, index) => <TreeNode key={`${child.type}-${child.pal_id}-${index}`} node={child} depth={depth + 1} />)}</div>}</div>;
+const TreeNode: React.FC<{ node: BreedingTreeNode; depth: number }> = ({ node, depth }) => <div className={`tree-branch depth-${Math.min(depth, 4)}`}><article className={`tree-node ${node.type}`}><div><span className="node-type">{node.type === 'owned' ? '已有' : node.type === 'wild' ? '野生' : node.type === 'surgery' ? '手术' : node.type === 'bred' ? '配种' : '组合'}</span><strong>{node.pal_name || node.pal_id}</strong><small>{genderLabel(node.gender)} · {locationTypeLabel(node.location_type)}</small></div><div className="node-meta"><span>{node.passives.length ? node.passives.join(' · ') : '无目标词条'}</span>{node.eggs != null && <span>{node.eggs} 枚蛋</span>}{node.probability != null && <span>{(node.probability * 100).toFixed(1)}%</span>}</div></article>{node.children && <div className="tree-children">{node.children.map((child, index) => <TreeNode key={`${child.type}-${child.pal_id}-${index}`} node={child} depth={depth + 1} />)}</div>}</div>;
+
+const jobStatusLabel = (status?: string) => ({
+  queued: '已排队', running: '计算中', paused: '已暂停', completed: '已完成', success: '已完成', failed: '失败', canceled: '已取消', idle: '空闲',
+}[String(status || 'idle').toLowerCase()] || status || '空闲');
+
+const jobMessageLabel = (message?: string, status?: string) => {
+  const text = String(message || '').trim();
+  if (!text || !/[\u3400-\u9fff]/.test(text)) return jobStatusLabel(status);
+  return text;
+};
+
+const genderLabel = (gender?: string) => ({ male: '雄性', female: '雌性', wildcard: '不限', unknown: '未知' }[String(gender || '').toLowerCase()] || gender || '未知');
+
+const locationTypeLabel = (location?: string) => ({
+  palbox: '帕鲁终端', party: '队伍', base: '据点', worker: '据点工作', custom: '自定义容器', wild: '野外获取', route: '路线节点',
+}[String(location || '').toLowerCase()] || location || '路线节点');

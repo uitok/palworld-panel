@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiClient, ApiError, currentApiBaseUrl, handleRequest, unwrapApiData } from './client';
+import { apiClient, currentApiBaseUrl, handleRequest, unwrapApiData } from './client';
 
 describe('api client response handling', () => {
   beforeEach(() => {
@@ -20,7 +20,11 @@ describe('api client response handling', () => {
   it('throws by default when the backend request fails', async () => {
     await expect(
       handleRequest(() => Promise.reject({ response: { status: 502 } }), { logs: '暂无日志' }, { quiet: true }),
-    ).rejects.toBeInstanceOf(ApiError);
+    ).rejects.toMatchObject({
+      status: 502,
+      code: 'backend_temporarily_unavailable',
+      message: expect.stringContaining('暂时无法连接 PalPanel 后端'),
+    });
   });
 
   it('returns the fallback only when fallbackOnError is explicitly enabled', async () => {
@@ -94,6 +98,19 @@ describe('api client response handling', () => {
         { quiet: true, fallbackOnError: false },
       ),
     ).rejects.toMatchObject({ status: 401, code: 'steam_login_required', message: 'Steam cache expired' });
+
+    await expect(
+      handleRequest(
+        () => Promise.reject({
+          response: {
+            status: 401,
+            data: { ok: false, error: { code: 'invalid_steam_credentials', message: 'invalid Steam credentials' } },
+          },
+        }),
+        {},
+        { quiet: true, fallbackOnError: false },
+      ),
+    ).rejects.toMatchObject({ status: 401, code: 'invalid_steam_credentials', message: 'invalid Steam credentials' });
     expect(listener).not.toHaveBeenCalled();
 
     window.removeEventListener('palpanel:auth-error', listener);

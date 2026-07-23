@@ -98,6 +98,9 @@ func extractSaveZIP(archivePath, destination string, maxBytes int64) error {
 			return errors.New("uncompressed save archive exceeds limit")
 		}
 		total += size
+		if saveArchivePathExcluded(clean) {
+			continue
+		}
 		target, err := saveArchiveTarget(destination, clean)
 		if err != nil {
 			return err
@@ -142,12 +145,16 @@ func extractSaveTAR(reader *tar.Reader, destination string, maxBytes int64) erro
 		if err != nil {
 			return err
 		}
+		excluded := saveArchivePathExcluded(clean)
 		target, err := saveArchiveTarget(destination, clean)
 		if err != nil {
 			return err
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
+			if excluded {
+				continue
+			}
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return err
 			}
@@ -156,6 +163,9 @@ func extractSaveTAR(reader *tar.Reader, destination string, maxBytes int64) erro
 				return errors.New("uncompressed save archive exceeds limit")
 			}
 			total += header.Size
+			if excluded {
+				continue
+			}
 			if err := writeSaveArchiveFile(target, reader, header.Size); err != nil {
 				return err
 			}
@@ -171,6 +181,16 @@ func extractSaveTAR(reader *tar.Reader, destination string, maxBytes int64) erro
 		return errors.New("archive file count is invalid")
 	}
 	return nil
+}
+
+func saveArchivePathExcluded(clean string) bool {
+	for _, component := range strings.Split(filepath.ToSlash(clean), "/") {
+		switch strings.ToLower(component) {
+		case "backup", "backups", "history":
+			return true
+		}
+	}
+	return false
 }
 
 func cleanSaveArchivePath(name string) (string, error) {
@@ -225,8 +245,7 @@ func findImportedWorld(root string) (string, error) {
 			return walkErr
 		}
 		if entry.IsDir() {
-			name := strings.ToLower(entry.Name())
-			if name == "backup" || name == "backups" {
+			if saveArchivePathExcluded(entry.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

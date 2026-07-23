@@ -17,7 +17,7 @@ import type {
 import { createFallbackJob, mapJob } from './tasks';
 import { AI_OPERATION_TIMEOUT_MS } from './requestTimeouts';
 
-const STEAM_AUTH_OPERATION_TIMEOUT_MS = 60_000;
+const STEAM_AUTH_OPERATION_TIMEOUT_MS = 180_000;
 
 const stringArray = (raw: unknown): string[] => {
   if (!Array.isArray(raw)) return [];
@@ -247,6 +247,8 @@ export const mapSteamWorkshopAuthStatus = (raw: unknown): SteamWorkshopAuthStatu
     verification_required: Boolean(data.verification_required),
     account_name: data.account_name ? String(data.account_name) : undefined,
     last_verified_at: data.last_verified_at ? String(data.last_verified_at) : undefined,
+    password_configured: Boolean(data.password_configured),
+    steam_guard_required: Boolean(data.steam_guard_required),
     message: data.message ? String(data.message) : undefined,
   };
 };
@@ -258,6 +260,8 @@ const emptySteamWorkshopAuthStatus: SteamWorkshopAuthStatus = {
   login_in_progress: false,
   logged_in: false,
   verification_required: false,
+  password_configured: false,
+  steam_guard_required: false,
 };
 
 export const modsApi = {
@@ -352,24 +356,38 @@ export const modsApi = {
       { map: mapSteamWorkshopAuthStatus, quiet: true, fallbackOnError: false },
     ),
 
-  startWorkshopAuth: (accountName?: string) =>
+  startWorkshopAuth: (input: { accountName: string; password: string; steamGuardCode?: string }) =>
     handleRequest<unknown, SteamWorkshopAuthStatus>(
       () => apiClient.post(
         '/mods/workshop/auth/start',
-        { account_name: accountName?.trim() || undefined },
+        {
+          account_name: input.accountName.trim(),
+          password: input.password,
+          steam_guard_code: input.steamGuardCode?.trim() || undefined,
+        },
         { timeout: STEAM_AUTH_OPERATION_TIMEOUT_MS },
       ),
       emptySteamWorkshopAuthStatus,
       { map: mapSteamWorkshopAuthStatus, quiet: true, fallbackOnError: false },
     ),
 
-  verifyWorkshopAuth: (accountName?: string) =>
+  verifyWorkshopAuth: (accountName?: string, steamGuardCode?: string) =>
     handleRequest<unknown, SteamWorkshopAuthStatus>(
       () => apiClient.post(
         '/mods/workshop/auth/verify',
-        { account_name: accountName?.trim() || undefined },
+        {
+          account_name: accountName?.trim() || undefined,
+          steam_guard_code: steamGuardCode?.trim() || undefined,
+        },
         { timeout: STEAM_AUTH_OPERATION_TIMEOUT_MS },
       ),
+      emptySteamWorkshopAuthStatus,
+      { map: mapSteamWorkshopAuthStatus, quiet: true, fallbackOnError: false },
+    ),
+
+  clearWorkshopAuth: () =>
+    handleRequest<unknown, SteamWorkshopAuthStatus>(
+      () => apiClient.delete('/mods/workshop/auth/credentials', { timeout: STEAM_AUTH_OPERATION_TIMEOUT_MS }),
       emptySteamWorkshopAuthStatus,
       { map: mapSteamWorkshopAuthStatus, quiet: true, fallbackOnError: false },
     ),

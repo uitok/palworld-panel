@@ -6,6 +6,11 @@
 /output/
 /*.log
 
+# Local development caches, agent state, and reference artifacts
+/.cache/
+/.superpowers/
+/local-artifacts/
+
 # Defensive SteamCMD credential/session and download exclusions. The managed runtime
 # should already be below dev-runtime, but these prevent accidental alternate-root adds.
 **/steamcmd/config/

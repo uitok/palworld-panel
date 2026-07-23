@@ -2,7 +2,7 @@ package monitor
 
 import (
 	"context"
-	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -15,6 +15,7 @@ import (
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
+	"palpanel/internal/docker"
 	"palpanel/internal/id"
 	"palpanel/internal/palconfig"
 	"palpanel/internal/palrest"
@@ -22,15 +23,17 @@ import (
 )
 
 type Manager struct {
-	cfg       appconfig.Config
-	store     *db.Store
-	server    Server
-	palrest   palrest.Client
-	run       func(context.Context, string, ...string) ([]byte, error)
-	dial      func(string, string, time.Duration) (net.Conn, error)
-	diskUsage func(string) (int64, int64, error)
-	goos      string
-	now       func() time.Time
+	cfg          appconfig.Config
+	store        *db.Store
+	server       Server
+	palrest      palrest.Client
+	run          func(context.Context, string, ...string) ([]byte, error)
+	dial         func(string, string, time.Duration) (net.Conn, error)
+	diskUsage    func(string) (int64, int64, error)
+	processStats func(context.Context, int) (ProcessStats, error)
+	hostMemory   HostMemoryCollector
+	goos         string
+	now          func() time.Time
 }
 
 type Server interface {
@@ -41,11 +44,18 @@ type Snapshot struct {
 	Sample db.MonitorSample `json:"sample"`
 }
 
+type ProcessStats struct {
+	CPUPercent       float64
+	MemoryUsageBytes int64
+	ProcessCount     int
+}
+
 func New(cfg appconfig.Config, store *db.Store, serverManager Server, restClient palrest.Client) Manager {
 	return Manager{
 		cfg: cfg, store: store, server: serverManager, palrest: restClient,
-		run: runCommand, dial: net.DialTimeout, diskUsage: platformDiskUsage,
-		goos: runtime.GOOS, now: time.Now,
+		run: runCommand, dial: net.DialTimeout, diskUsage: platformDiskUsage, processStats: platformProcessTreeStats,
+		hostMemory: newPlatformHostMemoryCollector(),
+		goos:       runtime.GOOS, now: time.Now,
 	}
 }
 
@@ -94,6 +104,7 @@ func (m Manager) History(ctx context.Context, limit int) ([]db.MonitorSample, er
 
 func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
 	sample := db.MonitorSample{ID: id.New("mon"), CreatedAt: m.currentTime().UTC().Format(time.RFC3339Nano)}
+	m.fillHostMemory(ctx, &sample)
 	runtimeMode := ""
 	status, err := m.server.Status(ctx)
 	if err != nil {
@@ -103,7 +114,7 @@ func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
 		sample.GamePortHealthy = status.Container.Status == "running"
 		sample.QueryPortHealthy = status.Container.Status == "running"
 		if status.RuntimeMode == server.RuntimeWineDocker {
-			m.fillDockerStats(ctx, &sample)
+			m.fillDockerStats(ctx, &sample, status.Container)
 		} else {
 			m.fillWindowsProcessStats(ctx, &sample)
 		}
@@ -111,6 +122,10 @@ func (m Manager) Sample(ctx context.Context) (db.MonitorSample, error) {
 	m.fillDiskStats(ctx, &sample)
 	m.fillRESTStats(ctx, &sample, runtimeMode)
 	m.fillRCONHealth(ctx, &sample, runtimeMode)
+	sample.RiskReasons = deriveRiskReasons(sample)
+	if err := m.processRiskAlerts(ctx, sample.RiskReasons); err != nil {
+		appendReason(&sample, "monitor alerts: "+err.Error())
+	}
 	if m.cfg.MonitorRetentionDays == 0 {
 		return sample, nil
 	}
@@ -269,7 +284,15 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (m Manager) fillDockerStats(ctx context.Context, sample *db.MonitorSample) {
+func (m Manager) fillDockerStats(ctx context.Context, sample *db.MonitorSample, status docker.ContainerStatus) {
+	sample.LifecycleAvailable = status.LifecycleAvailable
+	if status.LifecycleAvailable {
+		sample.OOMKilled = status.OOMKilled
+		sample.ExitCode = status.ExitCode
+		sample.RestartCount = status.RestartCount
+		sample.StartedAt = status.StartedAt
+		sample.FinishedAt = status.FinishedAt
+	}
 	out, err := m.command(ctx, m.cfg.DockerBinary, "stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", m.cfg.DockerContainer)
 	if err != nil {
 		appendReason(sample, "docker stats: "+err.Error())
@@ -290,35 +313,86 @@ func (m Manager) fillDockerStats(ctx context.Context, sample *db.MonitorSample) 
 		if usage, ok := parseDockerBytes(strings.TrimSpace(memParts[0])); ok {
 			sample.MemoryAvailable = true
 			sample.MemoryUsageBytes = usage
+			sample.WorkloadMemoryAvailable = true
+			sample.WorkloadMemoryUsageBytes = usage
 		}
 		if limit, ok := parseDockerBytes(strings.TrimSpace(memParts[1])); ok {
 			sample.MemoryLimitBytes = limit
+			sample.WorkloadMemoryLimitBytes = limit
 		}
 	}
 }
 
 func (m Manager) fillWindowsProcessStats(ctx context.Context, sample *db.MonitorSample) {
-	pid, _, err := m.store.GetKV(ctx, "windows_pid")
-	if err != nil || strings.TrimSpace(pid) == "" {
+	pidText, _, err := m.store.GetKV(ctx, "windows_pid")
+	if err != nil || strings.TrimSpace(pidText) == "" {
 		appendReason(sample, "windows process: pid unavailable")
 		return
 	}
-	out, err := m.command(ctx, "tasklist", "/FI", "PID eq "+pid, "/FO", "CSV", "/NH")
+	pid, err := strconv.Atoi(strings.TrimSpace(pidText))
+	if err != nil || pid <= 0 {
+		appendReason(sample, "windows process: invalid pid")
+		return
+	}
+	collector := m.processStats
+	if collector == nil {
+		collector = platformProcessTreeStats
+	}
+	stats, err := collector(ctx, pid)
 	if err != nil {
-		appendReason(sample, "tasklist: "+strings.TrimSpace(string(out)))
+		appendReason(sample, "windows process tree: "+err.Error())
 		return
 	}
-	rows, err := csv.NewReader(strings.NewReader(string(out))).ReadAll()
-	if err != nil || len(rows) == 0 || len(rows[0]) < 5 {
-		appendReason(sample, "tasklist: process not found")
+	sample.CPUAvailable = true
+	sample.CPUPercent = stats.CPUPercent
+	sample.MemoryAvailable = true
+	sample.MemoryUsageBytes = stats.MemoryUsageBytes
+	sample.WorkloadMemoryAvailable = true
+	sample.WorkloadMemoryUsageBytes = stats.MemoryUsageBytes
+	if raw, ok, metadataErr := m.store.GetKV(ctx, "windows_process"); metadataErr != nil {
+		appendReason(sample, "windows process metadata: "+metadataErr.Error())
+	} else if ok && strings.TrimSpace(raw) != "" {
+		var record struct {
+			CreationTime uint64 `json:"creation_time"`
+		}
+		if err := json.Unmarshal([]byte(raw), &record); err != nil {
+			appendReason(sample, "windows process metadata: "+err.Error())
+		} else {
+			sample.StartedAt = windowsFiletimeToRFC3339(record.CreationTime)
+		}
+	}
+}
+
+func windowsFiletimeToRFC3339(ticks uint64) string {
+	const unixEpochFiletime = uint64(116444736000000000)
+	if ticks < unixEpochFiletime {
+		return ""
+	}
+	unixTicks := ticks - unixEpochFiletime
+	seconds := int64(unixTicks / 10_000_000)
+	nanoseconds := int64(unixTicks%10_000_000) * 100
+	return time.Unix(seconds, nanoseconds).UTC().Format(time.RFC3339Nano)
+}
+
+func (m Manager) fillHostMemory(ctx context.Context, sample *db.MonitorSample) {
+	collector := m.hostMemory
+	if collector == nil {
+		collector = newPlatformHostMemoryCollector()
+	}
+	stats, err := collector.Collect(ctx)
+	if err != nil {
+		appendReason(sample, "host memory: "+err.Error())
 		return
 	}
-	kb := strings.NewReplacer(",", "", " K", "", " ", "").Replace(rows[0][4])
-	if value, err := strconv.ParseInt(kb, 10, 64); err == nil {
-		sample.MemoryAvailable = true
-		sample.MemoryUsageBytes = value * 1024
+	if stats.TotalBytes <= 0 {
+		appendReason(sample, "host memory: total memory unavailable")
+		return
 	}
-	sample.CPUAvailable = false
+	sample.HostMemoryAvailable = true
+	sample.HostMemoryTotalBytes = stats.TotalBytes
+	sample.HostMemoryAvailableBytes = stats.AvailableBytes
+	sample.HostSwapTotalBytes = stats.SwapTotalBytes
+	sample.HostSwapFreeBytes = stats.SwapFreeBytes
 }
 
 func (m Manager) fillDiskStats(ctx context.Context, sample *db.MonitorSample) {

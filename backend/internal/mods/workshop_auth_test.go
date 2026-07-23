@@ -3,7 +3,6 @@ package mods
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,40 +13,75 @@ import (
 
 type fakeWorkshopAuthenticator struct {
 	status       steamcmd.LoginStatus
-	startCalls   []string
+	startCalls   []steamcmd.LoginRequest
 	verifyCalls  []string
 	requireCalls []string
 	requireErr   error
 }
 
-func (f *fakeWorkshopAuthenticator) LoginStatus(account string) steamcmd.LoginStatus {
-	status := f.status
-	status.AccountName = account
-	return status
+type fakeWorkshopDockerRunner struct {
+	imageExists bool
+	secure      bool
+	verified    bool
+	verifyCalls []string
+	authCalls   []steamcmd.LoginRequest
 }
 
-func (f *fakeWorkshopAuthenticator) StartInteractiveLogin(_ context.Context, account string) (steamcmd.LoginStatus, error) {
-	f.startCalls = append(f.startCalls, account)
-	status := f.LoginStatus(account)
-	status.LoginInProgress = true
+func (f *fakeWorkshopDockerRunner) BuildImage(context.Context) error { return nil }
+func (f *fakeWorkshopDockerRunner) DownloadWorkshopTo(context.Context, string, string, ...string) error {
+	return nil
+}
+func (f *fakeWorkshopDockerRunner) ImageExists(context.Context) (bool, error) {
+	return f.imageExists, nil
+}
+func (f *fakeWorkshopDockerRunner) AuthenticateWorkshop(_ context.Context, request steamcmd.LoginRequest) ([]byte, error) {
+	f.authCalls = append(f.authCalls, request)
+	return []byte("Logged in OK"), nil
+}
+func (f *fakeWorkshopDockerRunner) VerifyWorkshopLogin(_ context.Context, account string) (bool, error) {
+	f.verifyCalls = append(f.verifyCalls, account)
+	return f.verified, nil
+}
+func (f *fakeWorkshopDockerRunner) WorkshopCredentialsSecure() bool { return f.secure }
+
+func (f *fakeWorkshopAuthenticator) CredentialStatus(account string) (steamcmd.LoginStatus, error) {
+	status := f.status
+	if account != "" {
+		status.AccountName = account
+	}
 	return status, nil
 }
 
-func (f *fakeWorkshopAuthenticator) VerifyLogin(_ context.Context, account string) (steamcmd.LoginStatus, error) {
-	f.verifyCalls = append(f.verifyCalls, account)
-	status := f.LoginStatus(account)
+func (f *fakeWorkshopAuthenticator) Authenticate(_ context.Context, request steamcmd.LoginRequest) (steamcmd.LoginStatus, error) {
+	f.startCalls = append(f.startCalls, request)
+	status, _ := f.CredentialStatus(request.AccountName)
+	status.PasswordConfigured = true
 	status.LoggedIn = true
+	status.VerificationRequired = false
+	return status, nil
+}
+
+func (f *fakeWorkshopAuthenticator) VerifyCredentials(_ context.Context, account, guard string) (steamcmd.LoginStatus, error) {
+	f.verifyCalls = append(f.verifyCalls, account)
+	status, _ := f.CredentialStatus(account)
+	status.LoggedIn = true
+	status.PasswordConfigured = true
 	status.VerificationRequired = false
 	status.LastVerifiedAt = time.Now().UTC().Format(time.RFC3339)
 	return status, nil
 }
 
-func (f *fakeWorkshopAuthenticator) RequireLogin(_ context.Context, account string) (steamcmd.LoginStatus, error) {
+func (f *fakeWorkshopAuthenticator) ClearCredentials(context.Context) (steamcmd.LoginStatus, error) {
+	return steamcmd.LoginStatus{Supported: true, SteamCMDInstalled: true, VerificationRequired: true}, nil
+}
+
+func (f *fakeWorkshopAuthenticator) RequireCredentials(_ context.Context, account string) (steamcmd.LoginStatus, error) {
 	f.requireCalls = append(f.requireCalls, account)
 	if f.requireErr != nil {
-		return f.LoginStatus(account), f.requireErr
+		status, _ := f.CredentialStatus(account)
+		return status, f.requireErr
 	}
-	return f.VerifyLogin(context.Background(), account)
+	return f.VerifyCredentials(context.Background(), account, "")
 }
 
 func TestWorkshopAuthStatusReloadsPersistedAccountAndProbesCachedSession(t *testing.T) {
@@ -63,7 +97,7 @@ func TestWorkshopAuthStatusReloadsPersistedAccountAndProbesCachedSession(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.LoggedIn || status.AccountName != "persisted_user" || len(fake.verifyCalls) != 1 || fake.verifyCalls[0] != "persisted_user" {
+	if status.AccountName != "persisted_user" || len(fake.verifyCalls) != 0 {
 		t.Fatalf("status = %#v, verify calls = %#v", status, fake.verifyCalls)
 	}
 }
@@ -87,11 +121,11 @@ func TestStartWorkshopLoginPersistsValidatedAccount(t *testing.T) {
 	useNativeWorkshopAuth(t, store)
 	fake := &fakeWorkshopAuthenticator{status: steamcmd.LoginStatus{Supported: true, SteamCMDInstalled: true}}
 	manager.steamAuth = fake
-	if _, err := manager.StartWorkshopLogin(t.Context(), " fixture_user "); err != nil {
+	if _, err := manager.StartWorkshopLogin(t.Context(), steamcmd.LoginRequest{AccountName: "fixture_user", Password: "fixture password"}); err != nil {
 		t.Fatal(err)
 	}
 	stored, configured, err := store.GetKV(t.Context(), workshopSteamAccountKey)
-	if err != nil || !configured || stored != "fixture_user" || len(fake.startCalls) != 1 || fake.startCalls[0] != "fixture_user" {
+	if err != nil || !configured || stored != "fixture_user" || len(fake.startCalls) != 1 || fake.startCalls[0].AccountName != "fixture_user" || fake.startCalls[0].Password != "fixture password" {
 		t.Fatalf("stored = %q, configured = %v, calls = %#v, error = %v", stored, configured, fake.startCalls, err)
 	}
 }
@@ -104,7 +138,7 @@ func TestVerifyWorkshopLoginReusesPersistedAccount(t *testing.T) {
 	}
 	fake := &fakeWorkshopAuthenticator{status: steamcmd.LoginStatus{Supported: true, SteamCMDInstalled: true}}
 	manager.steamAuth = fake
-	if _, err := manager.VerifyWorkshopLogin(t.Context(), ""); err != nil {
+	if _, err := manager.VerifyWorkshopLogin(t.Context(), "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.verifyCalls) != 1 || fake.verifyCalls[0] != "persisted_user" {
@@ -142,48 +176,64 @@ func TestWorkshopImportRejectsMissingLoginBeforeSubmittingJobAndReleasesClaim(t 
 	}
 }
 
-func TestDockerWorkshopAuthUsesCompleteEnvironmentCredentials(t *testing.T) {
+func TestDockerWorkshopAuthUsesSavedCredentialStatusWithoutCacheProbe(t *testing.T) {
 	manager, store := newImportTestManager(t)
 	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("STEAM_USERNAME", " fixture_user ")
-	t.Setenv("STEAM_PASSWORD", "fixture-password")
+	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "fixture_user"); err != nil {
+		t.Fatal(err)
+	}
+	fakeRunner := &fakeWorkshopDockerRunner{imageExists: true, secure: true, verified: true}
+	manager.runner = fakeRunner
+	manager.steamAuth = &fakeWorkshopAuthenticator{status: steamcmd.LoginStatus{
+		Supported: true, SteamCMDInstalled: true, LoggedIn: true, PasswordConfigured: true,
+		CredentialsSecure: true, AccountName: "fixture_user", LastVerifiedAt: time.Now().UTC().Format(time.RFC3339),
+	}}
 
 	status, err := manager.WorkshopAuthStatus(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Supported || !status.LoggedIn || !status.CredentialsSecure || status.VerificationRequired || status.AccountName != "fixture_user" {
+	if !status.Supported || !status.SteamCMDInstalled || !status.LoggedIn || !status.CredentialsSecure || status.VerificationRequired || status.AccountName != "fixture_user" {
 		t.Fatalf("Docker/Wine auth status = %#v", status)
+	}
+	if len(fakeRunner.verifyCalls) != 0 {
+		t.Fatalf("legacy cache probe calls = %#v", fakeRunner.verifyCalls)
 	}
 	if _, err := manager.RequireWorkshopLogin(t.Context()); err != nil {
 		t.Fatalf("RequireWorkshopLogin returned error: %v", err)
 	}
-	if _, err := manager.VerifyWorkshopLogin(t.Context(), ""); err != nil {
+	if _, err := manager.VerifyWorkshopLogin(t.Context(), "", ""); err != nil {
 		t.Fatalf("VerifyWorkshopLogin returned error: %v", err)
 	}
 }
 
-func TestDockerWorkshopAuthRequiresBothEnvironmentCredentials(t *testing.T) {
+func TestDockerWorkshopAuthRequiresConfiguredPasswordInsteadOfLegacyCache(t *testing.T) {
 	manager, store := newImportTestManager(t)
 	if err := store.SetKV(t.Context(), "runtime_mode", server.RuntimeWineDocker); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("STEAM_USERNAME", "fixture_user")
-	t.Setenv("STEAM_PASSWORD", "")
+	if err := store.SetKV(t.Context(), workshopSteamAccountKey, "fixture_user"); err != nil {
+		t.Fatal(err)
+	}
+	manager.runner = &fakeWorkshopDockerRunner{imageExists: true, secure: true, verified: false}
+	manager.steamAuth = &fakeWorkshopAuthenticator{
+		status:     steamcmd.LoginStatus{Supported: true, SteamCMDInstalled: true, AccountName: "fixture_user", VerificationRequired: true},
+		requireErr: steamcmd.ErrLoginRequired,
+	}
 
 	status, err := manager.WorkshopAuthStatus(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.LoggedIn || !status.VerificationRequired || status.CredentialsSecure {
-		t.Fatalf("incomplete Docker/Wine auth status = %#v", status)
+	if status.LoggedIn || !status.VerificationRequired || status.PasswordConfigured {
+		t.Fatalf("unconfigured Docker/Wine auth status = %#v", status)
 	}
-	if _, err := manager.RequireWorkshopLogin(t.Context()); !errors.Is(err, steamcmd.ErrLoginRequired) || !strings.Contains(err.Error(), "STEAM_PASSWORD") {
+	if _, err := manager.RequireWorkshopLogin(t.Context()); !errors.Is(err, steamcmd.ErrLoginRequired) {
 		t.Fatalf("RequireWorkshopLogin error = %v", err)
 	}
-	if _, err := manager.StartWorkshopLogin(t.Context(), "fixture_user"); !errors.Is(err, steamcmd.ErrInteractiveLogin) {
+	if _, err := manager.StartWorkshopLogin(t.Context(), steamcmd.LoginRequest{AccountName: "fixture_user", Password: "fixture password"}); err != nil {
 		t.Fatalf("StartWorkshopLogin error = %v", err)
 	}
 }

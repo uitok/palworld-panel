@@ -22,6 +22,12 @@ export const formatBytes = (bytes: number) => {
 
 export const bytesToGiB = (bytes: number) => bytes / 1024 / 1024 / 1024;
 
+export const formatCPUPercent = (value: number | undefined, available: boolean) => {
+  if (!available || value == null || !Number.isFinite(value)) return '不可用';
+  if (value > 0 && value < 0.1) return '<0.1% CPU';
+  return `${value.toFixed(1)}% CPU`;
+};
+
 export const percent = (used: number, total: number) => {
   if (!total) return null;
   return Math.min(100, Math.max(0, (used / total) * 100));
@@ -45,12 +51,12 @@ export const chartTooltipFormatter = (value: unknown, name: unknown) => {
 
 export const toMonitorChartPoints = (samples: readonly MonitorSample[]): MonitorChartPoint[] =>
   samples.map((sample) => {
-    const memoryPct = percent(sample.memory_usage_bytes, sample.memory_limit_bytes);
+    const memoryPct = percent(sample.workload_memory_usage_bytes, sample.workload_memory_limit_bytes);
     return {
       time: formatTime(sample.created_at),
       players: sample.current_players,
       cpu: sample.cpu_available ? Number(sample.cpu_percent.toFixed(2)) : null,
-      memoryPercent: sample.memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
-      memoryGiB: sample.memory_available ? Number(bytesToGiB(sample.memory_usage_bytes).toFixed(2)) : null,
+      memoryPercent: sample.workload_memory_available && memoryPct != null ? Number(memoryPct.toFixed(2)) : null,
+      memoryGiB: sample.workload_memory_available ? Number(bytesToGiB(sample.workload_memory_usage_bytes).toFixed(2)) : null,
     };
   });

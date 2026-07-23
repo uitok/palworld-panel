@@ -1,0 +1,196 @@
+<script lang="ts">
+	import { Button, Card, Input, Tooltip } from '$components/ui';
+	import { X, AlertTriangle, Trash2 } from 'lucide-svelte';
+	import { onMount } from 'svelte';
+	import { focusModal } from '$utils/modalUtils';
+	import * as m from '$i18n/messages';
+	import { c } from '$lib/utils/commonTranslations';
+
+	let { totalPals = 0, closeModal } = $props<{
+		totalPals: number;
+		closeModal: (value: boolean | null) => void;
+	}>();
+
+	let modalContainer: HTMLDivElement;
+	let confirmationText = $state('');
+	let step = $state(1);
+	let isValid = $state(false);
+
+	const REQUIRED_TEXT = 'DELETE ALL';
+
+	// Check if confirmation text is valid
+	$effect(() => {
+		isValid = confirmationText.trim().toUpperCase() === REQUIRED_TEXT;
+	});
+
+	function handleCancel() {
+		closeModal(false);
+	}
+
+	function handleConfirm() {
+		if (step === 1) {
+			step = 2;
+		} else if (step === 2 && isValid) {
+			closeModal(true);
+		}
+	}
+
+	function handleBack() {
+		if (step === 2) {
+			step = 1;
+			confirmationText = '';
+		}
+	}
+
+	onMount(() => {
+		focusModal(modalContainer);
+	});
+</script>
+
+<div bind:this={modalContainer}>
+	<Card class="max-w-md min-w-[calc(100vw/2.5)]">
+		<!-- Header with warning icon -->
+		<div class="mb-6 flex items-center gap-3">
+			<div class="bg-error-500/20 rounded-full p-2">
+				<AlertTriangle class="text-error-500 h-6 w-6" />
+			</div>
+			<div>
+				<h3 class="h3 text-error-500">Nuke UPS Storage</h3>
+				<p class="text-surface-600 dark:text-surface-400 text-sm">This action is irreversible</p>
+			</div>
+		</div>
+
+		{#if step === 1}
+			<!-- Step 1: Warning and count display -->
+			<div class="mb-6 space-y-4">
+				<div
+					class="bg-error-50 dark:bg-error-900/20 border-error-200 dark:border-error-800 rounded-lg border p-4"
+				>
+					<div class="flex items-start gap-3">
+						<Trash2 class="text-error-500 mt-0.5 h-5 w-5 shrink-0" />
+						<div class="space-y-2">
+							<h4 class="text-error-700 dark:text-error-300 font-semibold">
+								You are about to delete ALL pals from UPS
+							</h4>
+							<p class="text-error-600 dark:text-error-400 text-sm">
+								This will permanently delete {totalPals.toLocaleString()} pal{totalPals !== 1
+									? 's'
+									: ''} from your Universal Pal Storage. This action cannot be undone.
+							</p>
+						</div>
+					</div>
+				</div>
+
+				{#if totalPals === 0}
+					<div class="bg-surface-100 dark:bg-surface-800 rounded-lg p-4 text-center">
+						<p class="text-surface-600 dark:text-surface-400">
+							UPS is already empty. There are no pals to delete.
+						</p>
+					</div>
+				{:else}
+					<div
+						class="bg-warning-50 dark:bg-warning-900/20 border-warning-200 dark:border-warning-800 rounded-lg border p-4"
+					>
+						<h4 class="text-warning-700 dark:text-warning-300 mb-2 font-semibold">
+							What will be affected:
+						</h4>
+						<ul class="text-warning-600 dark:text-warning-400 space-y-1 text-sm">
+							<li>• All {totalPals.toLocaleString()} pals will be permanently deleted</li>
+							<li>• All collection counts will be reset to 0</li>
+							<li>• Transfer and clone statistics will be updated</li>
+							<li>• Operation will be logged for audit purposes</li>
+						</ul>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Step 1 buttons -->
+			<div class="flex justify-end space-x-4">
+				<Tooltip position="bottom">
+					<Button variant="secondary" onclick={handleCancel}>
+						<X size={20} />
+						<span>Cancel</span>
+					</Button>
+					{#snippet popup()}
+						<span>Cancel operation</span>
+					{/snippet}
+				</Tooltip>
+				{#if totalPals > 0}
+					<Tooltip position="bottom">
+						<Button variant="danger" onclick={handleConfirm}>
+							<AlertTriangle size={20} />
+							<span>Continue</span>
+						</Button>
+						{#snippet popup()}
+							<span>Proceed to confirmation</span>
+						{/snippet}
+					</Tooltip>
+				{/if}
+			</div>
+		{:else if step === 2}
+			<!-- Step 2: Text confirmation -->
+			<div class="mb-6 space-y-4">
+				<div
+					class="bg-error-50 dark:bg-error-900/20 border-error-200 dark:border-error-800 rounded-lg border p-4"
+				>
+					<h4 class="text-error-700 dark:text-error-300 mb-3 font-semibold">
+						Final Confirmation Required
+					</h4>
+					<p class="text-error-600 dark:text-error-400 mb-4 text-sm">
+						To confirm deletion of {totalPals.toLocaleString()} pals, type
+						<span
+							class="bg-error-100 text-error-900 dark:bg-error-900 dark:text-error-100 rounded px-1 font-mono font-bold"
+							>{REQUIRED_TEXT}</span
+						> below:
+					</p>
+
+					<Input
+						bind:value={confirmationText}
+						placeholder="Type 'DELETE ALL' to confirm"
+						inputClass="font-mono text-center {isValid ? 'border-success-500' : 'border-error-500'}"
+						autofocus
+					/>
+
+					{#if confirmationText && !isValid}
+						<p class="text-error-500 mt-2 text-xs">
+							Text must match exactly: {REQUIRED_TEXT}
+						</p>
+					{/if}
+				</div>
+			</div>
+
+			<!-- Step 2 buttons -->
+			<div class="flex justify-between">
+				<Tooltip position="bottom">
+					<Button variant="secondary" onclick={handleBack}>
+						<span>Back</span>
+					</Button>
+					{#snippet popup()}
+						<span>Go back to previous step</span>
+					{/snippet}
+				</Tooltip>
+
+				<div class="flex space-x-4">
+					<Tooltip position="bottom">
+						<Button variant="secondary" onclick={handleCancel}>
+							<X size={20} />
+							<span>Cancel</span>
+						</Button>
+						{#snippet popup()}
+							<span>Cancel operation</span>
+						{/snippet}
+					</Tooltip>
+					<Tooltip position="bottom">
+						<Button variant="danger" onclick={handleConfirm} disabled={!isValid}>
+							<Trash2 size={20} />
+							<span>Delete All</span>
+						</Button>
+						{#snippet popup()}
+							<span>{isValid ? 'Confirm deletion' : 'Enter confirmation text'}</span>
+						{/snippet}
+					</Tooltip>
+				</div>
+			</div>
+		{/if}
+	</Card>
+</div>

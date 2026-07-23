@@ -4,14 +4,40 @@ import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
 import { palDefenderGMApi } from './paldefenderGM';
 import type {
   EntityListParams,
-  EntityListResponse,
   Player,
   PlayerAccessEntry,
+  PlayerDataView,
+  PlayerListResponse,
   SaveInventoryContainer,
   SavePlayerDetail,
   SavePlayerInventory,
   UnsupportedActionResult,
 } from '../types';
+
+type PlayerSource = 'server';
+type PlayerSourceOptions = { source?: PlayerSource };
+
+const defaultPlayerView = (source?: PlayerSource): PlayerDataView => ({
+  scope: source === 'server' ? 'server' : 'active',
+  source_id: source === 'server' ? 'server' : '',
+  source_kind: 'server',
+  source_name: '',
+  online_overlay: true,
+});
+
+const mapPlayerView = (raw: unknown, source?: PlayerSource): PlayerDataView => {
+  const view = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const fallback = defaultPlayerView(source);
+  return {
+    scope: view.scope === 'server' ? 'server' : 'active',
+    source_id: String(view.source_id || fallback.source_id),
+    source_kind: view.source_kind === 'import' ? 'import' : 'server',
+    source_name: String(view.source_name || ''),
+    online_overlay: typeof view.online_overlay === 'boolean' ? view.online_overlay : fallback.online_overlay,
+  };
+};
+
+const withPlayerSource = (path: string, source?: PlayerSource) => source ? `${path}${path.includes('?') ? '&' : '?'}source=${source}` : path;
 
 export const mapPlayer = (raw: unknown): Player | null => {
   const player = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -26,7 +52,14 @@ export const mapPlayer = (raw: unknown): Player | null => {
     level: Number(player.level || 0),
     guild_id: String(player.guild_id || ''),
     guild_name: String(player.guild_name || player.guild || '未知公会'),
-    is_online: player.is_online == null ? true : Boolean(player.is_online),
+    is_online: Boolean(player.is_online),
+    online_source: player.online_source === 'rest'
+      || player.online_source === 'paldefender'
+      || player.online_source === 'rest+paldefender'
+      ? player.online_source
+      : 'none',
+    online_stale: Boolean(player.online_stale),
+    gm_user_id: player.gm_user_id ? String(player.gm_user_id) : undefined,
     last_online_time: String(player.last_online_time || ''),
     x: Number(player.location_x || player.x || 0),
     y: Number(player.location_y || player.y || 0),
@@ -81,13 +114,14 @@ export const mapSaveInventoryContainers = (raw: unknown): SaveInventoryContainer
   });
 };
 
-const mapPlayersList = (raw: unknown): EntityListResponse<Player> => {
+const mapPlayersList = (raw: unknown, source?: PlayerSource): PlayerListResponse => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const items = mapPlayers(raw);
   return {
     items,
     status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
     summary: data.summary ? mapSummary(data.summary) : { ...emptySummary, total: items.length, returned: items.length },
+    view: mapPlayerView(data.view, source),
   };
 };
 
@@ -111,12 +145,12 @@ export const mapAccessEntries = (raw: unknown): PlayerAccessEntry[] => {
 };
 
 export const playersApi = {
-  getPlayersList: (params: EntityListParams = {}) =>
-    handleRequest<unknown, EntityListResponse<Player>>(
-      () => apiClient.get(`/players${entityListQuery(params)}`),
-      { items: [], status: emptySaveIndexStatus, summary: emptySummary },
+  getPlayersList: (params: EntityListParams = {}, options: PlayerSourceOptions = {}) =>
+    handleRequest<unknown, PlayerListResponse>(
+      () => apiClient.get(withPlayerSource(`/players${entityListQuery(params)}`, options.source)),
+      { items: [], status: emptySaveIndexStatus, summary: emptySummary, view: defaultPlayerView(options.source) },
       {
-        map: mapPlayersList,
+        map: (raw) => mapPlayersList(raw, options.source),
         quiet: true,
       },
     ),
@@ -127,16 +161,17 @@ export const playersApi = {
       quiet: true,
     }),
 
-  getPlayer: (identifier: string) =>
+  getPlayer: (identifier: string, source?: PlayerSource) =>
     handleRequest<unknown, SavePlayerDetail>(
-      () => apiClient.get(`/players/${encodeURIComponent(identifier)}`),
-      { player: mapPlayer({ player_uid: identifier })!, status: emptySaveIndexStatus },
+      () => apiClient.get(withPlayerSource(`/players/${encodeURIComponent(identifier)}`, source)),
+      { player: mapPlayer({ player_uid: identifier })!, status: emptySaveIndexStatus, view: defaultPlayerView(source) },
       {
         map: (raw) => {
           const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
           return {
             player: mapPlayer(data.player) || mapPlayer({ player_uid: identifier })!,
             status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+            view: mapPlayerView(data.view, source),
           };
         },
         quiet: true,
@@ -144,16 +179,17 @@ export const playersApi = {
       },
     ),
 
-  getInventory: (identifier: string) =>
+  getInventory: (identifier: string, source?: PlayerSource) =>
     handleRequest<unknown, SavePlayerInventory>(
-      () => apiClient.get(`/players/${encodeURIComponent(identifier)}/inventory`),
-      { containers: [], status: emptySaveIndexStatus },
+      () => apiClient.get(withPlayerSource(`/players/${encodeURIComponent(identifier)}/inventory`, source)),
+      { containers: [], status: emptySaveIndexStatus, view: defaultPlayerView(source) },
       {
         map: (raw) => {
           const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
           return {
             containers: mapSaveInventoryContainers(raw),
             status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+            view: mapPlayerView(data.view, source),
           };
         },
         quiet: true,

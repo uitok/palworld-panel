@@ -41,9 +41,13 @@ process or player session.
    managed stop and inspect the bounded Palworld log.
 5. Probe Palworld REST and RCON through `127.0.0.1`. Docker must publish REST,
    RCON, and PalDefender REST only on loopback.
-6. Put both `STEAM_USERNAME` and `STEAM_PASSWORD` in the mode-0600
-   `palpanel.env`, restart PalPanel, and download one disposable Workshop item.
-   Redacted logs must not contain the password.
+6. In Mod Management, submit the Steam account/password and an optional transient
+   Steam Guard code, approve Steam Mobile if requested, and download one disposable
+   Workshop item. Confirm `data/secrets/steam-workshop-credentials.json` is mode
+   0600, `data/steamcmd-workshop-config` is mounted at `/root/Steam`, no temporary
+   `steamcmd-docker-login-*.txt` remains, Docker arguments and redacted logs do not
+   contain the password or code, and a later download in a new container reuses
+   the approved cache without asking for the password again.
 7. Scan Workshop, Pak, and UE4SS Mod layouts. Exercise only non-destructive
    actions unless the target is disposable.
 8. Install PalDefender, which installs pinned UE4SS first. Start the server and

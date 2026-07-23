@@ -24,6 +24,7 @@ import (
 	"palpanel/internal/db"
 	"palpanel/internal/id"
 	"palpanel/internal/jobs"
+	"palpanel/internal/networkproxy"
 )
 
 const (
@@ -70,14 +71,18 @@ func PanelRESTPermissions() []string {
 }
 
 type Manager struct {
-	cfg         appconfig.Config
-	store       *db.Store
-	client      *http.Client
-	restClient  *http.Client
-	restBaseURL string
-	jobs        *jobs.Executor
-	ue4ss       *dependencyTracker
-	serverState ServerState
+	cfg                appconfig.Config
+	store              *db.Store
+	client             *http.Client
+	proxyURL           func() (string, error)
+	restClient         *http.Client
+	restBaseURL        string
+	jobs               *jobs.Executor
+	ue4ss              *dependencyTracker
+	serverState        ServerState
+	exportRCON         func(context.Context, string) (RCONResult, error)
+	exportPollInterval time.Duration
+	exportTimeout      time.Duration
 }
 
 type Release struct {
@@ -122,7 +127,27 @@ func NewManager(cfg appconfig.Config, store *db.Store, executors ...*jobs.Execut
 	if len(executors) > 0 && executors[0] != nil {
 		executor = executors[0]
 	}
-	return Manager{cfg: cfg, store: store, client: &http.Client{Timeout: 60 * time.Second}, restClient: newRESTHTTPClient(), restBaseURL: cfg.EffectivePalDefenderRESTBaseURL(), jobs: executor, ue4ss: newDependencyTracker()}
+	directTransport, _ := networkproxy.Transport("")
+	proxyService := networkproxy.New(cfg)
+	return Manager{
+		cfg: cfg, store: store, client: &http.Client{Transport: directTransport, Timeout: 60 * time.Second},
+		proxyURL: proxyService.InstallProxyURL, restClient: newRESTHTTPClient(), restBaseURL: cfg.EffectivePalDefenderRESTBaseURL(),
+		jobs: executor, ue4ss: newDependencyTracker(), exportPollInterval: 500 * time.Millisecond, exportTimeout: 30 * time.Second,
+	}
+}
+
+func (m Manager) publicHTTPClient() (*http.Client, error) {
+	if m.proxyURL == nil {
+		return m.client, nil
+	}
+	rawProxy, err := m.proxyURL()
+	if err != nil {
+		return nil, fmt.Errorf("read managed download proxy: %w", err)
+	}
+	if strings.TrimSpace(rawProxy) == "" {
+		return m.client, nil
+	}
+	return networkproxy.HTTPClient(m.client, rawProxy, 60*time.Second)
 }
 
 func (m Manager) Releases(ctx context.Context) ([]Release, error) {
@@ -516,7 +541,11 @@ func (m Manager) downloadAsset(ctx context.Context, asset Asset, dst string) err
 	if err != nil {
 		return err
 	}
-	resp, err := m.client.Do(req)
+	client, err := m.publicHTTPClient()
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -628,7 +657,11 @@ func (m Manager) getJSON(ctx context.Context, url string, out any) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := m.client.Do(req)
+	client, err := m.publicHTTPClient()
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

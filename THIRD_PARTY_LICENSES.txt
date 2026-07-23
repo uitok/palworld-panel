@@ -38,6 +38,23 @@ PalCalc breeding solver
   cross-platform `palcalc-bridge`; the WPF UI, GraphSharp, and Windows-only
   save reader are not linked. The complete license is included as
   licenses/PalCalc-MIT.txt.
+- The 115-entry standard passive-skill Chinese catalog is reproducibly
+  generated from PalCalc.Model/db.json v26 by
+  scripts/generate-palcalc-passives.go under the same MIT license.
+
+UID remapper source snapshots
+-----------------------------
+- oMaN-Rod/palworld-save-pal, pinned at commit
+  0d99b04acba369ec88550d122794b9917bbf820e. The complete tracked source
+  snapshot is under third_party/palworld-save-pal and its exact retrieval and
+  checksum record is third_party/palworld-save-pal.provenance.json. This pinned
+  commit has no standalone LICENSE file; its README License section states
+  `MIT License (do whatever you want with it).` No replacement license text has
+  been fabricated or attributed to upstream.
+- trumank/uesave, pinned at commit
+  a5271781df0ed021d72e5ad6eab1c59d5199451c: MIT. The complete tracked source,
+  including the upstream LICENSE, is under third_party/uesave; exact retrieval
+  and checksums are in third_party/uesave.provenance.json.
 
 Localization data
 -----------------
@@ -47,6 +64,12 @@ Localization data
 
     palworld-server-tool
     Copyright 2024 zaigie
+
+  The reduced Chinese technology metadata also incorporates the Apache-2.0
+  GM fork bingyouxue/palworld-server-tool-gm commit
+  d45c74cf92ca3d1b081bf03a62adfebe131888ad. Technology descriptions are
+  excluded; OP.GG image URLs are retained for runtime identification only and
+  the images are not redistributed with PalPanel.
 
 - Palworld item-identification WebP artwork under frontend/public/assets/items
   is sourced from zaigie/palworld-server-tool commit

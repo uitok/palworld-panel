@@ -4,7 +4,7 @@
 
 .pp-app {
   display: flex;
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* ---------------- 侧边栏 ---------------- */
@@ -18,7 +18,7 @@
   flex-direction: column;
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
 }
 .pp-rail::-webkit-scrollbar-thumb { background: rgba(70,78,88,.2); background-clip: content-box; }

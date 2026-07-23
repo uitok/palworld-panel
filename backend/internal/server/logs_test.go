@@ -7,17 +7,79 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"palpanel/internal/appconfig"
 	"palpanel/internal/db"
 	"palpanel/internal/docker"
 )
 
+func TestLogsGameChannelUsesLatestPalDefenderMainLog(t *testing.T) {
+	m, cleanup := newLogTestManager(t, "")
+	defer cleanup()
+	logsDir := filepath.Join(m.cfg.PalDefenderDir(), "Logs")
+	oldPath := filepath.Join(logsDir, "2026-07-22.log")
+	latestPath := filepath.Join(logsDir, "2026-07-23.log")
+	writeFile(t, oldPath, "old game event\n")
+	writeFile(t, latestPath, "latest game event\n")
+	writeFile(t, filepath.Join(logsDir, "Cheats", "2026-07-24.log"), "cheat event\n")
+	writeFile(t, filepath.Join(logsDir, "RESTAPI", "PD_2026-07-24.log"), "rest event\n")
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := m.Logs(context.Background(), LogQuery{Channel: "game", Tail: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Source != "paldefender-game" || !result.Available || !strings.Contains(result.Logs, "latest game event") || strings.Contains(result.Logs, "rest event") || strings.Contains(result.Logs, "cheat event") {
+		t.Fatalf("unexpected game log result: %#v", result)
+	}
+}
+
+func TestLogsPalDefenderRESTChannelUsesLatestRESTLog(t *testing.T) {
+	m, cleanup := newLogTestManager(t, "")
+	defer cleanup()
+	restDir := filepath.Join(m.cfg.PalDefenderDir(), "Logs", "RESTAPI")
+	oldPath := filepath.Join(restDir, "PD_2026-07-22.log")
+	latestPath := filepath.Join(restDir, "RESTAPI_2026-07-23.log")
+	writeFile(t, oldPath, "old rest event\n")
+	writeFile(t, latestPath, "latest rest event\n")
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := m.Logs(context.Background(), LogQuery{Channel: "paldefender-rest", Tail: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Source != "paldefender-rest" || !result.Available || !strings.Contains(result.Logs, "latest rest event") {
+		t.Fatalf("unexpected REST log result: %#v", result)
+	}
+}
+
+func TestLogsLauncherChannelKeepsPersistentLauncherOutput(t *testing.T) {
+	m, cleanup := newLogTestManager(t, "")
+	defer cleanup()
+	writeFile(t, m.cfg.ServerLogPath(), "[palpanel] launcher output\n")
+	writeFile(t, filepath.Join(m.cfg.PalDefenderDir(), "Logs", "2026-07-23.log"), "game event\n")
+
+	result, err := m.Logs(context.Background(), LogQuery{Channel: "launcher", Tail: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Source != "file" || !strings.Contains(result.Logs, "launcher output") || strings.Contains(result.Logs, "game event") {
+		t.Fatalf("unexpected launcher log result: %#v", result)
+	}
+}
+
 func TestLogsPreferPersistentFileAndRemainAvailableWhenStopped(t *testing.T) {
 	m, cleanup := newLogTestManager(t, `
 case "$1" in
   logs) echo "docker output" ;;
-  inspect) echo exited ;;
+  inspect) printf '%s\n' '[{"RestartCount":0,"State":{"Status":"exited","OOMKilled":false,"ExitCode":0,"StartedAt":"","FinishedAt":""}}]' ;;
 esac`)
 	defer cleanup()
 	writeFile(t, m.cfg.ServerLogPath(), "[INFO] keep\n[ERROR] selected\n")
@@ -41,7 +103,7 @@ func TestLogsFallBackToDocker(t *testing.T) {
 	m, cleanup := newLogTestManager(t, `
 case "$1" in
   logs) echo "docker fallback output" ;;
-  inspect) echo running ;;
+  inspect) printf '%s\n' '[{"RestartCount":0,"State":{"Status":"running","OOMKilled":false,"ExitCode":0,"StartedAt":"","FinishedAt":""}}]' ;;
 esac`)
 	defer cleanup()
 

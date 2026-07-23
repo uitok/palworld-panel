@@ -11,8 +11,9 @@ const mocks = vi.hoisted(() => ({
   palsApi: { getPalsList: vi.fn() },
   gmApi: {
     status: vi.fn(), players: vi.fn(), player: vi.fn(), items: vi.fn(), inventory: vi.fn(),
+    removeItems: vi.fn(), teleport: vi.fn(), localTechnologyCatalog: vi.fn(), technologyCatalog: vi.fn(), palCatalog: vi.fn(), passiveCatalog: vi.fn(),
     progression: vi.fn(), giveProgression: vi.fn(), techs: vi.fn(), learnTech: vi.fn(), forgetTech: vi.fn(),
-    pals: vi.fn(), givePals: vi.fn(), templates: vi.fn(), template: vi.fn(), putTemplate: vi.fn(),
+    pals: vi.fn(), givePals: vi.fn(), giveCustomPal: vi.fn(), giveCustomPals: vi.fn(), releasePal: vi.fn(), templates: vi.fn(), template: vi.fn(), putTemplate: vi.fn(),
     givePalTemplates: vi.fn(), exportPals: vi.fn(), exportedPalTemplates: vi.fn(), exportedPalTemplate: vi.fn(),
     accessSettings: vi.fn(), putAccessSettings: vi.fn(), whitelist: vi.fn(), whitelistAdd: vi.fn(),
     whitelistRemove: vi.fn(), toggleAdmin: vi.fn(), giveItems: vi.fn(), sendMessage: vi.fn(),
@@ -28,13 +29,19 @@ vi.mock('../api/paldefenderGM', () => ({ palDefenderGMApi: mocks.gmApi }));
 const saveStatus = { state: 'ready', ready: true };
 const builderSave = {
   id: 'steam_1', steam_id: 'steam_1', player_uid: 'uid_1', nickname: 'Builder', level: 45,
-  guild_id: 'guild_1', guild_name: 'Guild', is_online: false, last_online_time: '2026-07-15T12:00:00Z',
+  guild_id: 'guild_1', guild_name: 'Guild', is_online: true, online_source: 'paldefender', online_stale: false, gm_user_id: 'steam_1',
+  last_online_time: '2026-07-15T12:00:00Z',
   x: 10, y: 20, z: 30,
 };
 const archivistSave = {
   id: 'steam_save', steam_id: 'steam_save', player_uid: 'uid_save', nickname: 'Archivist', level: 18,
-  guild_id: '', guild_name: '', is_online: false, last_online_time: '2026-07-14T12:00:00Z',
+  guild_id: '', guild_name: '', is_online: false, online_source: 'none', online_stale: false, last_online_time: '2026-07-14T12:00:00Z',
   x: 101, y: 202, z: 3,
+};
+const offlineSave = {
+  id: 'steam_2', steam_id: 'steam_2', player_uid: 'uid_2', nickname: 'OfflineUser', level: 12,
+  guild_id: '', guild_name: '', is_online: false, online_source: 'none', online_stale: false, gm_user_id: 'steam_2',
+  last_online_time: '2026-07-13T12:00:00Z', x: 0, y: 0, z: 0,
 };
 const builderGM = {
   Name: 'Builder', IP: '127.0.0.1', UserId: 'steam_1', PlayerUID: 'uid_1', GuildName: 'Guild', GuildUUID: 'guild_1',
@@ -68,9 +75,9 @@ describe('PalDefender player center', () => {
       user: { name: 'admin', role: 'admin', permissions: ['read', 'players:write', 'security:write'] },
     });
     mocks.authApi.logout.mockResolvedValue({ logged_out: true });
-    mocks.playersApi.getPlayersList.mockResolvedValue({ items: [builderSave, archivistSave], status: saveStatus, summary: { total: 2, returned: 2 } });
+    mocks.playersApi.getPlayersList.mockResolvedValue({ items: [builderSave, archivistSave, offlineSave], status: saveStatus, summary: { total: 3, returned: 3 } });
     mocks.playersApi.getPlayer.mockImplementation(async (identifier: string) => ({
-      player: identifier === 'uid_save' ? archivistSave : builderSave,
+      player: identifier === 'uid_save' ? archivistSave : identifier === 'uid_2' ? offlineSave : builderSave,
       status: saveStatus,
     }));
     mocks.playersApi.getInventory.mockResolvedValue({
@@ -78,7 +85,7 @@ describe('PalDefender player center', () => {
       containers: [{ container_id: 'bag_1', owner_type: 'player', owner_id: 'uid_1', slots: [{ slot: 0, item_id: 'Money', item_name: '金币', count: 25, durability: 0 }] }],
     });
     mocks.palsApi.getPalsList.mockResolvedValue({
-      items: [{ id: 'pal_1', instance_id: 'pal_1', character_id: 'Anubis', name: '阿努比斯', nickname: '矿工', level: 50, rarity: 'Common', owner_nickname: 'Builder', owner_steam_id: 'steam_1', skills: [], passives: [], raw_passives: [], raw_skills: [], work_suitability: [], health: 100, max_health: 100, status: 'Healthy', x: 0, y: 0, z: 0 }],
+      items: [{ id: 'pal_1', instance_id: 'pal_1', character_id: 'Anubis', name: '阿努比斯', nickname: '矿工', level: 50, rarity: 'Common', gender: 'male', rank: 4, owner_nickname: 'Builder', owner_steam_id: 'steam_1', skills: [], passives: [], raw_passives: [], raw_skills: [], work_suitability: [], health: 100, max_health: 100, status: 'Healthy', x: 0, y: 0, z: 0 }],
       status: saveStatus,
       summary: { total: 1, returned: 1 },
     });
@@ -102,6 +109,10 @@ describe('PalDefender player center', () => {
       Progression: { Player: { level: 45, exp: 1000, unusedStatusPoints: 0 }, Currencies: { relics: {}, technologyPoints: 12, ancientTechnologyPoints: 3 }, Bosses: {}, Captures: {}, Activities: {} },
     });
     mocks.gmApi.techs.mockResolvedValue({ Meta: { Player: 'steam_1', PlayerUID: 'uid_1', UnlockedCount: 1, LockedCount: 1, TotalCount: 2 }, Techs: { Unlocked: ['Technology_1'] } });
+    mocks.gmApi.localTechnologyCatalog.mockResolvedValue({ items: [{ id: 'Technology_1', name: '原始作业台', level: 1, category: '建筑', boss: false }, { id: 'Technology_2', name: '石斧', level: 1, category: '科技', boss: false }], returned: 2 });
+    mocks.gmApi.technologyCatalog.mockResolvedValue({ catalog: { command: '/gettechids', output: '', entries: ['Technology_1', 'Technology_2'] }, reference_url: '' });
+    mocks.gmApi.palCatalog.mockResolvedValue({ items: [{ id: 'Anubis', name: '阿努比斯' }, { id: 'PinkCat', name: '捣蛋猫' }], returned: 2 });
+    mocks.gmApi.passiveCatalog.mockResolvedValue({ items: [{ id: 'Legend', name: '传说' }, { id: 'CraftSpeed_up3', name: '卓绝技艺' }, { id: 'MutationPal_Immortal', name: '不死之身' }, { id: 'WorldTree_MoveSpeed', name: '次元跳跃' }], returned: 4 });
     mocks.gmApi.pals.mockResolvedValue({ Meta: { Player: 'steam_1', PlayerUID: 'uid_1', TeamCount: 1, PalboxCount: 10, BaseCampCount: 2 }, Pals: {} });
     mocks.gmApi.templates.mockResolvedValue({ templates: [{ name: 'starter.json', path: 'starter.json', size: 10, modified_at: '' }], reference_url: '' });
     mocks.gmApi.exportedPalTemplates.mockResolvedValue({ player_id: 'steam_1', templates: [{ name: 'anubis.json', path: 'anubis.json', size: 20, modified_at: '' }], reference_url: '' });
@@ -109,10 +120,19 @@ describe('PalDefender player center', () => {
     mocks.gmApi.exportedPalTemplate.mockResolvedValue({ PalID: 'Anubis', Level: 50, IVs: { Health: 100 } });
     mocks.gmApi.accessSettings.mockResolvedValue({ use_whitelist: false, whitelist_message: 'Not allowed', use_admin_whitelist: false, admin_auto_login: false, admin_ips: ['127.0.0.1'], reload_required: false, reference_url: '' });
     mocks.gmApi.whitelist.mockResolvedValue({ command: '/whitelist_get', output: '', entries: [] });
-    for (const name of ['giveProgression', 'learnTech', 'forgetTech', 'givePals', 'givePalTemplates', 'exportPals', 'putTemplate', 'putAccessSettings', 'whitelistAdd', 'whitelistRemove', 'toggleAdmin', 'sendMessage', 'broadcast', 'kick', 'ban', 'unban'] as const) {
+    for (const name of ['removeItems', 'teleport', 'giveProgression', 'learnTech', 'forgetTech', 'givePals', 'giveCustomPal', 'giveCustomPals', 'releasePal', 'givePalTemplates', 'putTemplate', 'putAccessSettings', 'whitelistAdd', 'whitelistRemove', 'toggleAdmin', 'sendMessage', 'broadcast', 'kick', 'ban', 'unban'] as const) {
       mocks.gmApi[name].mockResolvedValue({ Success: true });
     }
+	mocks.gmApi.exportPals.mockResolvedValue({
+		player_id: 'steam_1', command: '/exportpals steam_1', output: 'accepted',
+		templates: [{ player_id: 'steam_1', name: 'anubis.json', path: 'anubis.json', size: 20, modified_at: '2026-07-23T00:00:00Z' }],
+		template_info: { player_id: 'steam_1', name: 'anubis.json', path: 'anubis.json', size: 20, modified_at: '2026-07-23T00:00:00Z' },
+		template: { PalID: 'Anubis', Level: 50, IVs: { Health: 100 } },
+	});
     mocks.gmApi.giveItems.mockResolvedValue({ Granted: { Items: 5 } });
+	mocks.gmApi.givePals.mockResolvedValue({ Granted: { Pals: 1 } });
+	mocks.gmApi.givePalTemplates.mockResolvedValue({ Granted: { PalTemplates: 1 } });
+	mocks.gmApi.giveCustomPals.mockResolvedValue({ Granted: { PalTemplates: 1 } });
   });
 
   afterEach(() => {
@@ -120,15 +140,18 @@ describe('PalDefender player center', () => {
     vi.restoreAllMocks();
   });
 
-  it('merges save-index and PalDefender players and selects the online player first', async () => {
+  it('consumes the backend player registry without merging the GM player list', async () => {
     renderPage();
 
-    expect(await screen.findByRole('heading', { name: 'Builder' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Builder' }, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Builder 在线' })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Archivist 离线' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'OfflineUser 离线' })).toBeInTheDocument();
+    expect(mocks.gmApi.players).not.toHaveBeenCalled();
     await waitFor(() => expect(mocks.gmApi.player).toHaveBeenCalledWith('steam_1'));
-    expect(mocks.playersApi.getPlayer).toHaveBeenCalledWith('uid_1');
+    expect(mocks.playersApi.getPlayersList).toHaveBeenCalledWith({ limit: 5000 }, { source: 'server' });
+    expect(mocks.playersApi.getPlayer).toHaveBeenCalledWith('uid_1', 'server');
+    expect(mocks.playersApi.getInventory).toHaveBeenCalledWith('uid_1', 'server');
   });
 
   it('keeps save players available when PalDefender is not configured', async () => {
@@ -141,6 +164,31 @@ describe('PalDefender player center', () => {
     expect(screen.getByText(/存档玩家、帕鲁和背包快照仍可正常查看/)).toBeInTheDocument();
     expect(mocks.gmApi.players).not.toHaveBeenCalled();
     expect(mocks.gmApi.player).not.toHaveBeenCalled();
+  });
+
+  it('shows a warning when official REST online data is stale', async () => {
+    mocks.playersApi.getPlayersList.mockResolvedValue({
+      items: [{ ...archivistSave, online_stale: true }],
+      status: saveStatus,
+      summary: { total: 1, returned: 1 },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/官方 REST 在线状态暂不可用/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archivist 离线' })).toBeInTheDocument();
+  });
+
+  it('shows the stale warning when the backend registry is empty', async () => {
+    mocks.playersApi.getPlayersList.mockResolvedValue({
+      items: [],
+      status: { ...saveStatus, stale: true, warnings: ['online player REST data is stale or unavailable'] },
+      summary: { total: 0, returned: 0 },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/官方 REST 在线状态暂不可用/)).toBeInTheDocument();
   });
 
   it('gives a catalog item to the selected online player and refreshes inventory', async () => {
@@ -173,22 +221,137 @@ describe('PalDefender player center', () => {
     await waitFor(() => expect(mocks.gmApi.learnTech).toHaveBeenCalledWith('steam_1', { Technology: ['Technology_2', 'Technology_3'] }));
   });
 
+  it('adjusts an existing item total by removing the negative delta', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '物品' }));
+    fireEvent.click(await screen.findByRole('button', { name: '调整总量' }));
+    fireEvent.change(screen.getByLabelText('目标物品总量'), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认调整' }));
+    await waitFor(() => expect(mocks.gmApi.removeItems).toHaveBeenCalledWith('steam_1', { Items: [{ ItemID: 'Money', Count: 5 }] }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('25 → 20'));
+  });
+
+  it('teleports the selected online player to coordinates', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '传送' }));
+    fireEvent.change(screen.getByLabelText('X'), { target: { value: '100' } });
+    fireEvent.change(screen.getByLabelText('Y'), { target: { value: '-200' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认传送' }));
+    await waitFor(() => expect(mocks.gmApi.teleport).toHaveBeenCalledWith('steam_1', { Mode: 'coordinates', X: 100, Y: -200 }));
+  });
+
   it('gives a pal and loads an exported pal into the template editor', async () => {
     renderPage();
     fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
 
     fireEvent.change(screen.getByLabelText('帕鲁 ID'), { target: { value: 'Anubis' } });
     fireEvent.change(screen.getByLabelText('帕鲁等级'), { target: { value: '50' } });
+	fireEvent.change(screen.getByLabelText('普通帕鲁发放数量'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: '发放帕鲁' }));
-    await waitFor(() => expect(mocks.gmApi.givePals).toHaveBeenCalledWith('steam_1', { Pals: [{ PalID: 'Anubis', Level: 50 }] }));
+	await waitFor(() => expect(mocks.gmApi.givePals).toHaveBeenCalledWith('steam_1', { Pals: Array.from({ length: 3 }, () => ({ PalID: 'Anubis', Level: 50 })) }));
 
     fireEvent.click(screen.getByRole('button', { name: '导出玩家帕鲁' }));
     await waitFor(() => expect(mocks.gmApi.exportPals).toHaveBeenCalledWith('steam_1'));
-    fireEvent.change(screen.getByLabelText('导出帕鲁模板'), { target: { value: 'anubis.json' } });
-    fireEvent.click(screen.getByRole('button', { name: '载入导出文件' }));
-    await waitFor(() => expect(mocks.gmApi.exportedPalTemplate).toHaveBeenCalledWith('steam_1', 'anubis.json'));
+	expect(mocks.gmApi.exportedPalTemplate).not.toHaveBeenCalled();
     expect(screen.getByLabelText('模板名称')).toHaveValue('anubis');
     expect(screen.getByLabelText('IV 生命')).toHaveValue(100);
+
+	fireEvent.click(screen.getByRole('button', { name: '一键合法满值' }));
+	expect(screen.getByLabelText('伙伴技能等级')).toHaveValue(5);
+	expect(screen.getByLabelText('浓缩数量 / 星级进度')).toHaveValue(116);
+	expect(screen.getByLabelText('IV 防御')).toHaveValue(100);
+	expect(screen.getByLabelText('魂强化 防御')).toHaveValue(20);
+	fireEvent.change(screen.getByLabelText('搜索被动词条'), { target: { value: '不死之身' } });
+	expect(await screen.findByRole('button', { name: /不死之身/ })).toBeInTheDocument();
+	fireEvent.change(screen.getByLabelText('搜索被动词条'), { target: { value: '' } });
+
+    fireEvent.click(await screen.findByRole('button', { name: /卓绝技艺/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '觉醒个体' }));
+    fireEvent.change(screen.getByLabelText('IV 近战攻击'), { target: { value: '95' } });
+    fireEvent.change(screen.getByLabelText('魂强化 作业速度'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('采矿'), { target: { value: '5' } });
+	fireEvent.change(screen.getByLabelText('自定义发放数量'), { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: '直接发放当前配置' }));
+	await waitFor(() => expect(mocks.gmApi.giveCustomPals).toHaveBeenCalledWith('steam_1', { Template: expect.objectContaining({
+      PalID: 'Anubis', IsAwakening: true, Passives: ['CraftSpeed_up3'],
+      IVs: expect.objectContaining({ Health: 100, AttackMelee: 95 }),
+      PalSouls: expect.objectContaining({ CraftSpeed: 10 }),
+      ExtraWorkSuitabilities: { Mining: 5 },
+	}), Count: 4 }));
+  });
+
+  it('creates a real template file from the selected PalID and shows confirmation', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    fireEvent.change(screen.getByLabelText('帕鲁 ID'), { target: { value: 'Anubis' } });
+    fireEvent.click(screen.getByRole('button', { name: '新建模板文件' }));
+    await waitFor(() => expect(mocks.gmApi.putTemplate).toHaveBeenCalledWith(expect.stringMatching(/^pal_Anubis_\d+$/), { PalID: 'Anubis', Level: 1 }));
+    expect(await screen.findByText(/模板文件 .*\.json 已创建/)).toBeInTheDocument();
+    expect((screen.getByLabelText('模板名称') as HTMLInputElement).value).toMatch(/^pal_Anubis_\d+$/);
+  });
+
+  it('repeats one saved template and rejects counts above the native limit', async () => {
+	renderPage();
+	fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+	await screen.findByRole('option', { name: 'starter.json' });
+	fireEvent.change(screen.getByLabelText('已保存模板'), { target: { value: 'starter.json' } });
+	fireEvent.change(screen.getByLabelText('模板发放数量'), { target: { value: '20' } });
+	fireEvent.click(screen.getByRole('button', { name: '发放模板' }));
+	await waitFor(() => expect(mocks.gmApi.givePalTemplates).toHaveBeenCalledWith('steam_1', { PalTemplates: Array.from({ length: 20 }, () => 'starter.json') }));
+
+	fireEvent.change(screen.getByLabelText('模板发放数量'), { target: { value: '21' } });
+	fireEvent.click(screen.getByRole('button', { name: '发放模板' }));
+	expect(await screen.findByText('模板发放数量必须是 1–20 的整数。')).toBeInTheDocument();
+	expect(mocks.gmApi.givePalTemplates).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains why a template file cannot be created without a PalID', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    fireEvent.click(screen.getByRole('button', { name: '新建模板文件' }));
+    expect(await screen.findByText(/新建模板前请先在上方选择帕鲁/)).toBeInTheDocument();
+    expect(mocks.gmApi.putTemplate).not.toHaveBeenCalled();
+  });
+
+  it('disables live PalDefender export for an offline player but keeps prior exports available', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'OfflineUser 离线' }));
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    expect(screen.getByRole('button', { name: '导出玩家帕鲁' })).toBeDisabled();
+    expect(screen.getByText(/玩家离线时 PalDefender 不会加载用于导出的帕鲁容器/)).toBeInTheDocument();
+    expect(screen.getByLabelText('导出帕鲁模板')).toBeEnabled();
+  });
+
+  it('imports a JSON Pal template and preserves supported fields outside the visual editor', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+
+    const payload = JSON.stringify({
+      PalID: 'Anubis', Level: 55, Exp: 123456, Passives: ['Legend'],
+      DisableWorkPreferences: ['Mining'], PhysicalHealth: 'Healthful', IsAwakening: true,
+    });
+    const file = new File([payload], 'legend-anubis.json', { type: 'application/json' });
+    if (typeof file.text !== 'function') Object.defineProperty(file, 'text', { value: vi.fn().mockResolvedValue(payload) });
+    fireEvent.change(screen.getByLabelText('导入帕鲁模板文件'), { target: { files: [file] } });
+
+    expect(await screen.findByText(/已导入 legend-anubis.json/)).toBeInTheDocument();
+    const templatePalID = screen.getAllByRole('textbox').find((input) => input.getAttribute('aria-label') === 'PalID');
+    expect(templatePalID).toHaveValue('Anubis');
+    expect(screen.getByRole('checkbox', { name: '觉醒个体' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: '直接发放当前配置' }));
+	await waitFor(() => expect(mocks.gmApi.giveCustomPals).toHaveBeenCalledWith('steam_1', { Template: expect.objectContaining({
+      PalID: 'Anubis', Level: 55, Exp: 123456, Passives: ['Legend'], IsAwakening: true,
+      DisableWorkPreferences: ['Mining'], PhysicalHealth: 'Healthful',
+	}), Count: 1 }));
+  });
+
+  it('requires typed confirmation before releasing one matching pal', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: '帕鲁' }));
+    fireEvent.click(await screen.findByRole('button', { name: '放生 矿工' }));
+    fireEvent.change(screen.getByLabelText('放生确认玩家名称'), { target: { value: 'Builder' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认放生' }));
+    await waitFor(() => expect(mocks.gmApi.releasePal).toHaveBeenCalledWith('steam_1', { PalID: 'Anubis', Level: 50, Gender: 'male', Rank: 4 }));
   });
 
   it('manages the current player whitelist, temporary admin, and persistent access settings', async () => {

@@ -5,46 +5,30 @@ package steamcmd
 import (
 	"context"
 	"path/filepath"
-	"reflect"
+	"strings"
 	"testing"
-
-	"golang.org/x/sys/windows"
 )
 
-func TestHardenCredentialTreeTargetsOnlySteamCMDConfig(t *testing.T) {
-	root := t.TempDir()
+func TestHardenPrivatePathRestrictsCredentialFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "steam-workshop-credentials.json")
 	var captured []string
-	err := hardenCredentialTreeWithRunner(t.Context(), root, func(_ context.Context, args ...string) ([]byte, error) {
+	err := hardenPrivatePathWithRunner(t.Context(), path, func(_ context.Context, args ...string) ([]byte, error) {
 		captured = append([]string(nil), args...)
 		return []byte("success"), nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(captured) == 0 || captured[0] != filepath.Join(root, "config") {
-		t.Fatalf("icacls target = %#v", captured)
-	}
-	for _, forbidden := range []string{root, filepath.Join(root, "steamapps"), filepath.Join(root, "steamcmd.exe")} {
-		if captured[0] == forbidden {
-			t.Fatalf("credential ACL unexpectedly targets %q", forbidden)
-		}
+	if len(captured) < 7 || captured[0] != path || !containsACLGrant(captured, ":F") {
+		t.Fatalf("icacls arguments = %#v", captured)
 	}
 }
 
-func TestInteractiveSteamCMDCommandUsesDirectNewConsole(t *testing.T) {
-	cmd, err := interactiveSteamCMDCommand(`C:\tools\steamcmd.exe`, `C:\tools`, "fixture_user")
-	if err != nil {
-		t.Fatal(err)
+func containsACLGrant(args []string, suffix string) bool {
+	for _, value := range args {
+		if strings.HasSuffix(value, suffix) {
+			return true
+		}
 	}
-	wantArgs := []string{`C:\tools\steamcmd.exe`, "+login", "fixture_user"}
-	if !reflect.DeepEqual(cmd.Args, wantArgs) {
-		t.Fatalf("command args = %#v, want %#v", cmd.Args, wantArgs)
-	}
-	if cmd.Dir != `C:\tools` {
-		t.Fatalf("command directory = %q", cmd.Dir)
-	}
-	wantFlags := uint32(windows.CREATE_NEW_CONSOLE | windows.CREATE_NEW_PROCESS_GROUP)
-	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags&wantFlags != wantFlags {
-		t.Fatalf("creation flags = %#v", cmd.SysProcAttr)
-	}
+	return false
 }

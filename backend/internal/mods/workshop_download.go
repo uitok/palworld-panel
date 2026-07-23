@@ -12,14 +12,15 @@ import (
 
 type nativeWorkshopDownloader interface {
 	Ensure(context.Context) error
-	DownloadWorkshopTo(context.Context, string, string, string, string) error
+	DownloadWorkshopTo(context.Context, string, string, string) error
 }
 
 type workshopAuthenticator interface {
-	LoginStatus(string) steamcmd.LoginStatus
-	StartInteractiveLogin(context.Context, string) (steamcmd.LoginStatus, error)
-	VerifyLogin(context.Context, string) (steamcmd.LoginStatus, error)
-	RequireLogin(context.Context, string) (steamcmd.LoginStatus, error)
+	CredentialStatus(string) (steamcmd.LoginStatus, error)
+	Authenticate(context.Context, steamcmd.LoginRequest) (steamcmd.LoginStatus, error)
+	VerifyCredentials(context.Context, string, string) (steamcmd.LoginStatus, error)
+	ClearCredentials(context.Context) (steamcmd.LoginStatus, error)
+	RequireCredentials(context.Context, string) (steamcmd.LoginStatus, error)
 }
 
 func (m Manager) workshopRuntimeMode(ctx context.Context) (string, error) {
@@ -40,27 +41,34 @@ func (m Manager) downloadWorkshopTo(ctx context.Context, jobID, itemID, destinat
 		return fmt.Errorf("read runtime mode: %w", err)
 	}
 	if mode == server.RuntimeWindowsSteamCMD {
-		accountName, _, err := m.store.GetKV(ctx, workshopSteamAccountKey)
-		if err != nil {
-			return fmt.Errorf("read Steam Workshop account: %w", err)
-		}
 		m.update(jobID, "running", 10, "preparing native SteamCMD", "")
 		if err := m.native.Ensure(ctx); err != nil {
 			return fmt.Errorf("prepare native SteamCMD: %w", err)
 		}
 		m.update(jobID, "running", 50, "downloading Steam Workshop item with native SteamCMD", "")
-		if err := m.native.DownloadWorkshopTo(ctx, m.cfg.WorkshopAppID, itemID, destination, accountName); err != nil {
+		if err := m.native.DownloadWorkshopTo(ctx, m.cfg.WorkshopAppID, itemID, destination); err != nil {
 			return fmt.Errorf("native SteamCMD Workshop download: %w", err)
 		}
 		return nil
 	}
 
-	m.update(jobID, "running", 10, "building wine runner image", "")
-	if err := m.runner.BuildImage(ctx); err != nil {
-		return fmt.Errorf("build wine runner image: %w", err)
+	m.update(jobID, "running", 10, "checking wine runner image", "")
+	imageExists, err := m.runner.ImageExists(ctx)
+	if err != nil {
+		return fmt.Errorf("check wine runner image: %w", err)
+	}
+	if !imageExists {
+		m.update(jobID, "running", 20, "building wine runner image", "")
+		if err := m.runner.BuildImage(ctx); err != nil {
+			return fmt.Errorf("build wine runner image: %w", err)
+		}
 	}
 	m.update(jobID, "running", 50, "downloading Steam Workshop item", "")
-	if err := m.runner.DownloadWorkshopTo(ctx, itemID, destination); err != nil {
+	accountName, _, err := m.store.GetKV(ctx, workshopSteamAccountKey)
+	if err != nil {
+		return fmt.Errorf("read Steam Workshop account: %w", err)
+	}
+	if err := m.runner.DownloadWorkshopTo(ctx, itemID, destination, accountName); err != nil {
 		return fmt.Errorf("Docker/Wine Workshop download: %w", err)
 	}
 	return nil

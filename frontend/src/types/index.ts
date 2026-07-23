@@ -92,7 +92,7 @@ export interface ServerMetrics {
 
 export interface ServerLogResponse {
   logs: string;
-  source: 'file' | 'docker' | 'none';
+  source: 'file' | 'docker' | 'paldefender-game' | 'paldefender-rest' | 'none';
   available: boolean;
   reason?: string;
   updated_at?: string;
@@ -115,6 +115,21 @@ export interface MonitorSample {
   memory_available: boolean;
   memory_usage_bytes: number;
   memory_limit_bytes: number;
+  host_memory_available: boolean;
+  host_memory_total_bytes: number;
+  host_memory_available_bytes: number;
+  host_swap_total_bytes: number;
+  host_swap_free_bytes: number;
+  workload_memory_available: boolean;
+  workload_memory_usage_bytes: number;
+  workload_memory_limit_bytes: number;
+  oom_killed: boolean;
+  lifecycle_available: boolean;
+  exit_code: number;
+  restart_count: number;
+  started_at?: string;
+  finished_at?: string;
+  risk_reasons: MonitorRiskReason[];
   disk_available: boolean;
   disk_free_bytes: number;
   disk_total_bytes: number;
@@ -310,10 +325,38 @@ export interface FieldSchema {
 
 export type PalworldSettings = Record<string, string | number | boolean | undefined>;
 
+export interface PalworldConfigDraft {
+  id: string;
+  revision_sha256: string;
+  status: 'draft' | 'applying' | 'completed' | 'failed' | string;
+  created_at: string;
+  updated_at: string;
+  applied_job_id?: string;
+}
+
+export interface MonitorRiskReason {
+  code: string;
+  message: string;
+  severity: 'warning' | 'critical';
+}
+
+export interface PalworldSecretState {
+  admin_password: { configured: boolean };
+  server_password: { configured: boolean };
+}
+
+export interface PalworldFormatIssue extends ValidationIssue {
+  code: string;
+}
+
 export interface PalworldConfigResponse {
   settings: PalworldSettings;
   path: string;
   pending_restart: boolean;
+  revision_sha256?: string;
+  secret_state?: PalworldSecretState;
+  format_issues?: PalworldFormatIssue[];
+  draft?: PalworldConfigDraft;
   issues?: ValidationIssue[];
 }
 
@@ -344,6 +387,7 @@ export interface Job extends Omit<JobContract, 'type' | 'status' | 'message' | '
     | 'paldefender_install'
     | 'paldefender_update'
     | 'safe_restart'
+    | 'safe_stop'
     | 'restore'
     | 'version_check'
     | 'smart_update'
@@ -377,6 +421,51 @@ export interface ModItem {
   last_checked_at?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ModConfigFile {
+  id: string;
+  name: string;
+  path: string;
+  extension: string;
+  size: number;
+  modified_at: string;
+  revision: string;
+  executable: boolean;
+  risk?: string;
+}
+
+export interface ModConfigurationField {
+  path: string;
+  label: string;
+  type: 'boolean' | 'integer' | 'number' | 'string';
+  value: unknown;
+  min?: number;
+  max?: number;
+}
+
+export interface ModConfigDocument {
+  file: ModConfigFile;
+  content: string;
+  format: string;
+  fields?: ModConfigurationField[];
+}
+
+export interface ModConfigurationAdapter {
+  id: string;
+  name: string;
+  description: string;
+  workshop_id?: string;
+  available: boolean;
+  reload_behavior: 'online_reload' | 'restart_required' | string;
+  files: ModConfigFile[];
+}
+
+export interface ModConfigBackup {
+  id: string;
+  revision: string;
+  size: number;
+  created_at: string;
 }
 
 export type ImportCandidate = components['schemas']['ImportCandidate'];
@@ -417,6 +506,11 @@ export interface AITranslation {
 export type AITranslationConfig = components['schemas']['AITranslationConfig'];
 export type AITranslationConfigUpdate = components['schemas']['AITranslationConfigUpdate'];
 export type AITranslationTestResult = components['schemas']['AITranslationTestResult'];
+export type NetworkProxyConfig = components['schemas']['NetworkProxyConfig'];
+export type NetworkProxyConfigUpdate = components['schemas']['NetworkProxyConfigUpdate'];
+export type NetworkProxyEndpoint = components['schemas']['NetworkProxyEndpoint'];
+export type NetworkProxyTestRequest = components['schemas']['NetworkProxyTestRequest'];
+export type NetworkProxyTestResult = components['schemas']['NetworkProxyTestResult'];
 
 export interface WorkshopSearchResponse {
   items: WorkshopItem[];
@@ -611,15 +705,27 @@ export type PalDefenderInventorySlot = components['schemas']['PalDefenderInvento
 export type PalDefenderItemGrant = components['schemas']['PalDefenderItemGrant'];
 export type PalDefenderItemCatalogEntry = components['schemas']['PalDefenderItemCatalogEntry'];
 export type PalDefenderItemCatalog = components['schemas']['PalDefenderItemCatalog'];
+export type PalDefenderRemoveItemsRequest = components['schemas']['PalDefenderRemoveItemsRequest'];
+export type PalDefenderReleasePalRequest = components['schemas']['PalDefenderReleasePalRequest'];
+export type PalDefenderPalCatalogEntry = components['schemas']['PalDefenderPalCatalogEntry'];
+export type PalDefenderPalCatalog = components['schemas']['PalDefenderPalCatalog'];
+export type PalDefenderTechnologyCatalogEntry = components['schemas']['PalDefenderTechnologyCatalogEntry'];
+export type PalDefenderTechnologyCatalog = components['schemas']['PalDefenderTechnologyCatalog'];
 export type PalDefenderMessageRequest = components['schemas']['PalDefenderMessageRequest'];
 export type PalDefenderPunishmentRequest = components['schemas']['PalDefenderPunishmentRequest'];
 export type PalDefenderProgressionGrantRequest = components['schemas']['PalDefenderProgressionGrantRequest'];
 export type PalDefenderPalGrant = components['schemas']['PalDefenderPalGrant'];
 export type PalDefenderGivePalsRequest = components['schemas']['PalDefenderGivePalsRequest'];
 export type PalDefenderGivePalTemplatesRequest = components['schemas']['PalDefenderGivePalTemplatesRequest'];
+export type PalDefenderGiveCustomPalsRequest = components['schemas']['PalDefenderGiveCustomPalsRequest'];
 export type PalDefenderPalTemplate = components['schemas']['PalDefenderPalTemplate'];
 export type PalDefenderExportedPalTemplateInfo = components['schemas']['PalDefenderExportedPalTemplateInfo'];
+export type PalDefenderExportPalsResult = components['schemas']['PalDefenderExportPalsResult'];
 export type PalDefenderAccessSettingsUpdate = components['schemas']['PalDefenderAccessSettingsUpdate'];
+
+export type PalDefenderTeleportRequest =
+  | { Mode: 'coordinates'; X: number; Y: number; Z?: number }
+  | { Mode: 'player'; TargetPlayer: string };
 
 export interface PalDefenderTechnologyRequest {
   Technology: string | string[];
@@ -726,6 +832,9 @@ export interface Player {
   guild_id?: string;
   guild_name: string;
   is_online: boolean;
+  online_source: 'none' | 'rest' | 'paldefender' | 'rest+paldefender';
+  online_stale: boolean;
+  gm_user_id?: string;
   last_online_time: string;
   x: number;
   y: number;
@@ -750,14 +859,28 @@ export interface SaveInventoryContainer {
   slots: SaveInventorySlot[];
 }
 
+export interface PlayerDataView {
+  scope: 'active' | 'server';
+  source_id: string;
+  source_kind: 'server' | 'import';
+  source_name: string;
+  online_overlay: boolean;
+}
+
+export interface PlayerListResponse extends EntityListResponse<Player> {
+  view: PlayerDataView;
+}
+
 export interface SavePlayerDetail {
   player: Player;
   status: SaveIndexStatus;
+  view: PlayerDataView;
 }
 
 export interface SavePlayerInventory {
   containers: SaveInventoryContainer[];
   status: SaveIndexStatus;
+  view: PlayerDataView;
 }
 
 export interface PalSkill {
@@ -875,6 +998,9 @@ export interface SaveIndexStatus {
   updated_at: string;
   duration_ms: number;
   error?: string;
+  error_code?: string;
+  error_detail?: string;
+  oodle_available?: boolean;
   warnings: string[];
   counts: SaveIndexCounts;
   parser?: string;
@@ -898,6 +1024,7 @@ export interface SaveSource {
 export interface BreedingCatalogItem {
   id: string;
   name: string;
+  raw_name?: string;
 }
 
 export interface BreedingPassive extends BreedingCatalogItem {
@@ -916,8 +1043,10 @@ export interface BreedingTreeNode {
   type: 'owned' | 'composite_owned' | 'wild' | 'bred' | 'surgery' | string;
   pal_id: string;
   pal_name: string;
+  raw_pal_name?: string;
   gender: string;
   passives: string[];
+  raw_passives?: string[];
   effort_seconds: number;
   self_effort_seconds: number;
   cost: number;
@@ -935,8 +1064,10 @@ export interface BreedingTreeNode {
 export interface BreedingSolveResult {
   pal_id: string;
   pal_name: string;
+  raw_pal_name?: string;
   gender: string;
   passives: string[];
+  raw_passives?: string[];
   effort_seconds: number;
   breeding_steps: number;
   eggs: number;

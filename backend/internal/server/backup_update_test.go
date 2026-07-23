@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPreUpdateBackupIncludesPalDefenderAndManifestHashes(t *testing.T) {
@@ -87,4 +89,41 @@ func TestBootstrapDoesNotSnapshotUpdateProtectedFiles(t *testing.T) {
 	if done.Status != "completed" {
 		t.Fatalf("bootstrap must not read update-only protected files: %#v", done)
 	}
+}
+
+func TestBootstrapRefreshesJobActivityDuringLongSteamCMDStage(t *testing.T) {
+	m, cleanup := newVersionTestManager(t, "100")
+	defer cleanup()
+	m.jobHeartbeatInterval = 5 * time.Millisecond
+	started := make(chan struct{})
+	release := make(chan struct{})
+	m.installOrUpdateFunc = func(context.Context, string) error {
+		close(started)
+		<-release
+		return nil
+	}
+
+	job, err := m.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatalf("Bootstrap returned error: %v", err)
+	}
+	<-started
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, getErr := m.store.GetJob(context.Background(), job.ID)
+		if getErr != nil {
+			t.Fatalf("GetJob returned error: %v", getErr)
+		}
+		if strings.Contains(current.Message, "still running") && current.UpdatedAt != current.CreatedAt {
+			close(release)
+			done := waitForJob(t, m.store, job.ID)
+			if done.Status != "completed" {
+				t.Fatalf("expected completed job, got %#v", done)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	t.Fatal("long-running install stage did not refresh job activity")
 }
