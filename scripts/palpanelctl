@@ -501,9 +501,24 @@ install_system() {
   local version_dir="$opt_root/$version"
   local staging="$opt_root/.${version}.tmp.$BASHPID"
   rm -rf "$staging"
+  local docker_config_dir="$system_data_dir/docker-client"
   mkdir -p "$staging" "$etc_dir" "$system_data_dir" "$systemd_dir"
   chmod 755 "$opt_root"
-  chmod 750 "$etc_dir" "$system_data_dir"
+  chmod 750 "$etc_dir"
+  if [[ "$test_mode" != "1" ]]; then
+    # Lock the parent before validation so the service user cannot swap the child entry.
+    chown root:root "$system_data_dir"
+  fi
+  chmod 750 "$system_data_dir"
+  if [[ -L "$docker_config_dir" ]]; then
+    fail "refusing symbolic link for Docker client directory: $docker_config_dir"
+  fi
+  if [[ -e "$docker_config_dir" ]]; then
+    [[ -d "$docker_config_dir" ]] || fail "Docker client path is not a directory: $docker_config_dir"
+  else
+    mkdir "$docker_config_dir"
+  fi
+  chmod 700 "$docker_config_dir"
   local item
   for item in bin backend systemd config licenses LICENSE README.md THIRD_PARTY_LICENSES.txt palpanelctl; do
     [[ -e "$package_dir/$item" ]] && cp -a "$package_dir/$item" "$staging/"
@@ -544,7 +559,8 @@ install_system() {
   chmod 600 "$etc_dir/palpanel.env"
   if [[ "$test_mode" != "1" ]]; then
     chown "$service_user:$service_user" "$etc_dir/palpanel.env"
-    chown -R "$service_user:$service_user" "$system_data_dir"
+    chown "$service_user:$service_user" "$docker_config_dir"
+    chown -R --no-dereference "$service_user:$service_user" "$system_data_dir"
   fi
 
   sed -e "s|/opt/palpanel|$opt_root|g" -e "s|/etc/palpanel|$etc_dir|g" -e "s|/var/lib/palpanel|$system_data_dir|g" \

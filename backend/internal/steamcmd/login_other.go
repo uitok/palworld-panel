@@ -14,3 +14,7 @@ func securePrivatePath(_ context.Context, path string) error {
 	}
 	return os.Chmod(path, mode)
 }
+
+func SecurePrivatePath(ctx context.Context, path string) error {
+	return securePrivatePath(ctx, path)
+}

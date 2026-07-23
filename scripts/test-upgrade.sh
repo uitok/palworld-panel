@@ -49,6 +49,7 @@ export PALPANEL_SKIP_SYSTEMD=1
 "$previous_dir/palpanelctl" install >/dev/null
 printf '# upgrade-preserve-config\n' >>"$PALPANEL_ETC_DIR/palpanel.env"
 mkdir -p \
+  "$PALPANEL_SYSTEM_DATA_DIR/docker-client" \
   "$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/SaveGames/0/world" \
   "$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/Config/WindowsServer" \
   "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod" \
@@ -59,6 +60,11 @@ printf 'palworld-config-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/C
 printf 'mod-settings-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/server/Mods/PalModSettings.ini"
 printf 'mod-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod/Info.json"
 printf 'backup-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip"
+printf 'docker-client-marker\n' >"$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json"
+chmod 755 "$PALPANEL_SYSTEM_DATA_DIR/docker-client"
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown root:root "$PALPANEL_SYSTEM_DATA_DIR/docker-client"
+fi
 
 config_hash="$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')"
 database_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/palpanel.db" | awk '{print $1}')"
@@ -67,6 +73,7 @@ palworld_config_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Pal/Saved/Co
 mod_settings_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/PalModSettings.ini" | awk '{print $1}')"
 mod_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod/Info.json" | awk '{print $1}')"
 backup_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip" | awk '{print $1}')"
+docker_client_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json" | awk '{print $1}')"
 
 "$candidate_dir/palpanelctl" install >/dev/null
 [[ "$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')" == "$config_hash" ]]
@@ -76,6 +83,14 @@ backup_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip" | 
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/PalModSettings.ini" | awk '{print $1}')" == "$mod_settings_hash" ]]
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/server/Mods/Workshop/existing-mod/Info.json" | awk '{print $1}')" == "$mod_hash" ]]
 [[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/backups/upgrade-test.zip" | awk '{print $1}')" == "$backup_hash" ]]
+[[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json" | awk '{print $1}')" == "$docker_client_hash" ]]
+[[ "$(stat -c '%a' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "700" ]]
+if [[ "$(id -u)" -eq 0 ]]; then
+  [[ "$(stat -c '%U:%G' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "$service_user:$service_user" ]]
+fi
+grep -Fxq "Environment=HOME=$PALPANEL_SYSTEM_DATA_DIR" "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -Fxq "Environment=DOCKER_CONFIG=$PALPANEL_SYSTEM_DATA_DIR/docker-client" "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -Fxq 'ProtectHome=true' "$PALPANEL_SYSTEMD_DIR/palpanel.service"
 [[ -L "$PALPANEL_INSTALL_ROOT/current" ]]
 [[ "$(readlink -f "$PALPANEL_INSTALL_ROOT/current")" == "$PALPANEL_INSTALL_ROOT/$(basename "$candidate_dir" | sed 's/^palpanel_//; s/_linux_amd64$//')" ]]
 

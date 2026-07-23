@@ -185,6 +185,11 @@ export PALPANEL_SKIP_SYSTEMD=0
 [[ "$(stat -c '%a' "$(readlink -f "$PALPANEL_INSTALL_ROOT/current")")" == "755" ]]
 [[ "$(stat -c '%a' "$PALPANEL_ETC_DIR")" == "750" ]]
 [[ "$(stat -c '%a' "$PALPANEL_ETC_DIR/palpanel.env")" == "600" ]]
+[[ -d "$PALPANEL_SYSTEM_DATA_DIR/docker-client" ]]
+[[ "$(stat -c '%a' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "700" ]]
+if [[ "$(id -u)" -eq 0 ]]; then
+  [[ "$(stat -c '%U:%G' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "$service_user:$service_user" ]]
+fi
 grep -Eq '^PALWORLD_ADMIN_PASSWORD=[A-Za-z0-9_-]{40,}$' "$PALPANEL_ETC_DIR/palpanel.env"
 installed_dir="$(readlink -f "$PALPANEL_INSTALL_ROOT/current")"
 [[ -f "$installed_dir/LICENSE" ]]
@@ -194,6 +199,9 @@ installed_dir="$(readlink -f "$PALPANEL_INSTALL_ROOT/current")"
 [[ -f "$installed_dir/THIRD_PARTY_LICENSES.txt" ]]
 [[ "$("$installed_dir/palpanelctl" config)" == "$PALPANEL_ETC_DIR/palpanel.env" ]]
 grep -qx 'Wants=palpanel-sav-cli.service palpanel-palcalc.service' "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -Fxq "Environment=HOME=$PALPANEL_SYSTEM_DATA_DIR" "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -Fxq "Environment=DOCKER_CONFIG=$PALPANEL_SYSTEM_DATA_DIR/docker-client" "$PALPANEL_SYSTEMD_DIR/palpanel.service"
+grep -Fxq 'ProtectHome=true' "$PALPANEL_SYSTEMD_DIR/palpanel.service"
 grep -qx 'PartOf=palpanel.service' "$PALPANEL_SYSTEMD_DIR/palpanel-sav-cli.service"
 grep -qx 'Restart=always' "$PALPANEL_SYSTEMD_DIR/palpanel-sav-cli.service"
 grep -qx 'PartOf=palpanel.service' "$PALPANEL_SYSTEMD_DIR/palpanel-palcalc.service"
@@ -204,11 +212,41 @@ grep -Fxq 'restart palpanel-sav-cli.service palpanel-palcalc.service palpanel.se
 grep -Fxq 'start palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log"
 printf '# preserve-config\n' >>"$PALPANEL_ETC_DIR/palpanel.env"
 printf 'preserve-data\n' >"$PALPANEL_SYSTEM_DATA_DIR/preserve.marker"
+printf 'preserve-docker-client\n' >"$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json"
+chmod 755 "$PALPANEL_SYSTEM_DATA_DIR/docker-client"
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown root:root "$PALPANEL_SYSTEM_DATA_DIR/docker-client"
+fi
 config_hash="$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')"
+docker_client_hash="$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json" | awk '{print $1}')"
 
 "$ctl" install >/dev/null
 [[ "$(sha256sum "$PALPANEL_ETC_DIR/palpanel.env" | awk '{print $1}')" == "$config_hash" ]]
 [[ -f "$PALPANEL_SYSTEM_DATA_DIR/preserve.marker" ]]
+[[ "$(sha256sum "$PALPANEL_SYSTEM_DATA_DIR/docker-client/config.json" | awk '{print $1}')" == "$docker_client_hash" ]]
+[[ "$(stat -c '%a' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "700" ]]
+if [[ "$(id -u)" -eq 0 ]]; then
+  [[ "$(stat -c '%U:%G' "$PALPANEL_SYSTEM_DATA_DIR/docker-client")" == "$service_user:$service_user" ]]
+
+  docker_config_dir="$PALPANEL_SYSTEM_DATA_DIR/docker-client"
+  saved_docker_config_dir="$PALPANEL_SYSTEM_DATA_DIR/docker-client.real"
+  sentinel_dir="$tmp/docker-client-sentinel"
+  mv "$docker_config_dir" "$saved_docker_config_dir"
+  mkdir "$sentinel_dir"
+  chmod 751 "$sentinel_dir"
+  chown root:root "$sentinel_dir"
+  sentinel_stat="$(stat -c '%a:%u:%g' "$sentinel_dir")"
+  ln -s "$sentinel_dir" "$docker_config_dir"
+  if "$ctl" install >"$tmp/symlink-install.out" 2>"$tmp/symlink-install.err"; then
+    printf 'install accepted a symbolic-link docker client directory\n' >&2
+    exit 1
+  fi
+  grep -Fq 'symbolic link' "$tmp/symlink-install.err"
+  [[ -L "$docker_config_dir" ]]
+  [[ "$(stat -c '%a:%u:%g' "$sentinel_dir")" == "$sentinel_stat" ]]
+  rm "$docker_config_dir"
+  mv "$saved_docker_config_dir" "$docker_config_dir"
+fi
 [[ "$(grep -Fxc 'enable palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log")" -eq 2 ]]
 [[ "$(grep -Fxc 'restart palpanel-sav-cli.service palpanel-palcalc.service palpanel.service' "$systemctl_log")" -eq 2 ]]
 "$ctl" uninstall >/dev/null

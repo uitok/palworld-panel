@@ -18,6 +18,10 @@ func securePrivatePath(ctx context.Context, path string) error {
 	})
 }
 
+func SecurePrivatePath(ctx context.Context, path string) error {
+	return securePrivatePath(ctx, path)
+}
+
 func hardenPrivatePathWithRunner(ctx context.Context, path string, run func(context.Context, ...string) ([]byte, error)) error {
 	token := windows.GetCurrentProcessToken()
 	user, err := token.GetTokenUser()
