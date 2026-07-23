@@ -193,9 +193,9 @@ sudo /opt/palpanel/current/palpanelctl uninstall
 
 ```bash
 sha256sum -c checksums.txt
-sudo ./palpanelctl install --docker --listen 0.0.0.0:63101
+sudo ./palpanelctl install --docker --listen 0.0.0.0:8080
 sudo /opt/palpanel/current/palpanelctl status
-curl --fail http://127.0.0.1:63101/api/health
+curl --fail http://127.0.0.1:8080/api/health
 ```
 
 升级默认保留 `/etc/palpanel`、`/var/lib/palpanel`、游戏存档、游戏日志和
