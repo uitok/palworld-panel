@@ -17,7 +17,7 @@ func TestLogsPreferPersistentFileAndRemainAvailableWhenStopped(t *testing.T) {
 	m, cleanup := newLogTestManager(t, `
 case "$1" in
   logs) echo "docker output" ;;
-  inspect) echo exited ;;
+  inspect) printf '%s\n' '[{"RestartCount":0,"State":{"Status":"exited","OOMKilled":false,"ExitCode":0,"StartedAt":"","FinishedAt":""}}]' ;;
 esac`)
 	defer cleanup()
 	writeFile(t, m.cfg.ServerLogPath(), "[INFO] keep\n[ERROR] selected\n")
@@ -41,7 +41,7 @@ func TestLogsFallBackToDocker(t *testing.T) {
 	m, cleanup := newLogTestManager(t, `
 case "$1" in
   logs) echo "docker fallback output" ;;
-  inspect) echo running ;;
+  inspect) printf '%s\n' '[{"RestartCount":0,"State":{"Status":"running","OOMKilled":false,"ExitCode":0,"StartedAt":"","FinishedAt":""}}]' ;;
 esac`)
 	defer cleanup()
 

@@ -260,7 +260,7 @@ case "$1" in
   --version) echo "Docker version 28.0.0" ;;
   version) echo "28.0.0" ;;
   info) echo "Server Version: 28.0.0" ;;
-  inspect) echo "running" ;;
+  inspect) printf '%s\n' '[{"RestartCount":0,"State":{"Status":"running","OOMKilled":false,"ExitCode":0,"StartedAt":"","FinishedAt":""}}]' ;;
   *) exit 0 ;;
 esac`
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
