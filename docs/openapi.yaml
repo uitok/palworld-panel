@@ -115,6 +115,21 @@ x-astrbot-server-status: &astrBotServerStatus
   content:
     application/json:
       schema: {$ref: '#/components/schemas/AstrBotServerStatusEnvelope'}
+x-save-index-status: &saveIndexStatus
+  description: Save index state, parser capability, and bounded diagnostics.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveIndexStatusEnvelope'}
+x-player-list: &playerList
+  description: Deduplicated players merged from save index, official REST, and PalDefender.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/PlayerListEnvelope'}
+x-player-detail: &playerDetail
+  description: One deduplicated player with save and online metadata.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/PlayerDetailEnvelope'}
 x-mod-config-adapters: &modConfigAdapters
   description: Registered typed Mod configuration adapters and their opaque files.
   content:
@@ -921,7 +936,7 @@ paths:
     parameters: [*idParameter]
     post: {operationId: togglePalDefenderAdmin, tags: [security], x-palpanel-permission: 'security:write', parameters: [*idempotencyKey], responses: *writeResponses}
   /save/index/status:
-    get: {operationId: getSaveIndexStatus, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: getSaveIndexStatus, tags: [world], x-palpanel-permission: read, responses: {'200': *saveIndexStatus, '401': *error}}
   /save/index/rebuild:
     post: {operationId: rebuildSaveIndex, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /save-sources:
@@ -1081,10 +1096,10 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AstrBotCommunityServerRequest'}}}}
       responses: {'200': *communityServerResult, '400': *error, '401': *error, '429': *error, '502': *error, '503': *error}
   /players:
-    get: {operationId: listSavePlayers, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: listSavePlayers, tags: [world], x-palpanel-permission: read, responses: {'200': *playerList, '401': *error, '404': *error}}
   /players/{id}:
     parameters: [*idParameter]
-    get: {operationId: getSavePlayer, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: getSavePlayer, tags: [world], x-palpanel-permission: read, responses: {'200': *playerDetail, '401': *error, '404': *error}}
   /players/{id}/inventory:
     parameters: [*idParameter]
     get: {operationId: getPlayerInventory, tags: [world], x-palpanel-permission: read, responses: *readResponses}
@@ -1140,6 +1155,96 @@ components:
       bearerFormat: ppk_...
       description: 'Revocable development key supplied as Authorization: Bearer ppk_...'
   schemas:
+    SaveIndexCounts:
+      type: object
+      required: [players, guilds, bases, pals, containers, map_entities]
+      properties:
+        players: {type: integer, minimum: 0}
+        guilds: {type: integer, minimum: 0}
+        bases: {type: integer, minimum: 0}
+        pals: {type: integer, minimum: 0}
+        containers: {type: integer, minimum: 0}
+        map_entities: {type: integer, minimum: 0}
+    SaveIndexStatus:
+      type: object
+      required: [enabled, state, stale, source_path, updated_at, duration_ms, warnings, counts]
+      properties:
+        enabled: {type: boolean}
+        state: {type: string, enum: [disabled, missing, not_indexed, ready, stale, error]}
+        stale: {type: boolean}
+        source_path: {type: string}
+        updated_at: {type: string}
+        duration_ms: {type: integer, minimum: 0}
+        error: {type: string}
+        error_code: {type: string}
+        error_detail: {type: string, maxLength: 513}
+        oodle_available: {type: boolean}
+        warnings: {type: array, items: {type: string}}
+        counts: {$ref: '#/components/schemas/SaveIndexCounts'}
+        parser: {type: string}
+        cache_path: {type: string}
+    Player:
+      type: object
+      required: [id, player_uid, steam_id, nickname, level, guild_id, guild_name, is_online, online_source, online_stale, last_online_time, location_x, location_y, location_z]
+      properties:
+        id: {type: string}
+        player_uid: {type: string}
+        steam_id: {type: string}
+        nickname: {type: string}
+        level: {type: integer, minimum: 0}
+        guild_id: {type: string}
+        guild_name: {type: string}
+        is_online: {type: boolean}
+        online_source: {type: string, enum: [none, rest, paldefender, rest+paldefender]}
+        online_stale: {type: boolean}
+        gm_user_id: {type: string}
+        last_online_time: {type: string}
+        location_x: {type: number}
+        location_y: {type: number}
+        location_z: {type: number}
+        inventory_summary: {type: object, additionalProperties: true}
+        ping: {type: number}
+        ip: {type: string}
+    ListSummary:
+      type: object
+      required: [total, limit, offset, returned, page]
+      properties:
+        total: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 0}
+        offset: {type: integer, minimum: 0}
+        returned: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+    PlayerListResult:
+      type: object
+      required: [players, status, summary]
+      properties:
+        players: {type: array, items: {$ref: '#/components/schemas/Player'}}
+        status: {$ref: '#/components/schemas/SaveIndexStatus'}
+        summary: {$ref: '#/components/schemas/ListSummary'}
+    PlayerDetailResult:
+      type: object
+      required: [player, status]
+      properties:
+        player: {$ref: '#/components/schemas/Player'}
+        status: {$ref: '#/components/schemas/SaveIndexStatus'}
+    SaveIndexStatusEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SaveIndexStatus'}
+    PlayerListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PlayerListResult'}
+    PlayerDetailEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/PlayerDetailResult'}
     PalworldConfigUpdateRequest:
       type: object
       additionalProperties: false

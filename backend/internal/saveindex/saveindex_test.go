@@ -2,8 +2,10 @@ package saveindex
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,9 +103,16 @@ func TestRebuildRetriesWhenSaveChangesDuringIndexing(t *testing.T) {
 func TestCurrentBeforeFirstIndexIsNotAnError(t *testing.T) {
 	root, cfg := testConfig(t)
 	writeWorld(t, root, "level-one")
-	sidecarCalled := false
+	indexerCalled := false
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sidecarCalled = true
+		if r.URL.Path == "/health" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":   true,
+				"data": map[string]any{"oodle": true},
+			})
+			return
+		}
+		indexerCalled = true
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer sidecar.Close()
@@ -121,7 +130,7 @@ func TestCurrentBeforeFirstIndexIsNotAnError(t *testing.T) {
 	if status.State != "not_indexed" || status.Error != "" {
 		t.Fatalf("unexpected status before the first index: %#v", status)
 	}
-	if sidecarCalled {
+	if indexerCalled {
 		t.Fatal("Current should not call the sidecar indexer on cache miss")
 	}
 }
@@ -351,7 +360,18 @@ func TestRebuildNeverReturnsBinaryTextFromStructuredSidecarError(t *testing.T) {
 func TestRebuildSurfacesStructuredErrorCode(t *testing.T) {
 	root, cfg := testConfig(t)
 	writeWorld(t, root, "level-one")
+	var logOutput bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&logOutput)
+	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":   true,
+				"data": map[string]any{"oodle": true},
+			})
+			return
+		}
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ok": false,
@@ -372,6 +392,18 @@ func TestRebuildSurfacesStructuredErrorCode(t *testing.T) {
 	if status.ErrorCode != "parser_incompatible" {
 		t.Fatalf("expected surfaced error code, got %q", status.ErrorCode)
 	}
+	if status.OodleAvailable == nil || !*status.OodleAvailable {
+		t.Fatalf("expected Oodle capability to be surfaced, got %#v", status.OodleAvailable)
+	}
+	if status.ErrorDetail != "PlM Oodle decompression failed: GVAS [byte] raw" {
+		t.Fatalf("unexpected sanitized error detail: %q", status.ErrorDetail)
+	}
+	if strings.Contains(status.ErrorDetail, "\\x") || strings.ContainsRune(status.ErrorDetail, '\x00') {
+		t.Fatalf("unsafe sidecar bytes leaked into error detail: %q", status.ErrorDetail)
+	}
+	if !strings.Contains(logOutput.String(), status.ErrorDetail) {
+		t.Fatalf("sanitized sidecar detail was not written to backend logs: %q", logOutput.String())
+	}
 	if !slices.Contains(status.Warnings, "a warning") {
 		t.Fatalf("expected sidecar warning to be preserved, got %#v", status.Warnings)
 	}
@@ -380,6 +412,101 @@ func TestRebuildSurfacesStructuredErrorCode(t *testing.T) {
 		if strings.Contains(message, "GVAS") || strings.Contains(message, "\\x") || strings.ContainsRune(message, '\x00') {
 			t.Fatalf("sidecar error payload leaked into diagnostic text: %q", message)
 		}
+	}
+}
+
+func TestRebuildClassifiesUnavailableIndexer(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	sidecar := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	cfg.SaveIndexerURL = sidecar.URL
+	sidecar.Close()
+
+	_, status, err := NewManager(cfg).Rebuild(t.Context())
+	if err == nil {
+		t.Fatal("expected unavailable sidecar to fail")
+	}
+	if status.ErrorCode != "save_indexer_unavailable" {
+		t.Fatalf("unexpected unavailable error code: %#v", status)
+	}
+}
+
+func TestRebuildClassifiesIndexerTimeout(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	_, status, err := NewManager(cfg).Rebuild(ctx)
+	if err == nil {
+		t.Fatal("expected timed out sidecar to fail")
+	}
+	if status.ErrorCode != "save_index_timeout" {
+		t.Fatalf("unexpected timeout error code: %#v", status)
+	}
+}
+
+func TestStatusSurfacesAndCachesOodleCapability(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	var healthCalls atomic.Int32
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		healthCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":   true,
+			"data": map[string]any{"oodle": false},
+		})
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+	m := NewManager(cfg)
+
+	for range 2 {
+		status := m.Status(t.Context())
+		if status.OodleAvailable == nil || *status.OodleAvailable {
+			t.Fatalf("expected surfaced oodle_available=false, got %#v", status.OodleAvailable)
+		}
+		encoded, err := json.Marshal(status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, []byte(`"oodle_available":false`)) {
+			t.Fatalf("oodle_available=false was omitted from JSON: %s", encoded)
+		}
+	}
+	if calls := healthCalls.Load(); calls != 1 {
+		t.Fatalf("expected Oodle health result to be cached, got %d calls", calls)
+	}
+}
+
+func TestStatusOodleProbeTimesOutAfterOneSecond(t *testing.T) {
+	root, cfg := testConfig(t)
+	writeWorld(t, root, "level-one")
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		time.Sleep(1100 * time.Millisecond)
+	}))
+	defer sidecar.Close()
+	cfg.SaveIndexerURL = sidecar.URL
+
+	startedAt := time.Now()
+	status := NewManager(cfg).Status(t.Context())
+	elapsed := time.Since(startedAt)
+	if elapsed < 800*time.Millisecond || elapsed > 1500*time.Millisecond {
+		t.Fatalf("Oodle probe duration = %s, want approximately one second", elapsed)
+	}
+	if status.OodleAvailable != nil {
+		t.Fatalf("timed out health probe should leave Oodle availability unknown: %#v", status.OodleAvailable)
 	}
 }
 
@@ -500,6 +627,25 @@ func TestRebuildRejectsUnknownErrorCode(t *testing.T) {
 	// An unrecognized code must not be echoed back verbatim.
 	if strings.Contains(status.ErrorCode, "GVAS") || strings.Contains(status.ErrorCode, "\\x") {
 		t.Fatalf("unknown code leaked into ErrorCode: %q", status.ErrorCode)
+	}
+	if status.ErrorDetail != "" {
+		t.Fatalf("unknown error code exposed sidecar detail: %q", status.ErrorDetail)
+	}
+}
+
+func TestSafeIndexerDetailRedactsPrivatePaths(t *testing.T) {
+	privateWorld := `C:\Users\Admin\PalPanel\world`
+	privateCache := `C:\Users\Admin\PalPanel\cache`
+	detail := safeIndexerDetail(
+		`failed c:/users/admin/palpanel/world and C:\USERS\ADMIN\PALPANEL\CACHE\index.json via https://localhost:8090/index?token=secret raw \x00`,
+		privateWorld,
+		privateCache,
+	)
+	if strings.Contains(strings.ToLower(detail), "users/admin") || strings.Contains(strings.ToLower(detail), `users\admin`) {
+		t.Fatalf("private path leaked from detail: %q", detail)
+	}
+	if strings.Contains(detail, "token=secret") || !strings.Contains(detail, "<redacted>") || strings.Contains(detail, "\\x00") {
+		t.Fatalf("detail was not safely normalized: %q", detail)
 	}
 }
 

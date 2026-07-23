@@ -141,6 +141,41 @@ func TestMergeSaveAndOnline_BridgeIdentityMergesExistingRecords(t *testing.T) {
 	}
 }
 
+func TestMergeSaveAndOnline_PreservesOverwrittenOnlineAlias(t *testing.T) {
+	online := mergeOnlinePlayers(
+		map[string]onlinePlayer{
+			"steam_old": {
+				PlayerUID:        "bridge-uid",
+				SteamID:          "steam_old",
+				OnlineStateKnown: true,
+				IsOnline:         true,
+				RESTOnline:       true,
+			},
+		},
+		map[string]onlinePlayer{
+			"steam_new": {
+				PlayerUID:         "bridge-uid",
+				SteamID:           "steam_new",
+				GMUserID:          "steam_new",
+				OnlineStateKnown:  true,
+				IsOnline:          true,
+				PalDefenderOnline: true,
+			},
+		},
+	)
+
+	got := mergeSaveAndOnline([]saveindex.Player{{
+		SteamID:  "steam_old",
+		Nickname: "存档玩家",
+	}}, online)
+	if len(got) != 1 {
+		t.Fatalf("overwritten online alias created a duplicate player: %#v", got)
+	}
+	if !got[0].IsOnline || got[0].SteamID != "steam_new" || got[0].Nickname != "存档玩家" {
+		t.Fatalf("online alias bridge lost merged state: %#v", got[0])
+	}
+}
+
 func TestMergeOnlinePlayers_PalDefenderPriorityIsDeterministic(t *testing.T) {
 	ping := 42.0
 	primary := map[string]onlinePlayer{
@@ -162,7 +197,8 @@ func TestMergeOnlinePlayers_PalDefenderPriorityIsDeterministic(t *testing.T) {
 	}
 
 	merged := mergeOnlinePlayers(primary, preferred)
-	for _, key := range []string{"uid-priority", "steam-priority"} {
+	for _, value := range []string{"uid-priority", "steam-priority"} {
+		key := identityKey(value)
 		got, ok := merged[key]
 		if !ok {
 			t.Fatalf("merged source is missing identity key %q: %#v", key, merged)
@@ -178,4 +214,83 @@ func TestMergeOnlinePlayers_PalDefenderPriorityIsDeterministic(t *testing.T) {
 // passthrough kept for readability.
 func indexOnline(online map[string]onlinePlayer) map[string]onlinePlayer {
 	return online
+}
+
+func TestIdentityKeyNormalizesGUIDPunctuation(t *testing.T) {
+	left := identityKey(" Steam_ABCDEF12-3456-7890-ABCD-EF1234567890 ")
+	right := identityKey("abcdef1234567890abcdef1234567890")
+	if left == "" || left != right {
+		t.Fatalf("normalized identity mismatch: %q != %q", left, right)
+	}
+}
+
+func TestIdentityKeyKeepsOnlyASCIILettersAndDigits(t *testing.T) {
+	if got := identityKey("Steam_\u73a9\u5bb6-ABC_123"); got != "abc123" {
+		t.Fatalf("identityKey() = %q, want %q", got, "abc123")
+	}
+}
+
+func TestMergeSaveAndOnline_StaleIdentityDoesNotSetOnlineOrLiveFields(t *testing.T) {
+	saveLocation := saveindex.Coordinates{X: 1, Y: 2, Z: 3}
+	players := mergeSaveAndOnline([]saveindex.Player{{
+		PlayerUID: "ABCDEF12-3456-7890-ABCD-EF1234567890",
+		Nickname:  "存档玩家",
+		Location:  saveLocation,
+	}}, map[string]onlinePlayer{
+		"abcdef1234567890abcdef1234567890": {
+			PlayerUID:        "abcdef1234567890abcdef1234567890",
+			SteamID:          "steam_76561190000000000",
+			Nickname:         "陈旧 REST 名称",
+			Location:         saveindex.Coordinates{X: 99, Y: 99, Z: 99},
+			IP:               "203.0.113.8",
+			OnlineStateKnown: true,
+			IsOnline:         false,
+		},
+	})
+	if len(players) != 1 {
+		t.Fatalf("expected stale identity to merge without duplication, got %#v", players)
+	}
+	if players[0].IsOnline {
+		t.Fatalf("stale identity must not set online: %#v", players[0])
+	}
+	if players[0].Location != saveLocation || players[0].IP != "" {
+		t.Fatalf("stale live fields must not overwrite save data: %#v", players[0])
+	}
+	if players[0].SteamID != "steam_76561190000000000" {
+		t.Fatalf("stale identity should still enrich identifiers: %#v", players[0])
+	}
+}
+
+func TestFlattenPlayerReportsMergedOnlineSourcesAndGMIdentifier(t *testing.T) {
+	rest := onlinePlayer{
+		PlayerUID:  "uid-source",
+		SteamID:    "steam-source",
+		IsOnline:   true,
+		RESTOnline: true,
+	}
+	defender := onlinePlayer{
+		PlayerUID:         "UID-SOURCE",
+		SteamID:           "steam_source",
+		GMUserID:          "gm-user-1",
+		IsOnline:          true,
+		PalDefenderOnline: true,
+	}
+	online := mergeOnlinePlayers(
+		map[string]onlinePlayer{"uid-source": rest},
+		map[string]onlinePlayer{"steam_source": defender},
+	)
+	players := mergeSaveAndOnline([]saveindex.Player{{
+		PlayerUID: "uid-source",
+		SteamID:   "steam-source",
+	}}, online)
+	if len(players) != 1 {
+		t.Fatalf("expected one merged player, got %#v", players)
+	}
+	view := flattenPlayer(players[0], onlinePlayersResult{Players: online, Stale: true})
+	if view["online_source"] != "rest+paldefender" {
+		t.Fatalf("unexpected online source: %#v", view)
+	}
+	if view["online_stale"] != true || view["gm_user_id"] != "gm-user-1" {
+		t.Fatalf("missing online metadata: %#v", view)
+	}
 }

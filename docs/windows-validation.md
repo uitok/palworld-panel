@@ -52,7 +52,13 @@ PowerShell 7 is recommended; Windows PowerShell 5.1 is also supported by the scr
 Building requires the Go version in `backend/go.mod`, Node.js 22, npm, and MinGW-w64 GCC
 for the CGO `sav-cli` build.
 
+`./scripts/build-sav-cli-dev.ps1` always enables CGO, selects MinGW, and runs
+`sav-cli verify-build --require-oodle`; a no-cgo development binary is deleted
+instead of being left behind for the launcher to use.
+
 ```powershell
+./scripts/build-sav-cli-dev.ps1
+
 $runtime = Join-Path $PSScriptRoot "..\dev-runtime\windows"
 .\scripts\package.ps1 `
   -Version v0.0.0-windows-dev `

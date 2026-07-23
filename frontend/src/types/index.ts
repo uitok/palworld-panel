@@ -830,6 +830,9 @@ export interface Player {
   guild_id?: string;
   guild_name: string;
   is_online: boolean;
+  online_source: 'none' | 'rest' | 'paldefender' | 'rest+paldefender';
+  online_stale: boolean;
+  gm_user_id?: string;
   last_online_time: string;
   x: number;
   y: number;
@@ -980,6 +983,8 @@ export interface SaveIndexStatus {
   duration_ms: number;
   error?: string;
   error_code?: string;
+  error_detail?: string;
+  oodle_available?: boolean;
   warnings: string[];
   counts: SaveIndexCounts;
   parser?: string;

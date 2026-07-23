@@ -222,6 +222,13 @@ export interface components {
       "ok": true;
     };
     "JsonObject": Record<string, unknown>;
+    "ListSummary": {
+      "limit": number;
+      "offset": number;
+      "page": number;
+      "returned": number;
+      "total": number;
+    };
     "LocalModActionCapability": {
       "action": "import" | "repair" | "ignore" | "unignore" | "delete";
       "available": boolean;
@@ -752,6 +759,43 @@ export interface components {
       "current_password": string;
       "new_password": string;
     };
+    "Player": {
+      "gm_user_id"?: string;
+      "guild_id": string;
+      "guild_name": string;
+      "id": string;
+      "inventory_summary"?: Record<string, unknown>;
+      "ip"?: string;
+      "is_online": boolean;
+      "last_online_time": string;
+      "level": number;
+      "location_x": number;
+      "location_y": number;
+      "location_z": number;
+      "nickname": string;
+      "online_source": "none" | "rest" | "paldefender" | "rest+paldefender";
+      "online_stale": boolean;
+      "ping"?: number;
+      "player_uid": string;
+      "steam_id": string;
+    };
+    "PlayerDetailEnvelope": {
+      "data": components["schemas"]["PlayerDetailResult"];
+      "ok": true;
+    };
+    "PlayerDetailResult": {
+      "player": components["schemas"]["Player"];
+      "status": components["schemas"]["SaveIndexStatus"];
+    };
+    "PlayerListEnvelope": {
+      "data": components["schemas"]["PlayerListResult"];
+      "ok": true;
+    };
+    "PlayerListResult": {
+      "players": Array<components["schemas"]["Player"]>;
+      "status": components["schemas"]["SaveIndexStatus"];
+      "summary": components["schemas"]["ListSummary"];
+    };
     "SafeLifecycleRequest": {
       "message"?: string;
       "waittime"?: number;
@@ -801,6 +845,34 @@ export interface components {
     };
     "SaveImportSelectRequest": {
       "candidate_id": string;
+    };
+    "SaveIndexCounts": {
+      "bases": number;
+      "containers": number;
+      "guilds": number;
+      "map_entities": number;
+      "pals": number;
+      "players": number;
+    };
+    "SaveIndexStatus": {
+      "cache_path"?: string;
+      "counts": components["schemas"]["SaveIndexCounts"];
+      "duration_ms": number;
+      "enabled": boolean;
+      "error"?: string;
+      "error_code"?: string;
+      "error_detail"?: string;
+      "oodle_available"?: boolean;
+      "parser"?: string;
+      "source_path": string;
+      "stale": boolean;
+      "state": "disabled" | "missing" | "not_indexed" | "ready" | "stale" | "error";
+      "updated_at": string;
+      "warnings": Array<string>;
+    };
+    "SaveIndexStatusEnvelope": {
+      "data": components["schemas"]["SaveIndexStatus"];
+      "ok": true;
     };
     "SaveSourceImportRequest": {
       "file": string;

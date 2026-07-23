@@ -21,10 +21,12 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
   let loginBody: unknown;
   let authenticated = initiallyAuthenticated;
   let backendUnavailable = false;
+  const requestedPaths = new Set<string>();
   await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const request = route.request();
     if (request.headers().authorization) authorization = request.headers().authorization;
     const path = new URL(request.url()).pathname;
+    requestedPaths.add(path);
     if (path.startsWith('/api/backups/') && path.endsWith('/download')) {
       await route.fulfill({
         status: 200,
@@ -140,6 +142,27 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
       case '/api/community-servers/source-status':
         data = { source: 'battlemetrics', enabled: true, base_url: 'https://api.battlemetrics.com', proxy_configured: true, reachable: false, cache_available: true, cache_fresh: false, cache_writable: true, cached_queries: 1, rate_limit_per_minute: 30 };
         break;
+      case '/api/players':
+        data = {
+          players: [
+            {
+              id: 'registry-player', player_uid: 'uid_registry', steam_id: 'steam_76561198000000001', nickname: 'RegistryTester',
+              level: 40, guild_id: '', guild_name: 'Builders', is_online: false, online_source: 'none', online_stale: true,
+              gm_user_id: 'steam_76561198000000001', last_online_time: '2026-07-22T00:00:00Z',
+              location_x: 10, location_y: 20, location_z: 30,
+            },
+          ],
+          status: {
+            enabled: true, state: 'ready', stale: false, source_path: 'Level.sav', updated_at: '2026-07-23T00:00:00Z',
+            duration_ms: 10, oodle_available: true, warnings: [],
+            counts: { players: 1, guilds: 0, bases: 0, pals: 0, containers: 0, map_entities: 0 },
+          },
+          summary: { total: 1, limit: 5000, offset: 0, returned: 1, page: 1 },
+        };
+        break;
+      case '/api/security/paldefender/gm/status':
+        data = { configured: false, available: false, state: 'not_configured' };
+        break;
       case '/api/mods':
         data = [];
         break;
@@ -155,6 +178,7 @@ const installFakeBackend = async (page: Page, role: Role = 'admin', initiallyAut
   return {
     authorization: () => authorization,
     loginBody: () => loginBody,
+    requestedPaths: () => [...requestedPaths],
     setBackendUnavailable: (unavailable: boolean) => { backendUnavailable = unavailable; },
   };
 };
@@ -183,6 +207,20 @@ test('viewer session cannot see the world reset command', async ({ page }) => {
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { name: '服务器总览' })).toBeVisible();
   await expect(page.getByRole('button', { name: '重置世界' })).toHaveCount(0);
+});
+
+test('player pages consume the backend registry and show stale REST state', async ({ page }) => {
+  const backend = await installFakeBackend(page);
+
+  await page.goto('/player-center');
+  await expect(page.getByRole('button', { name: 'RegistryTester 离线' })).toHaveCount(1);
+  await expect(page.getByText(/官方 REST 在线状态暂不可用/)).toBeVisible();
+  expect(backend.requestedPaths()).not.toContain('/api/security/paldefender/gm/players');
+
+  await page.goto('/players');
+  await expect(page.getByRole('row', { name: /RegistryTester/ })).toBeVisible();
+  await expect(page.getByText(/官方 REST 在线状态暂不可用/)).toBeVisible();
+  await expect(page.getByRole('cell', { name: '离线' })).toBeVisible();
 });
 
 test('pages remain renderable while the backend temporarily returns 502', async ({ page }) => {

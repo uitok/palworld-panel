@@ -3,10 +3,13 @@ package api
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
+	"palpanel/internal/appconfig"
+	"palpanel/internal/db"
 	"palpanel/internal/paldefender"
 	"palpanel/internal/saveindex"
 )
@@ -157,17 +160,17 @@ func TestOnlinePlayersFromPalDefenderPrefersWorldLocation(t *testing.T) {
 		},
 		{Name: "Offline", PlayerUID: "offline-uid", Status: "offline"},
 	}})
-	if len(players) != 4 {
-		t.Fatalf("expected two identities for each online player, got %#v", players)
+	if len(players) != 5 {
+		t.Fatalf("expected online identities plus the offline GM identity, got %#v", players)
 	}
-	if got := players["world-uid"].Location; got != (saveindex.Coordinates{X: 10, Y: 20, Z: 30}) {
+	if got := players[identityKey("world-uid")].Location; got != (saveindex.Coordinates{X: 10, Y: 20, Z: 30}) {
 		t.Fatalf("world location was not preferred: %#v", got)
 	}
-	if got := players["map-steam"].Location; got != (saveindex.Coordinates{X: 40, Y: 50, Z: 60}) {
+	if got := players[identityKey("map-steam")].Location; got != (saveindex.Coordinates{X: 40, Y: 50, Z: 60}) {
 		t.Fatalf("map location fallback was not used: %#v", got)
 	}
-	if _, ok := players["offline-uid"]; ok {
-		t.Fatal("offline PalDefender player should not be exposed as live")
+	if offline, ok := players[identityKey("offline-uid")]; !ok || offline.online() {
+		t.Fatalf("offline PalDefender identity should be retained without a live signal: %#v", players)
 	}
 }
 
@@ -285,5 +288,69 @@ func TestSaveIndexQueryHelpersAndFilters(t *testing.T) {
 	context = newQueryContext("/api/pals?q=anubis&status=stored&owner_player_uid=uid-1&guild_id=guild-1&container_id=box-1")
 	if got := filterPals(pals, players, context); len(got) != 1 || got[0].InstanceID != "pal-1" {
 		t.Fatalf("filterPals = %#v", got)
+	}
+}
+
+func TestOfflineIdentityPlayersClearsLiveSignals(t *testing.T) {
+	ping := 35.0
+	original := map[string]onlinePlayer{
+		"player": {
+			PlayerUID:         "player",
+			GMUserID:          "gm-player",
+			OnlineStateKnown:  true,
+			IsOnline:          true,
+			RESTOnline:        true,
+			PalDefenderOnline: true,
+			Location:          saveindex.Coordinates{X: 1, Y: 2, Z: 3},
+			Ping:              &ping,
+			IP:                "203.0.113.10",
+		},
+	}
+	stale := offlineIdentityPlayers(original)
+	player := stale["player"]
+	if player.online() || player.RESTOnline || player.PalDefenderOnline {
+		t.Fatalf("stale record retained an online signal: %#v", player)
+	}
+	if coordinatesAvailable(player.Location) || player.Ping != nil || player.IP != "" {
+		t.Fatalf("stale record retained live-only fields: %#v", player)
+	}
+	if player.GMUserID != "gm-player" || !original["player"].online() {
+		t.Fatalf("stale conversion lost identity or mutated input: stale=%#v original=%#v", player, original["player"])
+	}
+}
+
+func TestPalDefenderMapPlayersCachesFailureCooldown(t *testing.T) {
+	root := t.TempDir()
+	cfg := appconfig.Config{
+		DataDir:   root,
+		ServerDir: filepath.Join(root, "server"),
+		DBPath:    filepath.Join(root, "panel.db"),
+	}
+	if err := cfg.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := db.Open(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	server := Server{
+		cache:    newTTLCache(),
+		defender: paldefender.NewManager(cfg, store),
+	}
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest("GET", "/api/players", nil)
+
+	if players, available := server.palDefenderMapPlayers(context); available || len(players) != 0 {
+		t.Fatalf("unavailable PalDefender should degrade to an empty source: %#v available=%v", players, available)
+	}
+	key := cacheKey(cacheKeySavePrefix, "paldefender-map-players")
+	_, status, ok := server.cache.Get(key)
+	if !ok || status != cacheStatusHit {
+		t.Fatalf("PalDefender failure was not cached for cooldown: status=%s ok=%v", status, ok)
+	}
+	if players, available := server.palDefenderMapPlayers(context); available || len(players) != 0 {
+		t.Fatalf("cached PalDefender failure should remain unavailable: %#v available=%v", players, available)
 	}
 }

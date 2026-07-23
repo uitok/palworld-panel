@@ -29,13 +29,19 @@ vi.mock('../api/paldefenderGM', () => ({ palDefenderGMApi: mocks.gmApi }));
 const saveStatus = { state: 'ready', ready: true };
 const builderSave = {
   id: 'steam_1', steam_id: 'steam_1', player_uid: 'uid_1', nickname: 'Builder', level: 45,
-  guild_id: 'guild_1', guild_name: 'Guild', is_online: false, last_online_time: '2026-07-15T12:00:00Z',
+  guild_id: 'guild_1', guild_name: 'Guild', is_online: true, online_source: 'paldefender', online_stale: false, gm_user_id: 'steam_1',
+  last_online_time: '2026-07-15T12:00:00Z',
   x: 10, y: 20, z: 30,
 };
 const archivistSave = {
   id: 'steam_save', steam_id: 'steam_save', player_uid: 'uid_save', nickname: 'Archivist', level: 18,
-  guild_id: '', guild_name: '', is_online: false, last_online_time: '2026-07-14T12:00:00Z',
+  guild_id: '', guild_name: '', is_online: false, online_source: 'none', online_stale: false, last_online_time: '2026-07-14T12:00:00Z',
   x: 101, y: 202, z: 3,
+};
+const offlineSave = {
+  id: 'steam_2', steam_id: 'steam_2', player_uid: 'uid_2', nickname: 'OfflineUser', level: 12,
+  guild_id: '', guild_name: '', is_online: false, online_source: 'none', online_stale: false, gm_user_id: 'steam_2',
+  last_online_time: '2026-07-13T12:00:00Z', x: 0, y: 0, z: 0,
 };
 const builderGM = {
   Name: 'Builder', IP: '127.0.0.1', UserId: 'steam_1', PlayerUID: 'uid_1', GuildName: 'Guild', GuildUUID: 'guild_1',
@@ -69,9 +75,9 @@ describe('PalDefender player center', () => {
       user: { name: 'admin', role: 'admin', permissions: ['read', 'players:write', 'security:write'] },
     });
     mocks.authApi.logout.mockResolvedValue({ logged_out: true });
-    mocks.playersApi.getPlayersList.mockResolvedValue({ items: [builderSave, archivistSave], status: saveStatus, summary: { total: 2, returned: 2 } });
+    mocks.playersApi.getPlayersList.mockResolvedValue({ items: [builderSave, archivistSave, offlineSave], status: saveStatus, summary: { total: 3, returned: 3 } });
     mocks.playersApi.getPlayer.mockImplementation(async (identifier: string) => ({
-      player: identifier === 'uid_save' ? archivistSave : builderSave,
+      player: identifier === 'uid_save' ? archivistSave : identifier === 'uid_2' ? offlineSave : builderSave,
       status: saveStatus,
     }));
     mocks.playersApi.getInventory.mockResolvedValue({
@@ -125,13 +131,14 @@ describe('PalDefender player center', () => {
     vi.restoreAllMocks();
   });
 
-  it('merges save-index and PalDefender players and selects the online player first', async () => {
+  it('consumes the backend player registry without merging the GM player list', async () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: 'Builder' }, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Builder 在线' })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Archivist 离线' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'OfflineUser 离线' })).toBeInTheDocument();
+    expect(mocks.gmApi.players).not.toHaveBeenCalled();
     await waitFor(() => expect(mocks.gmApi.player).toHaveBeenCalledWith('steam_1'));
     expect(mocks.playersApi.getPlayer).toHaveBeenCalledWith('uid_1');
   });
@@ -146,6 +153,31 @@ describe('PalDefender player center', () => {
     expect(screen.getByText(/存档玩家、帕鲁和背包快照仍可正常查看/)).toBeInTheDocument();
     expect(mocks.gmApi.players).not.toHaveBeenCalled();
     expect(mocks.gmApi.player).not.toHaveBeenCalled();
+  });
+
+  it('shows a warning when official REST online data is stale', async () => {
+    mocks.playersApi.getPlayersList.mockResolvedValue({
+      items: [{ ...archivistSave, online_stale: true }],
+      status: saveStatus,
+      summary: { total: 1, returned: 1 },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/官方 REST 在线状态暂不可用/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archivist 离线' })).toBeInTheDocument();
+  });
+
+  it('shows the stale warning when the backend registry is empty', async () => {
+    mocks.playersApi.getPlayersList.mockResolvedValue({
+      items: [],
+      status: { ...saveStatus, stale: true, warnings: ['online player REST data is stale or unavailable'] },
+      summary: { total: 0, returned: 0 },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/官方 REST 在线状态暂不可用/)).toBeInTheDocument();
   });
 
   it('gives a catalog item to the selected online player and refreshes inventory', async () => {

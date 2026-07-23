@@ -32,6 +32,8 @@ export const mapSaveIndexStatus = (raw: unknown): SaveIndexStatus => {
     duration_ms: Number(data.duration_ms || 0),
     error: data.error ? String(data.error) : undefined,
     error_code: data.error_code ? String(data.error_code) : undefined,
+    error_detail: data.error_detail ? String(data.error_detail) : undefined,
+    oodle_available: data.oodle_available == null ? undefined : Boolean(data.oodle_available),
     warnings: Array.isArray(data.warnings) ? data.warnings.map(String) : [],
     counts: {
       players: Number(counts.players || 0),

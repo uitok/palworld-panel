@@ -37,6 +37,26 @@ describe('save player detail mappers', () => {
     expect(mapPlayer({ raw: '\u0000\u0001' })).toBeNull();
   });
 
+  it('defaults missing online state to offline and maps backend online metadata', () => {
+    expect(mapPlayer({ player_uid: 'uid-offline' })).toMatchObject({
+      is_online: false,
+      online_source: 'none',
+      online_stale: false,
+    });
+    expect(mapPlayer({
+      player_uid: 'uid-live',
+      is_online: true,
+      online_source: 'rest+paldefender',
+      online_stale: true,
+      gm_user_id: 'steam_76561198000000001',
+    })).toMatchObject({
+      is_online: true,
+      online_source: 'rest+paldefender',
+      online_stale: true,
+      gm_user_id: 'steam_76561198000000001',
+    });
+  });
+
   it('maps parsed inventory slots and ignores entries without an ItemID', () => {
     expect(mapSaveInventoryContainers({
       containers: [{

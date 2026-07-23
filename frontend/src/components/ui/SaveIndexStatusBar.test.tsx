@@ -58,11 +58,51 @@ describe('SaveIndexStatusBar', () => {
       parser: 'palpanel-sav-cli-go',
       error: 'save indexer failed (parser_incompatible); inspect the sav-cli text logs',
       error_code: 'parser_incompatible',
+      error_detail: 'unknown property type StructProperty',
+      oodle_available: true,
       counts: { players: 0, guilds: 0, bases: 0, pals: 0, containers: 0, map_entities: 0 },
       warnings: [],
     }} onRefresh={vi.fn()} onRebuild={vi.fn()} />);
 
     expect(screen.getByText(/存档格式不兼容/)).toBeInTheDocument();
+    expect(screen.getByText('parser_incompatible')).toBeInTheDocument();
+    expect(screen.getByText(/unknown property type StructProperty/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['save_indexer_unavailable', /sav-cli 存档解析服务不可用/],
+    ['save_index_timeout', /sav-cli 存档解析超时/],
+  ])('distinguishes %s errors', (errorCode, message) => {
+    render(<SaveIndexStatusBar status={{
+      enabled: true,
+      state: 'error',
+      stale: false,
+      source_path: 'Level.sav',
+      updated_at: '',
+      duration_ms: 0,
+      error_code: errorCode,
+      counts: { players: 0, guilds: 0, bases: 0, pals: 0, containers: 0, map_entities: 0 },
+      warnings: [],
+    }} onRefresh={vi.fn()} onRebuild={vi.fn()} />);
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
+  it('reports missing Oodle support separately from parser incompatibility', () => {
+    render(<SaveIndexStatusBar status={{
+      enabled: true,
+      state: 'error',
+      stale: false,
+      source_path: 'Level.sav',
+      updated_at: '',
+      duration_ms: 0,
+      error_code: 'parser_incompatible',
+      oodle_available: false,
+      counts: { players: 0, guilds: 0, bases: 0, pals: 0, containers: 0, map_entities: 0 },
+      warnings: [],
+    }} onRefresh={vi.fn()} onRebuild={vi.fn()} />);
+
+    expect(screen.getByText(/缺少 Oodle 解压能力/)).toBeInTheDocument();
     expect(screen.getByText('parser_incompatible')).toBeInTheDocument();
   });
 });

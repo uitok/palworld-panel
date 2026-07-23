@@ -8,20 +8,33 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"palpanel/internal/appconfig"
 )
 
 var ErrDisabled = errors.New("save indexer is disabled")
 
-const staleAfterRebuildFailureWarning = "returning stale save index after rebuild failed"
+const (
+	staleAfterRebuildFailureWarning = "returning stale save index after rebuild failed"
+	oodleHealthTimeout              = time.Second
+	oodleHealthCacheTTL             = 5 * time.Second
+)
+
+var (
+	escapedBytePattern         = regexp.MustCompile(`\\[xX][0-9A-Fa-f]{2}`)
+	windowsAbsolutePathPattern = regexp.MustCompile(`(?i)(?:[a-z]:[\\/]|\\\\)[^\s"'<>|]+`)
+	httpURLPattern             = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
+)
 
 type Manager struct {
 	cfg         appconfig.Config
@@ -33,6 +46,9 @@ type Manager struct {
 	cache       *cacheFile
 	cacheMTime  time.Time
 	cacheLoaded bool
+	oodleMu     sync.Mutex
+	oodleAt     time.Time
+	oodle       *bool
 
 	autoMu          sync.Mutex
 	rebuildInFlight bool
@@ -196,18 +212,20 @@ type Index struct {
 }
 
 type Status struct {
-	Enabled    bool     `json:"enabled"`
-	State      string   `json:"state"`
-	Stale      bool     `json:"stale"`
-	SourcePath string   `json:"source_path"`
-	UpdatedAt  string   `json:"updated_at"`
-	DurationMS int      `json:"duration_ms"`
-	Error      string   `json:"error,omitempty"`
-	ErrorCode  string   `json:"error_code,omitempty"`
-	Warnings   []string `json:"warnings"`
-	Counts     Counts   `json:"counts"`
-	Parser     string   `json:"parser,omitempty"`
-	CachePath  string   `json:"cache_path,omitempty"`
+	Enabled        bool     `json:"enabled"`
+	State          string   `json:"state"`
+	Stale          bool     `json:"stale"`
+	SourcePath     string   `json:"source_path"`
+	UpdatedAt      string   `json:"updated_at"`
+	DurationMS     int      `json:"duration_ms"`
+	Error          string   `json:"error,omitempty"`
+	ErrorCode      string   `json:"error_code,omitempty"`
+	ErrorDetail    string   `json:"error_detail,omitempty"`
+	OodleAvailable *bool    `json:"oodle_available,omitempty"`
+	Warnings       []string `json:"warnings"`
+	Counts         Counts   `json:"counts"`
+	Parser         string   `json:"parser,omitempty"`
+	CachePath      string   `json:"cache_path,omitempty"`
 }
 
 type cacheFile struct {
@@ -230,15 +248,19 @@ type sidecarError struct {
 	Message string `json:"message"`
 }
 
-// IndexerError wraps a failure reported by the sav-cli sidecar. Only the safe,
-// enumerated Code is exposed; the sidecar's raw Message is never propagated
-// because it can contain binary save-file fragments.
+// IndexerError wraps a failure reported by the sav-cli sidecar. Only an
+// enumerated Code and bounded, redacted Detail may be exposed to API clients.
 type IndexerError struct {
 	Code     string
+	Detail   string
+	Summary  string
 	Warnings []string
 }
 
 func (e *IndexerError) Error() string {
+	if e != nil && e.Summary != "" {
+		return e.Summary
+	}
 	if e == nil || e.Code == "" {
 		return "save indexer failed; inspect the sav-cli text logs"
 	}
@@ -249,14 +271,16 @@ func (e *IndexerError) Error() string {
 // surface to the panel. Codes outside this set are discarded so an untrusted
 // or corrupted sidecar cannot inject arbitrary text into diagnostics.
 var knownIndexerCodes = map[string]bool{
-	"parser_incompatible": true,
-	"save_path_not_found": true,
-	"level_sav_not_found": true,
-	"index_failed":        true,
-	"save_path_required":  true,
-	"bad_request":         true,
-	"method_not_allowed":  true,
-	"json_encode_failed":  true,
+	"save_indexer_unavailable": true,
+	"save_index_timeout":       true,
+	"parser_incompatible":      true,
+	"save_path_not_found":      true,
+	"level_sav_not_found":      true,
+	"index_failed":             true,
+	"save_path_required":       true,
+	"bad_request":              true,
+	"method_not_allowed":       true,
+	"json_encode_failed":       true,
 }
 
 func safeIndexerCode(code string) string {
@@ -265,6 +289,60 @@ func safeIndexerCode(code string) string {
 		return code
 	}
 	return ""
+}
+
+func safeIndexerDetail(detail string, privatePaths ...string) string {
+	detail = strings.ToValidUTF8(detail, "")
+	detail = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, detail)
+	detail = escapedBytePattern.ReplaceAllString(detail, "[byte]")
+	for _, privatePath := range privatePaths {
+		privatePath = strings.TrimSpace(privatePath)
+		if privatePath == "" {
+			continue
+		}
+		variants := map[string]bool{
+			privatePath:                               true,
+			filepath.Clean(privatePath):               true,
+			strings.ReplaceAll(privatePath, `\`, "/"): true,
+			strings.ReplaceAll(privatePath, "/", `\`): true,
+		}
+		for variant := range variants {
+			detail = replaceFold(detail, variant, "<redacted>")
+		}
+	}
+	detail = windowsAbsolutePathPattern.ReplaceAllString(detail, "<redacted>")
+	detail = httpURLPattern.ReplaceAllString(detail, "<redacted>")
+	detail = strings.Join(strings.Fields(detail), " ")
+	runes := []rune(detail)
+	if len(runes) > 512 {
+		detail = string(runes[:512]) + "…"
+	}
+	return detail
+}
+
+func replaceFold(value, target, replacement string) string {
+	if target == "" {
+		return value
+	}
+	pattern, err := regexp.Compile(`(?i:` + regexp.QuoteMeta(target) + `)`)
+	if err != nil {
+		return value
+	}
+	return pattern.ReplaceAllString(value, replacement)
+}
+
+func classifyIndexerRequestError(err error) *IndexerError {
+	code := "save_indexer_unavailable"
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		code = "save_index_timeout"
+	}
+	return &IndexerError{Code: code}
 }
 
 func EmptyIndex() Index {
@@ -281,7 +359,10 @@ func EmptyIndex() Index {
 	}
 }
 
-func (m *Manager) Status(ctx context.Context) Status {
+func (m *Manager) Status(ctx context.Context) (status Status) {
+	defer func() {
+		status = m.withOodleStatus(ctx, status)
+	}()
 	if !m.cfg.SaveIndexerEnabled {
 		return Status{Enabled: false, State: "disabled", Warnings: []string{}}
 	}
@@ -298,7 +379,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 		status.Error = err.Error()
 		return status
 	}
-	status := normalizeCachedStatus(cached.Status)
+	status = normalizeCachedStatus(cached.Status)
 	status.Enabled = true
 	status.SourcePath = worldDir
 	status.CachePath = m.cachePath()
@@ -363,10 +444,14 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 		var indexerErr *IndexerError
 		if errors.As(err, &indexerErr) {
 			status.ErrorCode = indexerErr.Code
+			status.ErrorDetail = indexerErr.Detail
 			for _, warning := range indexerErr.Warnings {
 				status.Warnings = appendUnique(status.Warnings, warning)
 			}
-			if indexerErr.Code == "parser_incompatible" && m.probeOodleUnavailable(ctx) {
+		}
+		if status.ErrorCode == "parser_incompatible" {
+			status = m.withOodleStatus(ctx, status)
+			if status.OodleAvailable != nil && !*status.OodleAvailable {
 				status.Warnings = appendUnique(status.Warnings, oodleUnavailableWarning)
 			}
 		}
@@ -376,6 +461,8 @@ func (m *Manager) Rebuild(ctx context.Context) (Index, Status, error) {
 			cached.Status.Stale = true
 			cached.Status.Error = status.Error
 			cached.Status.ErrorCode = status.ErrorCode
+			cached.Status.ErrorDetail = status.ErrorDetail
+			cached.Status.OodleAvailable = status.OodleAvailable
 			cached.Status.CachePath = m.cachePath()
 			for _, warning := range status.Warnings {
 				cached.Status.Warnings = appendUnique(cached.Status.Warnings, warning)
@@ -545,7 +632,7 @@ func (m *Manager) callIndexer(ctx context.Context, worldDir string) (Index, erro
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return Index{}, fmt.Errorf("save indexer request failed: %w", err)
+		return Index{}, classifyIndexerRequestError(err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -554,35 +641,73 @@ func (m *Manager) callIndexer(ctx context.Context, worldDir string) (Index, erro
 	}
 	var envelope sidecarEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return Index{}, errors.New("save indexer returned a non-JSON response; verify the sav-cli version and inspect its text logs")
+		return Index{}, &IndexerError{
+			Code:    "parser_incompatible",
+			Summary: "save indexer returned a non-JSON response; verify the sav-cli version and inspect its text logs",
+		}
 	}
 	if resp.StatusCode >= 400 || !envelope.OK {
 		if envelope.Error != nil {
-			return Index{}, &IndexerError{Code: safeIndexerCode(envelope.Error.Code), Warnings: append([]string(nil), envelope.Warnings...)}
+			code := safeIndexerCode(envelope.Error.Code)
+			privatePaths := []string{worldDir, m.cfg.SaveIndexCacheDir, os.TempDir()}
+			if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+				privatePaths = append(privatePaths, homeDir)
+			}
+			detail := safeIndexerDetail(envelope.Error.Message, privatePaths...)
+			if detail != "" {
+				log.Printf("save indexer sidecar error code=%s detail=%q", code, detail)
+			}
+			exposedDetail := ""
+			if code != "" {
+				exposedDetail = detail
+			}
+			return Index{}, &IndexerError{Code: code, Detail: exposedDetail, Warnings: append([]string(nil), envelope.Warnings...)}
 		}
-		return Index{}, fmt.Errorf("save indexer returned status %d", resp.StatusCode)
+		return Index{}, &IndexerError{Code: "save_indexer_unavailable"}
 	}
 	var index Index
 	if err := json.Unmarshal(envelope.Data, &index); err != nil {
-		return Index{}, fmt.Errorf("decode save index response: %w", err)
+		return Index{}, &IndexerError{
+			Code:    "parser_incompatible",
+			Summary: "save indexer returned incompatible index data; verify the sav-cli version and inspect its text logs",
+		}
 	}
 	ensureSlices(&index)
 	return index, nil
 }
 
-// probeOodleUnavailable reports whether the sav-cli sidecar advertises that it
-// cannot decompress Oodle-compressed (PlM) saves. A no-cgo sidecar starts and
-// passes /health yet fails every PlM save, so this turns an opaque
-// parser_incompatible into an actionable warning.
-func (m *Manager) probeOodleUnavailable(ctx context.Context) bool {
+func (m *Manager) withOodleStatus(ctx context.Context, status Status) Status {
+	if status.Enabled {
+		status.OodleAvailable = m.probeOodleAvailability(ctx)
+	}
+	return status
+}
+
+// probeOodleAvailability reads the sav-cli capability contract with a short,
+// independent timeout. Results, including an unknown result, are cached briefly
+// so frequently-polled status endpoints do not create a health-check storm.
+func (m *Manager) probeOodleAvailability(ctx context.Context) *bool {
+	m.oodleMu.Lock()
+	defer m.oodleMu.Unlock()
+
+	if !m.oodleAt.IsZero() && time.Since(m.oodleAt) < oodleHealthCacheTTL {
+		return copyBool(m.oodle)
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, oodleHealthTimeout)
+	defer cancel()
 	url := strings.TrimRight(m.cfg.SaveIndexerURL, "/") + "/health"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return false
+		m.oodleAt = time.Now()
+		m.oodle = nil
+		return nil
 	}
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return false
+		m.oodleAt = time.Now()
+		m.oodle = nil
+		return nil
 	}
 	defer resp.Body.Close()
 	var envelope struct {
@@ -592,9 +717,25 @@ func (m *Manager) probeOodleUnavailable(ctx context.Context) bool {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return false
+		m.oodleAt = time.Now()
+		m.oodle = nil
+		return nil
 	}
-	return envelope.Data.Oodle != nil && !*envelope.Data.Oodle
+	m.oodleAt = time.Now()
+	if resp.StatusCode >= http.StatusBadRequest || !envelope.OK || envelope.Data.Oodle == nil {
+		m.oodle = nil
+		return nil
+	}
+	m.oodle = copyBool(envelope.Data.Oodle)
+	return copyBool(m.oodle)
+}
+
+func copyBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 const oodleUnavailableWarning = "sav-cli was built without cgo/Oodle support; Oodle-compressed (PlM) saves cannot be parsed. Use a release build with cgo enabled."

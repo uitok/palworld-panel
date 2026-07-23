@@ -24,14 +24,21 @@ import (
 // merged record per physical player regardless of which key each source carries.
 
 // identityKey normalizes a UID or SteamID into a comparison key: trimmed,
-// lowercased, and with the ubiquitous "steam_" prefix removed so that
-// "steam_abc" and "abc" reconcile.
+// lowercased, stripped to ASCII letters and digits, and with the ubiquitous
+// "steam_" prefix removed so that "steam_abc" and "abc" reconcile.
 func identityKey(value string) string {
 	key := strings.ToLower(strings.TrimSpace(value))
 	if strings.HasPrefix(key, "steam_") && len(key) > len("steam_") {
-		return key[len("steam_"):]
+		key = key[len("steam_"):]
 	}
-	return key
+	var normalized strings.Builder
+	for index := 0; index < len(key); index++ {
+		char := key[index]
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			normalized.WriteByte(char)
+		}
+	}
+	return normalized.String()
 }
 
 // playerRegistry merges save and live player records by identity, linking any
@@ -50,6 +57,7 @@ func newPlayerRegistry(base []saveindex.Player) *playerRegistry {
 	}
 	for i := range base {
 		player := base[i]
+		player.IsOnline = false
 		if existing := r.coalesce(player.PlayerUID, player.SteamID); existing != nil {
 			mergeSavePlayer(existing, &player)
 			r.index(existing)
@@ -61,14 +69,15 @@ func newPlayerRegistry(base []saveindex.Player) *playerRegistry {
 }
 
 // add appends a new record and indexes all of its identity keys.
-func (r *playerRegistry) add(player *saveindex.Player) {
+func (r *playerRegistry) add(player *saveindex.Player, aliases ...string) {
 	r.records = append(r.records, player)
-	r.index(player)
+	r.index(player, aliases...)
 }
 
 // index (re)registers every identity key a record currently carries.
-func (r *playerRegistry) index(player *saveindex.Player) {
-	for _, value := range []string{player.PlayerUID, player.SteamID} {
+func (r *playerRegistry) index(player *saveindex.Player, aliases ...string) {
+	values := append(append([]string(nil), aliases...), player.PlayerUID, player.SteamID)
+	for _, value := range values {
 		if key := identityKey(value); key != "" {
 			r.byKey[key] = player
 		}
@@ -164,36 +173,39 @@ func (r *playerRegistry) overlayOnline(online map[string]onlinePlayer) {
 	// which online identities we've already appended to avoid creating two
 	// standalone records for the same player.
 	appendedKeys := make(map[string]bool)
-	for _, item := range online {
+	for alias, item := range online {
 		if strings.TrimSpace(item.PlayerUID) == "" && strings.TrimSpace(item.SteamID) == "" {
 			continue
 		}
-		if existing := r.coalesce(item.PlayerUID, item.SteamID); existing != nil {
+		if existing := r.coalesce(alias, item.PlayerUID, item.SteamID); existing != nil {
 			applyOnlineToPlayer(existing, item)
 			// The online source may carry an identity key the save lacked;
 			// index it so a later entry reconciles to this same record.
-			r.index(existing)
+			r.index(existing, alias)
 			continue
 		}
-		if onlineAlreadyAppended(appendedKeys, item) {
+		if onlineAlreadyAppended(appendedKeys, item, alias) {
 			continue
 		}
 		appended := saveindex.Player{
 			PlayerUID: item.PlayerUID,
 			SteamID:   item.SteamID,
 			Nickname:  item.Nickname,
-			IsOnline:  true,
-			Location:  item.Location,
-			Ping:      item.Ping,
-			IP:        item.IP,
+			IsOnline:  item.online(),
 		}
-		r.add(&appended)
-		markOnlineAppended(appendedKeys, item)
+		if item.online() {
+			appended.Location = item.Location
+			appended.Ping = item.Ping
+			appended.IP = item.IP
+		}
+		r.add(&appended, alias)
+		markOnlineAppended(appendedKeys, item, alias)
 	}
 }
 
-func onlineAlreadyAppended(appended map[string]bool, item onlinePlayer) bool {
-	for _, value := range []string{item.PlayerUID, item.SteamID} {
+func onlineAlreadyAppended(appended map[string]bool, item onlinePlayer, aliases ...string) bool {
+	values := append(append([]string(nil), aliases...), item.PlayerUID, item.SteamID)
+	for _, value := range values {
 		if key := identityKey(value); key != "" && appended[key] {
 			return true
 		}
@@ -201,8 +213,9 @@ func onlineAlreadyAppended(appended map[string]bool, item onlinePlayer) bool {
 	return false
 }
 
-func markOnlineAppended(appended map[string]bool, item onlinePlayer) {
-	for _, value := range []string{item.PlayerUID, item.SteamID} {
+func markOnlineAppended(appended map[string]bool, item onlinePlayer, aliases ...string) {
+	values := append(append([]string(nil), aliases...), item.PlayerUID, item.SteamID)
+	for _, value := range values {
 		if key := identityKey(value); key != "" {
 			appended[key] = true
 		}
@@ -212,15 +225,21 @@ func markOnlineAppended(appended map[string]bool, item onlinePlayer) {
 // applyOnlineToPlayer copies live fields from an online record onto a merged
 // player, matching the field precedence the panel relied on previously.
 func applyOnlineToPlayer(player *saveindex.Player, item onlinePlayer) {
-	player.IsOnline = true
-	player.Ping = item.Ping
-	player.IP = item.IP
 	if item.SteamID != "" {
 		player.SteamID = item.SteamID
 	}
 	if item.PlayerUID != "" {
 		player.PlayerUID = item.PlayerUID
 	}
+	if player.Nickname == "" && item.Nickname != "" {
+		player.Nickname = item.Nickname
+	}
+	if !item.online() {
+		return
+	}
+	player.IsOnline = true
+	player.Ping = item.Ping
+	player.IP = item.IP
 	if coordinatesAvailable(item.Location) {
 		player.Location = item.Location
 	}
@@ -314,6 +333,8 @@ func (r *onlinePlayerRegistry) players() map[string]onlinePlayer {
 }
 
 func mergeOnlinePlayer(target *onlinePlayer, source onlinePlayer, preferred bool) {
+	targetOnline := target.online()
+	sourceOnline := source.online()
 	if target.PlayerUID == "" || preferred && source.PlayerUID != "" {
 		target.PlayerUID = source.PlayerUID
 	}
@@ -322,6 +343,16 @@ func mergeOnlinePlayer(target *onlinePlayer, source onlinePlayer, preferred bool
 	}
 	if target.Nickname == "" || preferred && source.Nickname != "" {
 		target.Nickname = source.Nickname
+	}
+	if target.GMUserID == "" || preferred && source.GMUserID != "" {
+		target.GMUserID = source.GMUserID
+	}
+	target.OnlineStateKnown = target.OnlineStateKnown || source.OnlineStateKnown
+	target.IsOnline = targetOnline || sourceOnline
+	target.RESTOnline = target.RESTOnline || source.RESTOnline
+	target.PalDefenderOnline = target.PalDefenderOnline || source.PalDefenderOnline
+	if !sourceOnline {
+		return
 	}
 	if !coordinatesAvailable(target.Location) || preferred && coordinatesAvailable(source.Location) {
 		if coordinatesAvailable(source.Location) {

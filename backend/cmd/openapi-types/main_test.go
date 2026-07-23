@@ -52,3 +52,30 @@ func TestOpenAPIGeneratesMonitorDiagnosticContracts(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIGeneratesPlayerAndSaveIndexContracts(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "contracts.ts")
+	if err := run(filepath.Join("..", "..", "..", "docs", "openapi.yaml"), output); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := string(body)
+	for _, want := range []string{
+		`"Player":`,
+		`"online_source": "none" | "rest" | "paldefender" | "rest+paldefender"`,
+		`"online_stale": boolean`,
+		`"gm_user_id"?: string`,
+		`"SaveIndexStatus":`,
+		`"oodle_available"?: boolean`,
+		`"error_detail"?: string`,
+		`"PlayerListEnvelope":`,
+		`"PlayerDetailEnvelope":`,
+	} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("generated player/save-index contract does not contain %q", want)
+		}
+	}
+}

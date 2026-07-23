@@ -273,6 +273,7 @@ try {
   $env:CXX = $MingwGxx
   $env:PATH = $MingwBin + [System.IO.Path]::PathSeparator + $oldPath
   Invoke-GoBuildWithWindowsLockRetry -Arguments @("build", "-trimpath", "-ldflags", $savLdflags, "-o", (Join-Path $PackageDir "sav-cli.exe"), "./cmd/sav_cli") -WorkingDirectory (Join-Path $RootDir "sav-cli")
+  Invoke-External (Join-Path $PackageDir "sav-cli.exe") @("verify-build", "--require-oodle") $PackageDir
   $palcalcPublish = Join-Path $RootDir "dist\palcalc-win-x64"
   if (Test-Path $palcalcPublish) { Remove-Item -Recurse -Force $palcalcPublish }
   Invoke-External "dotnet" @("publish", (Join-Path $RootDir "palcalc-bridge\PalCalc.Bridge.csproj"), "-c", "Release", "-r", "win-x64", "--self-contained", "true", "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-p:UseSharedCompilation=false", "-o", $palcalcPublish) $RootDir

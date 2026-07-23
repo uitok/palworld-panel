@@ -26,7 +26,14 @@ export const mapPlayer = (raw: unknown): Player | null => {
     level: Number(player.level || 0),
     guild_id: String(player.guild_id || ''),
     guild_name: String(player.guild_name || player.guild || '未知公会'),
-    is_online: player.is_online == null ? true : Boolean(player.is_online),
+    is_online: Boolean(player.is_online),
+    online_source: player.online_source === 'rest'
+      || player.online_source === 'paldefender'
+      || player.online_source === 'rest+paldefender'
+      ? player.online_source
+      : 'none',
+    online_stale: Boolean(player.online_stale),
+    gm_user_id: player.gm_user_id ? String(player.gm_user_id) : undefined,
     last_online_time: String(player.last_online_time || ''),
     x: Number(player.location_x || player.x || 0),
     y: Number(player.location_y || player.y || 0),
