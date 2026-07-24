@@ -1095,6 +1095,7 @@ export interface MapEntity {
   ping?: number;
   owner_id?: string;
   pals_count?: number;
+  structures_count?: number;
 }
 
 export interface MapLiveStatus {

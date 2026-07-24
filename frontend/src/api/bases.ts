@@ -1,7 +1,7 @@
 import { apiClient, handleRequest } from './client';
 import { emptySummary, entityListQuery, mapSummary } from './entityList';
 import { emptySaveIndexStatus, mapSaveIndexStatus } from './saveIndex';
-import type { Base, EntityListParams, EntityListResponse, UnsupportedActionResult } from '../types';
+import type { Base, EntityListParams, EntityListResponse, SaveIndexStatus } from '../types';
 
 const mapBase = (raw: unknown): Base => {
   const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -39,9 +39,6 @@ const mapBasesList = (raw: unknown): EntityListResponse<Base> => {
   };
 };
 
-const unsupported = (message: string): Promise<UnsupportedActionResult> =>
-  Promise.resolve({ ok: false, unsupported: true, message });
-
 export const basesApi = {
   getBasesList: (params: EntityListParams = {}) =>
     handleRequest<unknown, EntityListResponse<Base>>(
@@ -59,6 +56,34 @@ export const basesApi = {
       quiet: true,
     }),
 
-  cleanStructures: (_baseId: string) => unsupported('当前后端未提供基地清理接口'),
-  backupBase: (_baseId: string) => unsupported('当前后端未提供单基地备份接口，请使用全服备份'),
+  getBase: (baseId: string) =>
+    handleRequest<unknown, { base: Base; status: SaveIndexStatus }>(
+      () => apiClient.get(`/bases/${encodeURIComponent(baseId)}`),
+      { base: mapBase({}), status: emptySaveIndexStatus },
+      {
+        map: (raw) => {
+          const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+          return {
+            base: mapBase(data.base),
+            status: data.status ? mapSaveIndexStatus(data.status) : emptySaveIndexStatus,
+          };
+        },
+        quiet: true,
+        fallbackOnError: false,
+      },
+    ),
+
+  cleanBase: (baseId: string) =>
+    handleRequest<unknown, { cleaned: boolean; saved: boolean; base: Base }>(
+      () => apiClient.post(`/bases/${encodeURIComponent(baseId)}/clean`),
+      { cleaned: false, saved: false, base: mapBase({}) },
+      {
+        map: (raw) => {
+          const data = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+          return { cleaned: Boolean(data.cleaned), saved: Boolean(data.saved), base: mapBase(data.base) };
+        },
+        quiet: true,
+        fallbackOnError: false,
+      },
+    ),
 };

@@ -19,6 +19,7 @@ export const Bases: React.FC = () => {
   const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
   const [page, setPage] = useState(1);
+  const [selectedBaseId, setSelectedBaseId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const debouncedSearch = useDebouncedValue(searchText, 250);
@@ -51,17 +52,39 @@ export const Bases: React.FC = () => {
     },
   });
 
+  const cleanMutation = useMutation({
+    mutationFn: (base: Base) => basesApi.cleanBase(base.id),
+    onSuccess: (result) => {
+      setNotice(`已清理基地“${result.base.name}”，世界已保存，实时索引正在刷新`);
+      setActionError(null);
+      void queryClient.invalidateQueries({ queryKey: ['bases'] });
+      void queryClient.invalidateQueries({ queryKey: ['base-detail', selectedBaseId] });
+    },
+    onError: (cleanError) => {
+      setNotice(null);
+      setActionError(getErrorMessage(cleanError));
+    },
+  });
+
   const bases = basesQuery.data?.items ?? [];
   const indexStatus = basesQuery.data?.status ?? null;
   const summary = basesQuery.data?.summary;
   const loading = basesQuery.isLoading;
   const error = actionError || (basesQuery.error ? getErrorMessage(basesQuery.error) : null);
+  const detailQuery = useQuery({
+    queryKey: ['base-detail', selectedBaseId],
+    queryFn: () => basesApi.getBase(selectedBaseId as string),
+    enabled: Boolean(selectedBaseId),
+  });
   const totalItems = summary?.total ?? bases.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
-  const unsupported = async (promise: Promise<{ message: string }>) => {
-    const result = await promise;
-    setNotice(result.message);
+  const cleanBase = (base: Base) => {
+    if (cleanMutation.isPending) return;
+    const confirmed = window.confirm(
+      `确认清理基地“${base.name}”吗？\n\n将通过 PalDefender 摧毁坐标附近的整个基地，并请求保存世界。此操作不可撤销。`,
+    );
+    if (confirmed) cleanMutation.mutate(base);
   };
 
   const copyCoords = async (base: Base) => {
@@ -110,6 +133,31 @@ export const Bases: React.FC = () => {
         onRebuild={() => rebuildMutation.mutate()}
       />
 
+      {selectedBaseId && (
+        <section className="rounded-3xl border border-sky-100 bg-sky-50 p-5 text-sm text-slate-700">
+          {detailQuery.isLoading ? (
+            <p className="font-semibold text-sky-700">正在加载基地详情…</p>
+          ) : detailQuery.error ? (
+            <p className="font-semibold text-rose-700">{getErrorMessage(detailQuery.error)}</p>
+          ) : detailQuery.data ? (
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="font-bold text-slate-800">{detailQuery.data.base.name}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  公会：{detailQuery.data.base.guild_name || '未分配'} · 坐标：{detailQuery.data.base.x.toFixed(0)}, {detailQuery.data.base.y.toFixed(0)}, {detailQuery.data.base.z.toFixed(0)}
+                </p>
+                <p className="mt-2 text-xs font-semibold text-slate-500">
+                  建筑 {detailQuery.data.base.structures_count} · 工作帕鲁 {detailQuery.data.base.pals_count} · 容器 {detailQuery.data.base.containers?.length ?? 0}
+                </p>
+              </div>
+              <button type="button" onClick={() => setSelectedBaseId(null)} className="pp-button">
+                关闭详情
+              </button>
+            </div>
+          ) : null}
+        </section>
+      )}
+
       <section className="rounded-3xl border border-slate-100 bg-white p-4 shadow-[0_2px_12px_-3px_rgba(15,23,42,0.02)] sm:p-6">
         {loading && bases.length === 0 ? (
           <div className="py-12 text-center text-xs font-semibold text-slate-400">
@@ -137,15 +185,15 @@ export const Bases: React.FC = () => {
                 key={base.id}
                 base={base}
                 onCopy={() => copyCoords(base)}
-                onClean={() => unsupported(basesApi.cleanStructures(base.id))}
-                onBackup={() => unsupported(basesApi.backupBase(base.id))}
+                onDetails={() => setSelectedBaseId(base.id)}
+                onClean={() => cleanBase(base)}
               />
             )}
             renderRow={(base) => (
               <tr key={base.id} className="hover:bg-slate-50/50">
                 <td className="px-6 py-4">
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-bold text-slate-700">{base.name}</p>
+                    <button type="button" onClick={() => setSelectedBaseId(base.id)} className="truncate text-left text-xs font-bold text-slate-700 hover:text-sky-700">{base.name}</button>
                     <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{base.guild_name}</p>
                   </div>
                 </td>
@@ -175,7 +223,10 @@ export const Bases: React.FC = () => {
                     <button type="button" onClick={() => copyCoords(base)} className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50" aria-label="复制坐标">
                       <Copy size={14} />
                     </button>
-                    <button type="button" onClick={() => unsupported(basesApi.cleanStructures(base.id))} className="rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-50">
+                    <button type="button" onClick={() => setSelectedBaseId(base.id)} className="rounded-lg border border-slate-200 px-3 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-50">
+                      详情
+                    </button>
+                    <button type="button" onClick={() => cleanBase(base)} className="rounded-lg border border-rose-200 px-3 py-2 text-[10px] font-bold text-rose-600 hover:bg-rose-50">
                       清理
                     </button>
                   </div>
@@ -206,11 +257,11 @@ const Summary: React.FC<{ icon: React.ReactNode; label: string; value: string; d
   </div>
 );
 
-const BaseCard: React.FC<{ base: Base; onCopy: () => void; onClean: () => void; onBackup: () => void }> = ({
+const BaseCard: React.FC<{ base: Base; onCopy: () => void; onDetails: () => void; onClean: () => void }> = ({
   base,
   onCopy,
+  onDetails,
   onClean,
-  onBackup,
 }) => (
   <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
@@ -232,11 +283,11 @@ const BaseCard: React.FC<{ base: Base; onCopy: () => void; onClean: () => void; 
       <button type="button" onClick={onCopy} className="rounded-xl border border-slate-200 py-2 text-xs font-bold text-slate-600">
         复制
       </button>
+      <button type="button" onClick={onDetails} className="rounded-xl border border-slate-200 py-2 text-xs font-bold text-slate-600">
+        详情
+      </button>
       <button type="button" onClick={onClean} className="rounded-xl border border-slate-200 py-2 text-xs font-bold text-slate-600">
         清理
-      </button>
-      <button type="button" onClick={onBackup} className="rounded-xl border border-slate-200 py-2 text-xs font-bold text-slate-600">
-        备份
       </button>
     </div>
   </div>

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,10 +7,15 @@ import { LiveMap } from './LiveMap';
 const mocks = vi.hoisted(() => ({
   getMapEntities: vi.fn(),
   rebuild: vi.fn(),
+  cleanBase: vi.fn(),
 }));
 
 vi.mock('../api/saveIndex', () => ({
   saveIndexApi: mocks,
+}));
+
+vi.mock('../api/bases', () => ({
+  basesApi: { cleanBase: mocks.cleanBase },
 }));
 
 const renderPage = () => {
@@ -28,6 +33,7 @@ describe('LiveMap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.rebuild.mockResolvedValue({ status: 'waiting' });
+    mocks.cleanBase.mockResolvedValue({ cleaned: true, saved: true, base: { name: '主基地' } });
     mocks.getMapEntities.mockResolvedValue({
       entities: [
         { type: 'player', id: 'player-1', label: 'Builder', x: 100, y: 200, z: 30, is_online: true, live: true, source: 'live', guild_name: 'Builders' },
@@ -54,5 +60,18 @@ describe('LiveMap', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '帕鲁' }));
     expect(screen.getByRole('button', { name: /捣蛋猫 300, 400, 0/ })).toBeInTheDocument();
+  });
+
+  it('selects a live base and exposes the guarded cleanup action', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /主基地 150, 250, 20/ }));
+    expect(screen.getByText('清理此基地')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '清理此基地' }));
+
+    expect(confirm).toHaveBeenCalled();
+    await waitFor(() => expect(mocks.cleanBase).toHaveBeenCalledWith('base-1'));
   });
 });

@@ -1162,13 +1162,16 @@ paths:
   /bases/{id}/storage:
     parameters: [*idParameter]
     get: {operationId: getBaseStorage, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+  /bases/{id}/clean:
+    parameters: [*idParameter]
+    post: {operationId: cleanBase, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
   /pals:
     get: {operationId: listPals, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /pals/{id}:
     parameters: [*idParameter]
     get: {operationId: getPal, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /map/entities:
-    get: {operationId: listMapEntities, tags: [world], x-palpanel-permission: read, responses: *readResponses}
+    get: {operationId: listMapEntities, tags: [world], x-palpanel-permission: read, parameters: [*playerSourceParameter], responses: *readResponses}
   /players/bans:
     get: {operationId: listPlayerBans, tags: [world], x-palpanel-permission: read, responses: *readResponses}
     post: {operationId: addPlayerBan, tags: [world], x-palpanel-permission: 'players:write', requestBody: *jsonRequest, responses: *writeResponses}

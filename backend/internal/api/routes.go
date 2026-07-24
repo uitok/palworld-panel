@@ -239,6 +239,7 @@ func (s Server) registerWorldRoutes(api *gin.RouterGroup) {
 	api.GET("/bases", s.listSaveBases)
 	api.GET("/bases/:id", s.getSaveBase)
 	api.GET("/bases/:id/storage", s.getSaveBaseStorage)
+	api.POST("/bases/:id/clean", Require(PermServerControl), s.cleanSaveBase)
 	api.GET("/pals", s.listSavePals)
 	api.GET("/pals/:id", s.getSavePal)
 	api.GET("/map/entities", s.listMapEntities)

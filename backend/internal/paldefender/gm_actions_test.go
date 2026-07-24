@@ -1,6 +1,7 @@
 package paldefender
 
 import (
+	"math"
 	"net"
 	"strconv"
 	"testing"
@@ -93,6 +94,71 @@ func TestTypedRCONPlayerManagementValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if err := test.run(); err == nil {
 				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestRCONBaseCommands(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	prepareGMRESTFixture(t, manager)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := palconfig.Write(manager.cfg.PalWorldSettingsPath(), palconfig.Settings{
+		"RCONEnabled": "True", "RCONPort": strconv.Itoa(port), "AdminPassword": "secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	commands := make(chan string, 2)
+	go serveTestRCON(listener, commands)
+
+	if _, err := manager.RCONGetNearestBase(t.Context(), 12.5, -30, 99.25); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.RCONKillNearestBase(t.Context(), 12.5, -30, 99.25); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"/getnearestbase 12.5 -30 99.25",
+		"/killnearestbase 12.5 -30 99.25",
+	} {
+		select {
+		case got := <-commands:
+			if got != want {
+				t.Fatalf("command = %q, want %q", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("command %q was not received", want)
+		}
+	}
+}
+
+func TestRCONBaseCommandRejectsInvalidCoordinates(t *testing.T) {
+	manager, cleanup := testManager(t)
+	defer cleanup()
+	for name, run := range map[string]func() error{
+		"nan": func() error {
+			_, err := manager.RCONGetNearestBase(t.Context(), math.NaN(), 0, 0)
+			return err
+		},
+		"infinity": func() error {
+			_, err := manager.RCONKillNearestBase(t.Context(), 0, math.Inf(1), 0)
+			return err
+		},
+		"range": func() error {
+			_, err := manager.RCONKillNearestBase(t.Context(), 1000000, 0, 0)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); err == nil {
+				t.Fatal("expected coordinate validation error")
 			}
 		})
 	}

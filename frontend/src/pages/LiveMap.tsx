@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LocateFixed, Map as MapIcon, Minus, Plus, Radio, RefreshCw, Search } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
+import { basesApi } from '../api/bases';
 import { saveIndexApi } from '../api/saveIndex';
 import type { MapEntity, MapEntityType } from '../types';
 import { SaveDataTabs } from '../components/ui/SaveDataTabs';
@@ -33,15 +34,23 @@ export const LiveMap: React.FC = () => {
   const [search, setSearch] = useState('');
   const [selectedID, setSelectedID] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const mapQuery = useQuery({
     queryKey: ['live-map'],
-    queryFn: saveIndexApi.getMapEntities,
+    queryFn: () => saveIndexApi.getMapEntities(),
     refetchInterval: autoRefresh ? 2000 : false,
   });
   const rebuildMutation = useMutation({
     mutationFn: saveIndexApi.rebuild,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['live-map'] }),
+  });
+  const cleanMutation = useMutation({
+    mutationFn: (entity: MapEntity) => basesApi.cleanBase(entity.id),
+    onSuccess: (result) => {
+      setNotice(`已清理基地“${result.base.name}”，世界已保存，实时地图正在刷新`);
+      void queryClient.invalidateQueries({ queryKey: ['live-map'] });
+    },
   });
 
   const allEntities = useMemo(() => mapQuery.data?.entities ?? [], [mapQuery.data]);
@@ -59,7 +68,13 @@ export const LiveMap: React.FC = () => {
   const selected = allEntities.find((entity) => entity.id === selectedID) ?? null;
   const bounds = scaleBounds(MAP_BOUNDS, zoom);
   const markerRadius = Math.max(bounds.width, bounds.height) / 140;
-  const error = mapQuery.error ? getErrorMessage(mapQuery.error) : rebuildMutation.error ? getErrorMessage(rebuildMutation.error) : null;
+  const error = mapQuery.error
+    ? getErrorMessage(mapQuery.error)
+    : rebuildMutation.error
+      ? getErrorMessage(rebuildMutation.error)
+      : cleanMutation.error
+        ? getErrorMessage(cleanMutation.error)
+        : null;
 
   const toggleFilter = (type: string) => setFilters((current) => ({ ...current, [type]: !current[type] }));
   const resetView = () => {
@@ -78,6 +93,7 @@ export const LiveMap: React.FC = () => {
       </div>
 
       {error && <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-3 text-xs font-semibold text-rose-700">{error}</div>}
+      {notice && <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-5 py-3 text-xs font-semibold text-emerald-700">{notice}</div>}
 
       <SaveIndexStatusBar
         status={mapQuery.data?.status ?? null}
@@ -132,7 +148,12 @@ export const LiveMap: React.FC = () => {
           <aside className="flex min-h-0 flex-col bg-slate-50/70 p-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">选中对象</p>
-              {selected ? <EntityDetails entity={selected} /> : <p className="mt-3 text-xs font-semibold leading-5 text-slate-500">点击地图标记查看名称、坐标和实时状态。</p>}
+              {selected ? <EntityDetails entity={selected} onClean={() => {
+                if (selected.type !== 'base' || cleanMutation.isPending) return;
+                if (window.confirm(`确认清理基地“${selected.label}”吗？\n\n将通过 PalDefender 摧毁坐标附近的整个基地，并请求保存世界。此操作不可撤销。`)) {
+                  cleanMutation.mutate(selected);
+                }
+              }} cleaning={cleanMutation.isPending} /> : <p className="mt-3 text-xs font-semibold leading-5 text-slate-500">点击地图标记查看名称、坐标和实时状态。</p>}
             </div>
             <div className="mt-4 min-h-0 flex-1">
               <div className="mb-2 flex items-center justify-between"><p className="text-xs font-bold text-slate-700">在线玩家</p><span className="text-[10px] font-bold text-sky-700">{onlinePlayers.length}</span></div>
@@ -167,11 +188,12 @@ const MapMarker: React.FC<{ entity: MapEntity; radius: number; selected: boolean
   );
 };
 
-const EntityDetails: React.FC<{ entity: MapEntity }> = ({ entity }) => (
+const EntityDetails: React.FC<{ entity: MapEntity; onClean: () => void; cleaning: boolean }> = ({ entity, onClean, cleaning }) => (
   <div className="mt-3">
     <div className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: markerColor(entity) }} /><p className="truncate text-sm font-bold text-slate-800">{entity.label}</p></div>
     <p className="mt-2 break-all font-mono text-[9px] text-slate-500">{entity.id}</p>
-    <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-semibold text-slate-400"><span>类型：{entityTypeLabel(entity.type)}</span><span>来源：{entity.live ? '实时' : '存档'}</span><span className="col-span-2 font-mono">坐标：{formatCoordinates(entity)}</span>{entity.guild_name && <span className="col-span-2 truncate">公会：{entity.guild_name}</span>}{entity.level != null && <span>等级：Lv.{entity.level}</span>}{entity.ping != null && <span>Ping：{entity.ping} ms</span>}</div>
+    <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-semibold text-slate-400"><span>类型：{entityTypeLabel(entity.type)}</span><span>来源：{entity.live ? '实时' : '存档'}</span><span className="col-span-2 font-mono">坐标：{formatCoordinates(entity)}</span>{entity.guild_name && <span className="col-span-2 truncate">公会：{entity.guild_name}</span>}{entity.structures_count != null && <span>建筑：{entity.structures_count}</span>}{entity.pals_count != null && <span>工作帕鲁：{entity.pals_count}</span>}{entity.level != null && <span>等级：Lv.{entity.level}</span>}{entity.ping != null && <span>Ping：{entity.ping} ms</span>}</div>
+    {entity.type === 'base' && <button type="button" onClick={onClean} disabled={cleaning} className="mt-4 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60">{cleaning ? '正在清理…' : '清理此基地'}</button>}
   </div>
 );
 

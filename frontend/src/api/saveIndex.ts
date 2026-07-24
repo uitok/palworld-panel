@@ -68,6 +68,7 @@ export const mapMapEntity = (raw: unknown): MapEntity => {
     ping: data.ping == null ? undefined : Number(data.ping),
     owner_id: data.owner_id ? String(data.owner_id) : undefined,
     pals_count: data.pals_count == null ? undefined : Number(data.pals_count),
+    structures_count: data.structures_count == null ? undefined : Number(data.structures_count),
   };
 };
 
@@ -103,9 +104,9 @@ export const saveIndexApi = {
       { quiet: true, fallbackOnError: false },
     ),
 
-  getMapEntities: () =>
+  getMapEntities: (source: 'server' = 'server') =>
     handleRequest<unknown, MapEntitiesResponse>(
-      () => apiClient.get('/map/entities'),
+      () => apiClient.get(`/map/entities?source=${encodeURIComponent(source)}`),
       {
         entities: [],
         status: emptySaveIndexStatus,
