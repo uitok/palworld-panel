@@ -582,6 +582,7 @@ export interface components {
       "returned": number;
     };
     "PalDefenderItemCatalogEntry": {
+      "collaboration"?: "terraria" | "ultrakill";
       "icon"?: string;
       "id": string;
       "name": string;
@@ -604,7 +605,9 @@ export interface components {
       "returned": number;
     };
     "PalDefenderPalCatalogEntry": {
+      "icon_url"?: string;
       "id": string;
+      "kind"?: "standard" | "advanced";
       "name": string;
     };
     "PalDefenderPalGrant": {
@@ -920,6 +923,72 @@ export interface components {
       "item_id": string;
       "item_name": string;
       "slot": number;
+    };
+    "SaveMigrationMappingInput": {
+      "source_uid": string;
+      "steam_id": string;
+    };
+    "SaveMigrationMappingPreview": {
+      "level": number;
+      "nickname": string;
+      "nosteam_uid": string;
+      "source_uid": string;
+      "steam_id": string;
+      "steam_uid": string;
+      "target_uid"?: string;
+    };
+    "SaveMigrationPlayer": {
+      "guild_name"?: string;
+      "level": number;
+      "nickname": string;
+      "player_uid": string;
+      "steam_id"?: string;
+    };
+    "SaveMigrationPlayersEnvelope": {
+      "data": components["schemas"]["SaveMigrationPlayersResult"];
+      "ok": true;
+    };
+    "SaveMigrationPlayersResult": {
+      "players": Array<components["schemas"]["SaveMigrationPlayer"]>;
+      "source": components["schemas"]["SaveSource"];
+      "source_fingerprint": string;
+    };
+    "SaveMigrationPreview": {
+      "conflicts": Array<string>;
+      "mappings": Array<components["schemas"]["SaveMigrationMappingPreview"]>;
+      "mode_matched": number;
+      "mode_source": "server_index" | "unproven";
+      "mode_total": number;
+      "ready": boolean;
+      "requires_manual_confirmation": boolean;
+      "source": components["schemas"]["SaveSource"];
+      "source_fingerprint": string;
+      "target_mode": "unknown" | "steam" | "nosteam";
+    };
+    "SaveMigrationPreviewEnvelope": {
+      "data": components["schemas"]["SaveMigrationPreview"];
+      "ok": true;
+    };
+    "SaveMigrationRequest": {
+      "confirmation"?: "MIGRATE PLAYERS";
+      "expected_fingerprint"?: string;
+      "manual_mode_confirmation"?: "USE STEAM UID" | "USE NOSTEAM UID";
+      "mappings": Array<components["schemas"]["SaveMigrationMappingInput"]>;
+      "source_id": string;
+      "target_mode": "auto" | "steam" | "nosteam";
+    };
+    "SaveSource": {
+      "active": boolean;
+      "created_at": string;
+      "fingerprint"?: string;
+      "id": string;
+      "indexed_at"?: string;
+      "kind": "server" | "import";
+      "name": string;
+      "parser_version"?: string;
+      "path"?: string;
+      "updated_at": string;
+      "warnings"?: Array<string>;
     };
     "SaveSourceImportRequest": {
       "file": string;

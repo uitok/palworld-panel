@@ -64,6 +64,8 @@ if (( ! skip_tests )); then
   (cd "$root_dir/backend" && go test -p=1 ./...)
   printf '[palpanel] Running sav-cli tests with cgo\n'
   (cd "$root_dir/sav-cli" && CGO_ENABLED=1 go test -p=1 ./...)
+  printf '[palpanel] Running UID remapper tests\n'
+  (cd "$root_dir/tools/palworld-uid-remap" && cargo test --locked)
   printf '[palpanel] Installing frontend dependencies\n'
   (cd "$root_dir/frontend" && npm ci)
   printf '[palpanel] Running frontend checks\n'
@@ -124,12 +126,15 @@ build_linux() {
   (cd "$root_dir/backend" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags embed_webui -trimpath -ldflags "$backend_ldflags" -o "$package_dir/bin/palpanel" ./cmd/palpanel)
   printf '[palpanel] Building cgo sav-cli linux-%s\n' "$arch"
   (cd "$root_dir/sav-cli" && CGO_ENABLED=1 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$sav_ldflags" -o "$package_dir/bin/sav-cli" ./cmd/sav_cli)
+  printf '[palpanel] Building UID remapper linux-%s\n' "$arch"
+  (cd "$root_dir/tools/palworld-uid-remap" && CARGO_TARGET_DIR="$staging_dir/uid-remapper-linux-$arch" cargo build --locked --release)
+  cp "$staging_dir/uid-remapper-linux-$arch/release/palworld-uid-remap" "$package_dir/bin/palworld-uid-remap"
   printf '[palpanel] Publishing self-contained PalCalc bridge linux-%s\n' "$arch"
   # Local release packaging must remain deterministic when NuGet's advisory
   # endpoint is unavailable. GitHub CI explicitly enables the online audit.
   DOTNET_CLI_UI_LANGUAGE=en dotnet publish "$root_dir/palcalc-bridge/PalCalc.Bridge.csproj" -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:InvariantGlobalization=true "-p:NuGetAudit=$nuget_audit" -o "$staging_dir/palcalc-linux"
   cp "$staging_dir/palcalc-linux/palcalc-bridge" "$package_dir/bin/palcalc-bridge"
-  chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli" "$package_dir/bin/palcalc-bridge"
+  chmod 755 "$package_dir/bin/palpanel" "$package_dir/bin/sav-cli" "$package_dir/bin/palcalc-bridge" "$package_dir/bin/palworld-uid-remap"
 
   (cd "$package_dir" && find . -type f ! -name checksums.txt -print0 | sort -z | xargs -0 sha256sum) >"$checksum_tmp"
   mv "$checksum_tmp" "$package_dir/checksums.txt"

@@ -65,6 +65,16 @@ x-save-import-conflict: &saveImportConflict
   content:
     application/json:
       schema: {$ref: '#/components/schemas/SaveImportConflictEnvelope'}
+x-save-migration-players: &saveMigrationPlayers
+  description: Players available in the selected old save source.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveMigrationPlayersEnvelope'}
+x-save-migration-preview: &saveMigrationPreview
+  description: Calculated target PlayerUID values and blocking migration conflicts.
+  content:
+    application/json:
+      schema: {$ref: '#/components/schemas/SaveMigrationPreviewEnvelope'}
 x-local-mod-scan: &localModScan
   description: Reconciliation of Mod files, database records, persistent ignore state, and safe action capabilities.
   content:
@@ -942,6 +952,7 @@ paths:
       parameters:
         - {name: q, in: query, schema: {type: string}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 100}}
+        - {name: advanced, in: query, schema: {type: boolean, default: false}, description: Include explicitly allowlisted advanced or nonstandard Pal entities.}
       responses: *readResponses
   /security/paldefender/gm/catalog/passives:
     get:
@@ -1041,10 +1052,39 @@ paths:
   /save-sources/{id}/rebuild:
     parameters: [*idParameter]
     post: {operationId: rebuildSaveSource, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /save-sources/{id}/migration/players:
+    parameters: [*idParameter]
+    get:
+      operationId: listSaveMigrationPlayers
+      tags: [world]
+      x-palpanel-permission: 'server:control'
+      responses: {'200': *saveMigrationPlayers, '400': *error, '401': *error, '404': *error}
   /save-sources/{id}:
     parameters: [*idParameter]
     patch: {operationId: renameSaveSource, tags: [world], x-palpanel-permission: 'server:control', requestBody: *jsonRequest, responses: *writeResponses}
     delete: {operationId: deleteSaveSource, tags: [world], x-palpanel-permission: 'server:control', responses: *writeResponses}
+  /save-migrations/preview:
+    post:
+      operationId: previewSaveMigration
+      tags: [world]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaveMigrationRequest'}
+      responses: {'200': *saveMigrationPreview, '400': *error, '401': *error, '403': *error, '404': *error}
+  /save-migrations:
+    post:
+      operationId: startSaveMigration
+      tags: [world]
+      x-palpanel-permission: 'server:control'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SaveMigrationRequest'}
+      responses: {'202': *accepted, '400': *error, '401': *error, '403': *error, '404': *error, '409': *error}
   /breeding/catalog:
     get: {operationId: getBreedingCatalog, tags: [world], x-palpanel-permission: read, responses: *readResponses}
   /breeding/status:
@@ -1955,6 +1995,80 @@ components:
         selected_candidate_id: {type: string}
         requires_selection: {type: boolean}
         expires_at: {type: string, format: date-time}
+    SaveSource:
+      type: object
+      required: [id, name, kind, active, created_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        kind: {type: string, enum: [server, import]}
+        path: {type: string}
+        active: {type: boolean}
+        fingerprint: {type: string}
+        parser_version: {type: string}
+        warnings: {type: array, items: {type: string}}
+        indexed_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    SaveMigrationPlayer:
+      type: object
+      required: [player_uid, nickname, level]
+      properties:
+        player_uid: {type: string, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'}
+        steam_id: {type: string, pattern: '^[0-9]{17}$'}
+        nickname: {type: string}
+        level: {type: integer, minimum: 0}
+        guild_name: {type: string}
+    SaveMigrationMappingInput:
+      type: object
+      additionalProperties: false
+      required: [source_uid, steam_id]
+      properties:
+        source_uid: {type: string, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'}
+        steam_id: {type: string, pattern: '^[0-9]{17}$'}
+    SaveMigrationRequest:
+      type: object
+      additionalProperties: false
+      required: [source_id, target_mode, mappings]
+      properties:
+        source_id: {type: string, minLength: 1}
+        target_mode: {type: string, enum: [auto, steam, nosteam]}
+        mappings: {type: array, minItems: 1, items: {$ref: '#/components/schemas/SaveMigrationMappingInput'}}
+        expected_fingerprint: {type: string}
+        manual_mode_confirmation: {type: string, enum: [USE STEAM UID, USE NOSTEAM UID]}
+        confirmation: {type: string, enum: [MIGRATE PLAYERS]}
+    SaveMigrationMappingPreview:
+      type: object
+      required: [source_uid, nickname, level, steam_id, steam_uid, nosteam_uid]
+      properties:
+        source_uid: {type: string}
+        nickname: {type: string}
+        level: {type: integer, minimum: 0}
+        steam_id: {type: string}
+        steam_uid: {type: string}
+        nosteam_uid: {type: string}
+        target_uid: {type: string}
+    SaveMigrationPlayersResult:
+      type: object
+      required: [source, source_fingerprint, players]
+      properties:
+        source: {$ref: '#/components/schemas/SaveSource'}
+        source_fingerprint: {type: string}
+        players: {type: array, items: {$ref: '#/components/schemas/SaveMigrationPlayer'}}
+    SaveMigrationPreview:
+      type: object
+      required: [source, source_fingerprint, target_mode, mode_source, mode_matched, mode_total, requires_manual_confirmation, mappings, conflicts, ready]
+      properties:
+        source: {$ref: '#/components/schemas/SaveSource'}
+        source_fingerprint: {type: string}
+        target_mode: {type: string, enum: [unknown, steam, nosteam]}
+        mode_source: {type: string, enum: [server_index, unproven]}
+        mode_matched: {type: integer, minimum: 0}
+        mode_total: {type: integer, minimum: 0}
+        requires_manual_confirmation: {type: boolean}
+        mappings: {type: array, items: {$ref: '#/components/schemas/SaveMigrationMappingPreview'}}
+        conflicts: {type: array, items: {type: string}}
+        ready: {type: boolean}
     ModImportSelectRequest:
       type: object
       required: [candidate_id]
@@ -2174,6 +2288,7 @@ components:
         id: {type: string}
         name: {type: string}
         icon: {type: string}
+        collaboration: {type: string, enum: [terraria, ultrakill]}
     PalDefenderItemCatalog:
       type: object
       required: [items, returned]
@@ -2258,6 +2373,8 @@ components:
       properties:
         id: {type: string}
         name: {type: string}
+        kind: {type: string, enum: [standard, advanced]}
+        icon_url: {type: string}
     PalDefenderPalCatalog:
       type: object
       required: [items, returned]
@@ -2427,6 +2544,18 @@ components:
       properties:
         ok: {type: boolean, const: true}
         data: {$ref: '#/components/schemas/SaveImportInspection'}
+    SaveMigrationPlayersEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SaveMigrationPlayersResult'}
+    SaveMigrationPreviewEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {type: boolean, const: true}
+        data: {$ref: '#/components/schemas/SaveMigrationPreview'}
     SaveImportConflictEnvelope:
       type: object
       required: [ok, error]

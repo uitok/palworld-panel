@@ -16,6 +16,7 @@ required=(
   '/bin/palpanel'
   '/bin/sav-cli'
   '/bin/palcalc-bridge'
+  '/bin/palworld-uid-remap'
   '/palpanelctl'
   '/config/palpanel.env.example'
   '/systemd/palpanel.service'

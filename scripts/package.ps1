@@ -46,10 +46,12 @@ $PreviousTemp = $env:TEMP
 $PreviousTmp = $env:TMP
 $PreviousGoCache = $env:GOCACHE
 $PreviousNpmCache = $env:NPM_CONFIG_CACHE
+$PreviousCargoTargetDir = $env:CARGO_TARGET_DIR
 $env:TEMP = $PackageTemp
 $env:TMP = $PackageTemp
 $env:GOCACHE = Join-Path $PackageTemp "go-cache"
 $env:NPM_CONFIG_CACHE = Join-Path $PackageTemp "npm-cache"
+$env:CARGO_TARGET_DIR = Join-Path $PackageTemp "cargo-target"
 New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
 New-Item -ItemType Directory -Force -Path $env:NPM_CONFIG_CACHE | Out-Null
 $PackageSucceeded = $false
@@ -199,6 +201,7 @@ try {
 
 if (-not $SkipTests) {
   Invoke-GoTestsWithWindowsLockRetry (Join-Path $RootDir "backend")
+  Invoke-External "cargo.exe" @("test", "--locked") (Join-Path $RootDir "tools\palworld-uid-remap")
   $oldCgo = $env:CGO_ENABLED
   $oldCc = $env:CC
   $oldCxx = $env:CXX
@@ -267,6 +270,8 @@ try {
   $env:CGO_ENABLED = "0"
   Invoke-GoBuildWithWindowsLockRetry -Arguments @("build", "-tags", "embed_webui", "-trimpath", "-ldflags", $backendLdflags, "-o", (Join-Path $PackageDir "palpanel-server.exe"), "./cmd/palpanel") -WorkingDirectory (Join-Path $RootDir "backend")
   Invoke-GoBuildWithWindowsLockRetry -Arguments @("build", "-trimpath", "-ldflags", "$backendLdflags -H windowsgui", "-o", (Join-Path $PackageDir "PalPanel.exe"), "./cmd/palpanel-launcher") -WorkingDirectory (Join-Path $RootDir "backend")
+  Invoke-External "cargo.exe" @("build", "--locked", "--release") (Join-Path $RootDir "tools\palworld-uid-remap")
+  Copy-Item -Force (Join-Path $env:CARGO_TARGET_DIR "release\palworld-uid-remap.exe") (Join-Path $PackageDir "palworld-uid-remap.exe")
 
   $env:CGO_ENABLED = "1"
   $env:CC = $MingwGcc
@@ -305,6 +310,7 @@ Compress-Archive -Path $PackageDir -DestinationPath $Archive -Force
   $env:TMP = $PreviousTmp
   $env:GOCACHE = $PreviousGoCache
   $env:NPM_CONFIG_CACHE = $PreviousNpmCache
+  $env:CARGO_TARGET_DIR = $PreviousCargoTargetDir
   if ($PackageSucceeded -and (Test-Path -LiteralPath $PackageTemp)) {
     $previousErrorActionPreference = $ErrorActionPreference
     try {

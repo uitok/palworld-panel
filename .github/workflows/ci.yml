@@ -23,6 +23,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 9.0.x
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
@@ -44,6 +45,7 @@ jobs:
         run: |
           (cd backend && go test -p=1 ./...)
           (cd sav-cli && CGO_ENABLED=1 go test -p=1 ./...)
+          (cd tools/palworld-uid-remap && cargo test --locked)
           (cd backend && go test -p=1 -race ./...)
           scripts/check-go-coverage.sh
       - name: Frontend checks
@@ -101,6 +103,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 9.0.x
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
