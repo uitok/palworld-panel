@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArchiveRestore, CheckCircle2, Database, FileArchive, Pencil, RefreshCw, Server, Trash2, Upload } from 'lucide-react';
 import { getErrorMessage } from '../api/client';
 import { saveSourcesApi, type SaveImportInspection } from '../api/saveSources';
+import { MigrationWizardButton, SaveMigrationWizard } from '../components/save/SaveMigrationWizard';
 
 export const SaveSources: React.FC = () => {
   const queryClient = useQueryClient();
@@ -13,6 +14,7 @@ export const SaveSources: React.FC = () => {
   const [candidateID, setCandidateID] = useState('');
   const [renamingID, setRenamingID] = useState('');
   const [renameValue, setRenameValue] = useState('');
+  const [showMigration, setShowMigration] = useState(false);
   const sources = useQuery({ queryKey: ['save-sources'], queryFn: saveSourcesApi.list });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['save-sources'] });
   const importMutation = useMutation({
@@ -76,7 +78,7 @@ export const SaveSources: React.FC = () => {
     <div className="page-shell">
       <div className="page-titlebar">
         <div><p className="eyebrow">Save workspace</p><h1>存档中心</h1><p>管理服务器存档和导入的本地存档，当前激活源会用于世界数据与配种计算。</p></div>
-        <button type="button" className="pp-button" onClick={() => void sources.refetch()}><RefreshCw size={15} />刷新</button>
+        <div className="flex flex-wrap gap-2"><MigrationWizardButton onClick={() => setShowMigration(true)} /><button type="button" className="pp-button" onClick={() => void sources.refetch()}><RefreshCw size={15} />刷新</button></div>
       </div>
 
       <section className="status-strip compact-status">
@@ -87,6 +89,8 @@ export const SaveSources: React.FC = () => {
       </section>
 
       {notice && <div className="pp-notice">{notice}</div>}
+
+      {showMigration && <SaveMigrationWizard sources={sources.data?.items || []} activeSourceID={active?.id} onClose={() => setShowMigration(false)} />}
 
       <div className="content-grid two-column">
         <section className="pp-card">

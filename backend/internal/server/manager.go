@@ -75,6 +75,11 @@ type Manager struct {
 	configApplyJournalPersist func(context.Context, configApplyJournal) error
 	configPrivateRemove       func(string) error
 	configDraftTTL            time.Duration
+	migrationRemap            func(context.Context, string, string, []UIDMapping) error
+	migrationVerify           func(string, []UIDMapping) error
+	migrationStatus           func(context.Context) (Status, error)
+	migrationStop             func(context.Context) error
+	migrationStart            func(context.Context) error
 }
 
 type Status struct {
